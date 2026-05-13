@@ -123,68 +123,40 @@ def _build_user(ctx: AgentContext) -> str:
     )
 
 
-async def _call_synth(gen: Generator, system: str, user: str) -> dict[str, Any]:
-    family = gen.name
-    client = gen._ensure_client()  # noqa: SLF001
-    # Use same schema as drafter + a rationale field.
-    schema = {
-        "type": "object",
-        "required": [
-            "title", "body", "tags", "cover_prompt", "hook_type",
-            "predicted_likes", "self_score", "self_critique", "rationale",
-        ],
-        "properties": {
-            "title": {"type": "string"},
-            "body": {"type": "string"},
-            "tags": {"type": "array", "items": {"type": "string"}},
-            "cover_prompt": {"type": "string"},
-            "hook_type": {"type": "string"},
-            "predicted_likes": {"type": "integer"},
-            "self_score": {"type": "number"},
-            "self_critique": {"type": "string"},
-            "rationale": {
-                "type": "object",
-                "properties": {
-                    "title_from": {"type": "string"},
-                    "body_from": {"type": "string"},
-                    "tags_from": {"type": "string"},
-                    "addresses_risks": {"type": "array", "items": {"type": "string"}},
-                },
+_SYNTH_SCHEMA = {
+    "type": "object",
+    "required": [
+        "title", "body", "tags", "cover_prompt", "hook_type",
+        "predicted_likes", "self_score", "self_critique", "rationale",
+    ],
+    "properties": {
+        "title": {"type": "string"},
+        "body": {"type": "string"},
+        "tags": {"type": "array", "items": {"type": "string"}},
+        "cover_prompt": {"type": "string"},
+        "hook_type": {"type": "string"},
+        "predicted_likes": {"type": "integer"},
+        "self_score": {"type": "number"},
+        "self_critique": {"type": "string"},
+        "rationale": {
+            "type": "object",
+            "properties": {
+                "title_from": {"type": "string"},
+                "body_from": {"type": "string"},
+                "tags_from": {"type": "string"},
+                "addresses_risks": {"type": "array", "items": {"type": "string"}},
             },
         },
-    }
+    },
+}
 
-    if family == "claude":
-        resp = await client.messages.create(
-            model=gen.model,
-            max_tokens=3000,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-            tools=[
-                {
-                    "name": "submit_synthesis",
-                    "description": "Submit the synthesized final draft JSON.",
-                    "input_schema": schema,
-                }
-            ],
-            tool_choice={"type": "tool", "name": "submit_synthesis"},
-        )
-        for block in resp.content:
-            if getattr(block, "type", None) == "tool_use":
-                return block.input
-        raise RuntimeError("no tool_use in synthesizer response")
 
-    # openai-compatible
-    resp = await client.chat.completions.create(
-        model=gen.model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        response_format={"type": "json_object"},
-        max_tokens=3000,
+async def _call_synth(gen: Generator, system: str, user: str) -> dict[str, Any]:
+    from ..llm_call import call_for_json
+    return await call_for_json(
+        gen, system, user, max_tokens=3000,
+        tool_name="submit_synthesis", schema=_SYNTH_SCHEMA,
     )
-    return json.loads(resp.choices[0].message.content or "{}")
 
 
 class SynthesizerAgent(Agent):

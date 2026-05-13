@@ -83,37 +83,12 @@ def _strategy_lines(strategy: dict[str, Any]) -> str:
 
 
 async def _call(gen: Generator, system: str, user: str) -> dict[str, Any]:
-    family = gen.name
-    client = gen._ensure_client()  # noqa: SLF001
-    if family == "claude":
-        from ..generators import prompts as g_prompts
-        resp = await client.messages.create(
-            model=gen.model,
-            max_tokens=2048,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-            tools=[
-                {
-                    "name": "submit_revision",
-                    "description": "Submit revised candidate JSON.",
-                    "input_schema": g_prompts.JSON_SCHEMA,
-                }
-            ],
-            tool_choice={"type": "tool", "name": "submit_revision"},
-        )
-        for block in resp.content:
-            if getattr(block, "type", None) == "tool_use":
-                return block.input
-        raise RuntimeError("no tool_use in refiner response")
-    resp = await client.chat.completions.create(
-        model=gen.model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        response_format={"type": "json_object"},
+    from ..generators import prompts as g_prompts
+    from ..llm_call import call_for_json
+    return await call_for_json(
+        gen, system, user, max_tokens=2048,
+        tool_name="submit_revision", schema=g_prompts.JSON_SCHEMA,
     )
-    return json.loads(resp.choices[0].message.content or "{}")
 
 
 class RefinerAgent(Agent):

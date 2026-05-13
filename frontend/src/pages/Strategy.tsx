@@ -4,6 +4,7 @@ import { api } from "../api";
 import { fmtRelative, platformLabel } from "../format";
 import PlatformPill from "../components/PlatformPill";
 import ProgressTimeline, { Stage as TimelineStage } from "../components/ProgressTimeline";
+import NextStepCard from "../components/NextStepCard";
 import { humaniseError } from "../errors";
 import { LLM_CATALOG } from "../catalog";
 import type {
@@ -693,7 +694,6 @@ function PackView({pack, onReset}: {pack: StrategyPackDTO; onReset: () => void})
           </div>
         </div>
         <div className="row" style={{gap: 6}}>
-          <Link to="/composer"><button>去 Composer 出第一篇 →</button></Link>
           <button className="secondary" onClick={onReset}>新建策略</button>
         </div>
       </div>
@@ -790,6 +790,12 @@ function PackView({pack, onReset}: {pack: StrategyPackDTO; onReset: () => void})
           </ul>
         </div>
       )}
+
+      <NextStepCard
+        label="去 ✍️ 出稿 写第一篇"
+        hint="基于这份策略 + 报告，Composer 会用多 Agent 协作出完整稿件 + 发布计划。"
+        to="/composer"
+      />
     </div>
   );
 }

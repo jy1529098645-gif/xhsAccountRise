@@ -6,6 +6,7 @@ import AgentConfigPanel, {
   AgentSelection, defaultSelection, selectionToSpecs,
 } from "../components/AgentConfigPanel";
 import ProgressTimeline, { Stage as TimelineStage } from "../components/ProgressTimeline";
+import NextStepCard from "../components/NextStepCard";
 import { humaniseError } from "../errors";
 import type { ComposeBundle, DraftCandidate, Library, Platform } from "../types";
 
@@ -264,6 +265,13 @@ function ComposeResult({bundle}: {bundle: ComposeBundle}) {
       )}
 
       {bundle.plan && Object.keys(bundle.plan).length > 0 && <PlanCard plan={bundle.plan} />}
+
+      <NextStepCard
+        label="去 📝 历史出稿 评分 / 标记 final"
+        hint="所有出过的稿件都保留着，可以回头打分、对照新的"
+        to="/drafts"
+        emoji="📝"
+      />
     </>
   );
 }

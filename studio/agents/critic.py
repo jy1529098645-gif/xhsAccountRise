@@ -87,59 +87,30 @@ async def _critique(
         "请按 system 给的 schema 输出 JSON。"
     )
 
-    # Same trick as strategist: reuse the Generator's SDK.
-    family = gen.name
     try:
-        client = gen._ensure_client()  # noqa: SLF001
-        if family == "claude":
-            resp = await client.messages.create(
-                model=gen.model,
-                max_tokens=1024,
-                system=_SYSTEM,
-                messages=[{"role": "user", "content": user}],
-                tools=[
-                    {
-                        "name": "submit_critique",
-                        "description": "Submit critique JSON.",
-                        "input_schema": {
-                            "type": "object",
-                            "properties": {
-                                "scores": {
-                                    "type": "object",
-                                    "properties": {
-                                        "hook": {"type": "number"},
-                                        "language_fit": {"type": "number"},
-                                        "shareability": {"type": "number"},
-                                        "brand_safety": {"type": "number"},
-                                        "structural_clarity": {"type": "number"},
-                                    },
-                                },
-                                "risk_flags": {"type": "array", "items": {"type": "string"}},
-                                "suggestion": {"type": "string"},
-                            },
-                            "required": ["scores", "risk_flags", "suggestion"],
+        from ..llm_call import call_for_json
+        parsed = await call_for_json(
+            gen, _SYSTEM, user, max_tokens=1024,
+            tool_name="submit_critique",
+            schema={
+                "type": "object",
+                "properties": {
+                    "scores": {
+                        "type": "object",
+                        "properties": {
+                            "hook": {"type": "number"},
+                            "language_fit": {"type": "number"},
+                            "shareability": {"type": "number"},
+                            "brand_safety": {"type": "number"},
+                            "structural_clarity": {"type": "number"},
                         },
-                    }
-                ],
-                tool_choice={"type": "tool", "name": "submit_critique"},
-            )
-            parsed: dict[str, Any] | None = None
-            for block in resp.content:
-                if getattr(block, "type", None) == "tool_use":
-                    parsed = block.input
-                    break
-            if not parsed:
-                raise RuntimeError("no tool_use in critic response")
-        else:
-            resp = await client.chat.completions.create(
-                model=gen.model,
-                messages=[
-                    {"role": "system", "content": _SYSTEM},
-                    {"role": "user", "content": user},
-                ],
-                response_format={"type": "json_object"},
-            )
-            parsed = json.loads(resp.choices[0].message.content or "{}")
+                    },
+                    "risk_flags": {"type": "array", "items": {"type": "string"}},
+                    "suggestion": {"type": "string"},
+                },
+                "required": ["scores", "risk_flags", "suggestion"],
+            },
+        )
     except Exception as e:
         return Critique(
             critique_id=uuid.uuid4().hex[:16],

@@ -50,59 +50,9 @@ def _latest_dna_payload() -> dict[str, Any]:
 
 # ---- Phase 1: propose ----------------------------------------------------
 
-async def _call_json(gen: Generator, system: str, user: str, *, max_tokens: int = 3000, tool_name: str | None = None, schema: dict | None = None) -> dict[str, Any]:
-    """Issue a JSON-output request via the underlying SDK (reuses Generator)."""
-    client = gen._ensure_client()  # noqa: SLF001
-    family = gen.name
-    if family == "claude":
-        if tool_name and schema:
-            resp = await client.messages.create(
-                model=gen.model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": user}],
-                tools=[{"name": tool_name, "description": "Submit JSON.", "input_schema": schema}],
-                tool_choice={"type": "tool", "name": tool_name},
-            )
-            for block in resp.content:
-                if getattr(block, "type", None) == "tool_use":
-                    return block.input
-            raise RuntimeError("no tool_use in claude response")
-        # Plain JSON via prompt
-        resp = await client.messages.create(
-            model=gen.model,
-            max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user + "\n\n严格输出 JSON，不要任何额外文字。"}],
-        )
-        text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
-        return _coerce_json(text)
-    # openai-compatible
-    resp = await client.chat.completions.create(
-        model=gen.model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user + "\n\n严格输出 JSON。"},
-        ],
-        response_format={"type": "json_object"},
-        max_tokens=max_tokens,
-    )
-    return _coerce_json(resp.choices[0].message.content or "{}")
-
-
-def _coerce_json(text: str) -> dict[str, Any]:
-    t = text.strip()
-    if t.startswith("```"):
-        t = t.split("\n", 1)[1] if "\n" in t else t
-        if t.endswith("```"):
-            t = t.rsplit("```", 1)[0]
-    s, e = t.find("{"), t.rfind("}")
-    if s == -1 or e == -1 or e <= s:
-        return {}
-    try:
-        return json.loads(t[s:e + 1])
-    except json.JSONDecodeError:
-        return {}
+# All LLM JSON calls now go through the shared utility, which handles OpenAI
+# model fallback (gpt-5 → gpt-4o when org-not-verified) + secret masking.
+from ..llm_call import call_for_json as _call_json  # noqa: E402
 
 
 _DIRECTIONS_SCHEMA = {
@@ -138,10 +88,17 @@ async def propose(inp: AccountInput, positioner_spec: str = "claude:opus") -> di
     lib_id = library.active_lib_id()
     dna = _latest_dna_payload()
 
+    from ..insight.pipeline import latest_completed_for_current_library, consensus_summary_for_prompt
+    report_ctx = consensus_summary_for_prompt(latest_completed_for_current_library())
+    report_block = f"\n\n{report_ctx}\n" if report_ctx else ""
+
     user_text = (
-        f"【用户初步定位】\n{prompts.input_blurb(inp)}\n\n"
+        f"【用户初步定位】\n{prompts.input_blurb(inp)}"
+        f"{report_block}\n"
         f"【该平台爆款 DNA】\n{prompts.dna_blurb(dna)}\n\n"
         f"输出 3-5 个差异化的账号定位方向。"
+        + ("\n**优先采纳「共识分析报告」中提到的方向和机会作为候选**。"
+           if report_ctx else "")
     )
     gen = registry.build(positioner_spec)[0]
     try:
@@ -285,6 +242,10 @@ async def expand(
     dna = _latest_dna_payload()
     topic_count = inp.cycle_weeks * inp.posts_per_week
 
+    from ..insight.pipeline import latest_completed_for_current_library, consensus_summary_for_prompt
+    report_ctx = consensus_summary_for_prompt(latest_completed_for_current_library())
+    report_block = f"\n\n{report_ctx}\n" if report_ctx else ""
+
     # --- Topic-gen pool (parallel) ---
     topicgen_user = (
         f"【已选定的账号方向】\n"
@@ -292,10 +253,13 @@ async def expand(
         f"positioning: {chosen.positioning_statement}\n"
         f"target_audience: {chosen.target_audience}\n"
         f"hook_angles: {chosen.hook_angles}\n"
-        f"differentiator: {chosen.differentiator}\n\n"
+        f"differentiator: {chosen.differentiator}"
+        f"{report_block}\n"
         f"【用户运营约束】\n{prompts.input_blurb(inp)}\n\n"
         f"【该平台 DNA】\n{prompts.dna_blurb(dna)}\n\n"
-        f"请输出 {max(topic_count, 12)} 个候选选题（建议略多于 cycle_weeks × posts_per_week，便于后面排期师挑选）。"
+        f"请输出 {max(topic_count, 12)} 个候选选题。"
+        + ("\n**报告里提到的内容机会必须覆盖到选题里。**"
+           if report_ctx else "")
     )
     topicgens = registry.build(topicgen_spec)
 

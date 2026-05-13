@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { api } from "./api";
+import { applyTheme } from "./theme";
 import ConnectionBanner from "./components/ConnectionBanner";
 import ProjectPicker from "./components/ProjectPicker";
 import Dashboard from "./pages/Dashboard";
@@ -28,6 +29,24 @@ export default function App() {
       if (!cancel) { setHealthOk(h.ok); setConnected(api.isConnected()); }
     })();
     return () => { cancel = true; };
+  }, []);
+
+  // Theme: re-apply on every render. Cheap (just sets CSS vars) and picks
+  // up the active library's platform whenever it changes.
+  useEffect(() => {
+    let cancel = false;
+    async function syncTheme() {
+      try {
+        const libs = await api.libraries();
+        if (cancel) return;
+        const active = libs.find((l: any) => l.active);
+        applyTheme(active?.platform);
+      } catch { applyTheme(undefined); }
+    }
+    syncTheme();
+    // Re-sync periodically so the theme updates when a different lib is activated
+    const t = setInterval(syncTheme, 5000);
+    return () => { cancel = true; clearInterval(t); };
   }, []);
 
   return (

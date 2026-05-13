@@ -84,21 +84,19 @@ def normalise_platform(p: str | None) -> str:
 
 
 def validate_schema_blob(blob: bytes) -> dict[str, Any]:
-    """Light-touch inspection of an uploaded .db.
+    """Minimal sanity check on an uploaded .db.
 
-    Philosophy: never block. The only hard rejection is "this isn't even a
-    SQLite file" (or it's so corrupt it can't be opened). Everything else
-    — missing canonical tables, missing columns, weird schema — is just a
-    suggestion / warning. The AI adapter + tolerant analysis pipelines do
-    the rest of the work.
+    The user said: 'don't enforce anything, just submit to AI and let it
+    figure things out'. So this function does exactly one thing: confirm
+    the bytes are a valid SQLite header that the engine can open. Anything
+    else — table names, column names, what the data is — is the AI's job.
 
-    Returns {ok, fatal, tables, notes_count, comments_count, warnings,
-    suggestions}.
+    Returns {ok, fatal, tables (just for diagnostics), notes_count,
+    comments_count}. No warnings, no suggestions, no judgement.
     """
     if len(blob) < 100 or blob[:16] != b"SQLite format 3\x00":
-        return {"ok": False, "fatal": "上传的文件不是 SQLite 数据库（文件头不符）",
-                "tables": [], "notes_count": 0, "comments_count": 0,
-                "warnings": [], "suggestions": []}
+        return {"ok": False, "fatal": "上传的文件不是 SQLite 数据库",
+                "tables": [], "notes_count": 0, "comments_count": 0}
     import sqlite3, tempfile, os
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         tmp.write(blob)
@@ -106,62 +104,31 @@ def validate_schema_blob(blob: bytes) -> dict[str, Any]:
     out: dict[str, Any] = {
         "ok": True, "fatal": None, "tables": [],
         "notes_count": 0, "comments_count": 0,
-        "warnings": [], "suggestions": [],
     }
     try:
         con = sqlite3.connect(f"file:{tmp_path}?mode=ro", uri=True)
         cur = con.cursor()
         try:
-            tables = {r[0] for r in cur.execute(
+            tables = sorted({r[0] for r in cur.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
                 " AND name NOT LIKE 'sqlite_%'"
-            )}
-            out["tables"] = sorted(tables)
+            )})
+            out["tables"] = tables
         except sqlite3.OperationalError as e:
-            out["fatal"] = f"SQLite 文件无法读取 schema: {e}"
+            out["fatal"] = f"SQLite 文件读取失败：{e}"
             out["ok"] = False
             return out
-
-        if not tables:
-            out["suggestions"].append(
-                "数据库里没找到任何表 — AI 仍会尝试分析空 schema 但能给出的洞察会很有限"
-            )
-            return out
-
-        # Soft suggestions about what's good for analysis
+        # Lightweight diagnostics — used only for status display, not gating.
         if "notes" in tables:
             try:
-                cols = {row[1].lower() for row in cur.execute("PRAGMA table_info('notes')")}
                 out["notes_count"] = cur.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
-                missing_rec = [c for c in
-                               ["title", "liked_count", "body", "comment_count",
-                                "publish_time_ms", "tags_json", "type"]
-                               if c not in cols]
-                if missing_rec:
-                    out["suggestions"].append(
-                        f"`notes` 表缺少推荐字段 {missing_rec} — AI 会用别的列或默认值，但部分分析会偏弱"
-                    )
             except sqlite3.OperationalError:
                 pass
-        else:
-            out["suggestions"].append(
-                "未找到名为 `notes` 的表 — AI 适配器会尝试从其它表（如 videos/posts/aweme）自动映射"
-            )
-
         if "comments" in tables:
             try:
                 out["comments_count"] = cur.execute("SELECT COUNT(*) FROM comments").fetchone()[0]
             except sqlite3.OperationalError:
                 pass
-        else:
-            out["suggestions"].append(
-                "未找到 `comments` 表 — 评论需求挖掘会跳过；如果你的源表叫别的名字 AI 会试着映射"
-            )
-
-        if "discover_queue" not in tables:
-            out["suggestions"].append(
-                "未找到 `discover_queue` 表 — 蓝海关键词排行（xhs 专属）会跳过，不影响其他分析"
-            )
         con.close()
     except sqlite3.Error as e:
         out["fatal"] = f"无法打开 SQLite：{e}"

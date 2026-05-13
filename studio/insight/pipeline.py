@@ -161,39 +161,48 @@ def _build_dna_context(dna: dict[str, Any]) -> str:
 # ---- Prompts ------------------------------------------------------------
 
 INDEPENDENT_SYSTEM = """\
-你是「数据洞察分析师」。给你一份数据库（可能是社交平台爆款数据库，也可能是任意其它 SQLite），请独立分析，输出一份结构化报告。
+你是「起号策略分析师」。用户给你扔了一个数据库（不限格式：可能是小红书笔记 / 抖音视频 / B站动态 / 任何社交平台爬下来的，也可能完全是别的东西）。
 
-**重点**：你拿到的材料里包含「原始数据快照」——真实的表 / 列 / 样本行 / top 行。**先看这部分原始内容**，再看 DNA 加工统计。你的报告必须基于真实数据，**不能光看 DNA 统计就下结论**：
-- 真实样本行里有什么 title / body / 数据特征？
-- top_rows 显示哪些内容互动最高？模式是什么？
-- aggregate stats 揭示了什么分布（平均字数？平均赞数？分布偏态？）
-- 表名/列名暗示这是什么类型的内容（小红书笔记？抖音视频？产品库？）
+你的任务**不是**做数据健康度评估，**而是**：站在「这个用户要拿这堆数据做起号」的角度，**写一份起号分析报告**。
 
-如果原始数据是空的，**不要假装有洞察**，直接说"数据库为空 — 无法分析"。否则，你的结论必须**引用具体的样本行 / 数字 / 数据特征**作为证据，不能是泛泛而谈。
+**怎么读数据**：
+- 你拿到的资料里有「原始数据快照」——真实的表 / 列 / 样本行 / top 行。**直接读这些内容**，就像 ChatGPT 接到文件直接读一样。
+- 不要先纠结字段对不对齐、有没有缺数据、是不是标准 schema。**有什么读什么**。
+- top_rows 是按互动量排过序的真实爆款 — 重点看这些。
 
-不要参考任何「其他 AI 的观点」（你现在是独立分析阶段）。报告输出 JSON：
+**报告要聚焦「起号」**：
+- 这个领域 / 赛道当下有什么内容能爆？
+- 目标受众是谁、痛点是什么？
+- 用户拿这个数据能起一个什么定位的号？
+- 哪些 hook / 标题模式有效？
+- 起号过程要规避什么？
+- 第一篇该写什么、第一周该铺什么节奏？
+
+如果数据真的什么都没有，简单说一句「这数据库无法支撑起号分析」即可，不要假装有洞察。
+
+绝不参考任何其他 AI 的观点（你现在是独立分析阶段）。输出 JSON：
 
 {
-  "executive_summary": "<3-5 句概述这个语料的核心特征>",
+  "executive_summary": "<3-5 句话起号判断：这是什么赛道、起号机会有多大、怎么切入>",
   "key_findings": [
-    {"title": "<发现名>", "evidence": "<具体数据支撑 (引用蓝海排名/hook 分布/时段等)>", "implication": "<这意味着什么>"}
+    {"title": "<发现名（针对起号有意义的）>", "evidence": "<具体引用样本行/数字>", "implication": "<对起号的意味>"}
   ],
   "content_opportunities": [
-    {"opportunity": "<内容机会>", "why": "<基于哪个数据信号>", "suggested_angle": "<怎么切入>"}
+    {"opportunity": "<起号内容方向>", "why": "<数据信号>", "suggested_angle": "<具体切入方式>"}
   ],
-  "audience_insight": "<这个语料反映的目标用户画像 + 痛点>",
+  "audience_insight": "<目标受众 + 痛点 + 起号该说人话还是行话>",
   "risks_and_blind_spots": [
-    "<风险/盲区 1，最好引用具体数据>"
+    "<起号最容易翻车的点，引用数据>"
   ],
   "recommended_next_steps": [
-    "<可执行的下一步 1>"
+    "<起号执行下一步>"
   ]
 }
 
 要求：
-- key_findings 至少 4 条，必须 evidence-based（"蓝海词 #1 是 X (avg X likes)"）
-- content_opportunities 至少 3 条
-- 不要泛泛而谈，每条都要钉到 DNA 里的具体数字
+- key_findings 至少 3 条，evidence 必须钉到具体样本行 / 数字
+- content_opportunities 至少 3 条，每条要有"怎么切入"
+- 不要泛泛而谈
 """
 
 
@@ -222,14 +231,14 @@ CRITIQUE_SYSTEM = """\
 
 
 MODERATOR_SYSTEM = """\
-你是「报告主编」。你拿到的材料：
+你是「起号报告主编」。你拿到的材料：
 
-1. Claude 对 DNA 的独立分析
-2. OpenAI 对 DNA 的独立分析
+1. Claude 对数据库的独立起号分析
+2. OpenAI 对数据库的独立起号分析
 3. Claude 对 OpenAI 报告的赞成/反对/补充
 4. OpenAI 对 Claude 报告的赞成/反对/补充
 
-请融合两家的输出，**只保留双方都认可的观点**作为主报告主体，**分歧 / 单方观点**单独列出来标明出处。
+请融合两家的输出，输出一份**给用户的起号报告**：**只保留双方都认可的观点**作为主报告主体，**分歧 / 单方观点**单独列出来标明出处。
 
 输出 JSON：
 
@@ -262,59 +271,8 @@ MODERATOR_SYSTEM = """\
 
 # ---- LLM dispatch helpers ----------------------------------------------
 
-async def _call_json(gen: Generator, system: str, user: str, *,
-                     max_tokens: int = 4096,
-                     tool_name: str | None = None,
-                     schema: dict | None = None) -> dict[str, Any]:
-    """Reuse the studio generator client to do JSON-output calls."""
-    client = gen._ensure_client()  # noqa: SLF001
-    family = gen.name
-    if family == "claude":
-        if tool_name and schema:
-            resp = await client.messages.create(
-                model=gen.model, max_tokens=max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": user}],
-                tools=[{"name": tool_name, "description": "Submit JSON.", "input_schema": schema}],
-                tool_choice={"type": "tool", "name": tool_name},
-            )
-            for block in resp.content:
-                if getattr(block, "type", None) == "tool_use":
-                    return block.input
-            raise RuntimeError("no tool_use in claude response")
-        resp = await client.messages.create(
-            model=gen.model, max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user + "\n\n严格输出 JSON。"}],
-        )
-        text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
-        return _coerce_json(text)
-    # openai-compatible
-    resp = await client.chat.completions.create(
-        model=gen.model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user + "\n\n严格输出 JSON。"},
-        ],
-        response_format={"type": "json_object"},
-        max_tokens=max_tokens,
-    )
-    return _coerce_json(resp.choices[0].message.content or "{}")
-
-
-def _coerce_json(text: str) -> dict[str, Any]:
-    t = (text or "").strip()
-    if t.startswith("```"):
-        t = t.split("\n", 1)[1] if "\n" in t else t
-        if t.endswith("```"):
-            t = t.rsplit("```", 1)[0]
-    s, e = t.find("{"), t.rfind("}")
-    if s == -1 or e == -1 or e <= s:
-        return {}
-    try:
-        return json.loads(t[s:e + 1])
-    except json.JSONDecodeError:
-        return {}
+# All LLM JSON calls now go through the shared utility with OpenAI fallback.
+from ..llm_call import call_for_json as _call_json  # noqa: E402
 
 
 # ---- Pipeline orchestrator ---------------------------------------------
@@ -480,6 +438,63 @@ def get_report(report_id: str) -> dict[str, Any] | None:
     d.pop("debate_json", None)
     d.pop("consensus_json", None)
     return d
+
+
+def latest_completed_for_current_library() -> dict[str, Any] | None:
+    """Return the most recent completed insight report for the active library
+    in the active project. Used by Strategy / Composer to include the report's
+    consensus findings + opportunities in their prompts.
+    """
+    db.apply_migrations(verbose=False)
+    project.ensure_bootstrap()
+    pid = project.active_project_id()
+    lib = library.active_lib_id()
+    with db.connect(read_only=True) as con:
+        row = con.execute(
+            "SELECT consensus_json FROM studio_insight_reports"
+            " WHERE library_id = ?"
+            " AND (project_id = ? OR project_id IS NULL)"
+            " AND status = 'completed'"
+            " ORDER BY created_at DESC LIMIT 1",
+            (lib, pid),
+        ).fetchone()
+    if not row or not row["consensus_json"]:
+        return None
+    try:
+        return json.loads(row["consensus_json"])
+    except json.JSONDecodeError:
+        return None
+
+
+def consensus_summary_for_prompt(consensus: dict[str, Any] | None) -> str:
+    """Compact text rendering of a consensus report, for embedding into
+    downstream agent prompts (Strategy / Composer). Returns '' if nothing
+    available."""
+    if not consensus:
+        return ""
+    parts: list[str] = []
+    if consensus.get("title"):
+        parts.append(f"【上一份共识分析报告 · 起号洞察】《{consensus['title']}》")
+    if consensus.get("executive_summary"):
+        parts.append(f"总览：{consensus['executive_summary']}")
+    cf = consensus.get("consensus_findings") or []
+    if cf:
+        parts.append("关键发现（双 AI 共识）：")
+        for f in cf[:5]:
+            parts.append(f"  · {f.get('title')}")
+            ev = f.get("evidence")
+            if ev: parts.append(f"    证据: {ev[:160]}")
+            im = f.get("implication")
+            if im: parts.append(f"    意义: {im[:160]}")
+    co = consensus.get("consensus_opportunities") or []
+    if co:
+        parts.append("内容机会：")
+        for o in co[:5]:
+            parts.append(f"  · {o.get('opportunity')} → {o.get('suggested_angle')}")
+    cr = consensus.get("consensus_risks") or []
+    if cr:
+        parts.append("风险：" + "；".join(r for r in cr[:4]))
+    return "\n".join(parts)
 
 
 def list_reports(library_id: str | None = None, limit: int = 30) -> list[dict[str, Any]]:

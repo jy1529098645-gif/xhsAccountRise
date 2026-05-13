@@ -102,73 +102,46 @@ def _load_timing_from_dna() -> list[dict]:
         return []
 
 
-async def _call_for_plan(gen: Generator, system: str, user: str) -> dict[str, Any]:
-    family = gen.name
-    client = gen._ensure_client()  # noqa: SLF001
-    schema = {
-        "type": "object",
-        "required": ["publish_schedule", "follow_up_angles",
-                     "engagement_tactics", "series_thesis"],
-        "properties": {
-            "publish_schedule": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "slot": {"type": "string"},
-                        "median_likes": {"type": "integer"},
-                        "why": {"type": "string"},
-                    },
+_PLAN_SCHEMA = {
+    "type": "object",
+    "required": ["publish_schedule", "follow_up_angles",
+                 "engagement_tactics", "series_thesis"],
+    "properties": {
+        "publish_schedule": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "slot": {"type": "string"},
+                    "median_likes": {"type": "integer"},
+                    "why": {"type": "string"},
                 },
             },
-            "follow_up_angles": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "title": {"type": "string"},
-                        "angle": {"type": "string"},
-                        "hook_type": {"type": "string"},
-                        "why": {"type": "string"},
-                    },
-                },
-            },
-            "engagement_tactics": {"type": "array", "items": {"type": "string"}},
-            "series_thesis": {"type": "string"},
         },
-    }
+        "follow_up_angles": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "angle": {"type": "string"},
+                    "hook_type": {"type": "string"},
+                    "why": {"type": "string"},
+                },
+            },
+        },
+        "engagement_tactics": {"type": "array", "items": {"type": "string"}},
+        "series_thesis": {"type": "string"},
+    },
+}
 
-    if family == "claude":
-        resp = await client.messages.create(
-            model=gen.model,
-            max_tokens=2048,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-            tools=[
-                {
-                    "name": "submit_plan",
-                    "description": "Submit the execution plan JSON.",
-                    "input_schema": schema,
-                }
-            ],
-            tool_choice={"type": "tool", "name": "submit_plan"},
-        )
-        for block in resp.content:
-            if getattr(block, "type", None) == "tool_use":
-                return block.input
-        raise RuntimeError("no tool_use in planner response")
 
-    # openai-compatible
-    resp = await client.chat.completions.create(
-        model=gen.model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        response_format={"type": "json_object"},
-        max_tokens=2048,
+async def _call_for_plan(gen: Generator, system: str, user: str) -> dict[str, Any]:
+    from ..llm_call import call_for_json
+    return await call_for_json(
+        gen, system, user, max_tokens=2048,
+        tool_name="submit_plan", schema=_PLAN_SCHEMA,
     )
-    return json.loads(resp.choices[0].message.content or "{}")
 
 
 class PlannerAgent(Agent):

@@ -4,6 +4,7 @@ import { api } from "../api";
 import { fmtBytes, fmtRelative, fmtTime, platformLabel } from "../format";
 import PlatformPill from "../components/PlatformPill";
 import ProgressTimeline, { Stage as TimelineStage } from "../components/ProgressTimeline";
+import NextStepCard from "../components/NextStepCard";
 import { humaniseError } from "../errors";
 import { GITHUB_REPO } from "../catalog";
 import type { Library, Platform } from "../types";
@@ -88,19 +89,13 @@ export default function Reports() {
 
       const imp = await api.importLibrary(f, displayName, pendingPlatform);
 
-      // Build friendly status summary (no scary 'error' text)
-      const summaryBits: string[] = [];
+      // Silent on schema details — the AI has already adapted under the hood.
+      // We just say "AI 把源表映射好了" if it was non-canonical, nothing else.
       if (imp.adapter?.adapted) {
         const m = imp.adapter.mapping_summary?.notes;
         if (m?.source_table) {
-          summaryBits.push(`🔄 AI 把你库里的「${m.source_table}」表自动映射到标准格式了`);
+          setInfo(`🔄 AI 自动适配了你库里的「${m.source_table}」表`);
         }
-      }
-      if (imp.section_errors && Object.keys(imp.section_errors).length > 0) {
-        summaryBits.push(`💡 这库不太像标准小红书数据，AI 用了原始 schema 兜底分析`);
-      }
-      if (summaryBits.length > 0) {
-        setInfo(summaryBits.join("\n"));
       }
 
       const r = await api.runInsight(imp.lib_id);
@@ -354,14 +349,12 @@ export default function Reports() {
         </div>
       )}
 
-      {hasLib && (
-        <div className="card" style={{background: "#fff7e6", borderColor: "#fde2a3"}}>
-          <h3 style={{margin: "0 0 6px"}}>📖 下一步</h3>
-          <p style={{margin: 0, fontSize: 13}}>
-            看完报告 → 进 <Link to="/strategy">🚀 起号策略</Link> 让 AI 基于报告 + 你的想法拟一版完整起号方案。
-            报告会一直留在这里，随时可以回来翻。
-          </p>
-        </div>
+      {hasLib && reportsForSelected.length > 0 && (
+        <NextStepCard
+          label="去 🚀 起号策略 让 AI 拟方案"
+          hint="基于你刚出的共识报告 + 你的想法，AI 自动拟一版完整起号方案（含周历 + 选题 + 材料清单）"
+          to="/strategy"
+        />
       )}
     </div>
   );

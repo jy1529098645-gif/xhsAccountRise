@@ -101,56 +101,25 @@ class StrategistAgent(Agent):
         ctx.record(step)
 
 
+_STRATEGY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "recommended_hook": {"type": "string"},
+        "opening_hook": {"type": "string"},
+        "structure": {"type": "array", "items": {"type": "string"}},
+        "cta_phrase": {"type": "string"},
+        "tone": {"type": "string"},
+        "avoid": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["recommended_hook", "opening_hook", "structure",
+                 "cta_phrase", "tone", "avoid"],
+}
+
+
 async def _call_for_json(gen: Generator, system: str, user: str) -> dict[str, Any]:
-    """Helper that reuses a Generator's underlying client for a JSON-mode call.
-
-    This isn't a beautiful coupling but it keeps us from instantiating yet
-    another SDK client per agent. Generators all expose `_ensure_client`."""
-    family = gen.name
-    client = gen._ensure_client()  # noqa: SLF001
-
-    if family == "claude":
-        resp = await client.messages.create(
-            model=gen.model,
-            max_tokens=1024,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-            tools=[
-                {
-                    "name": "submit_strategy",
-                    "description": "Submit strategy JSON.",
-                    "input_schema": {
-                        "type": "object",
-                        "properties": {
-                            "recommended_hook": {"type": "string"},
-                            "opening_hook": {"type": "string"},
-                            "structure": {"type": "array", "items": {"type": "string"}},
-                            "cta_phrase": {"type": "string"},
-                            "tone": {"type": "string"},
-                            "avoid": {"type": "array", "items": {"type": "string"}},
-                        },
-                        "required": [
-                            "recommended_hook", "opening_hook", "structure",
-                            "cta_phrase", "tone", "avoid",
-                        ],
-                    },
-                }
-            ],
-            tool_choice={"type": "tool", "name": "submit_strategy"},
-        )
-        for block in resp.content:
-            if getattr(block, "type", None) == "tool_use":
-                return block.input
-        raise RuntimeError("no tool_use in claude response")
-
-    # openai-compatible: deepseek + openai
-    resp = await client.chat.completions.create(
-        model=gen.model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        response_format={"type": "json_object"},
+    """Shared JSON call (Claude tool_use / OpenAI JSON mode with fallback)."""
+    from ..llm_call import call_for_json
+    return await call_for_json(
+        gen, system, user, max_tokens=1024,
+        tool_name="submit_strategy", schema=_STRATEGY_SCHEMA,
     )
-    raw = resp.choices[0].message.content or "{}"
-    return json.loads(raw)

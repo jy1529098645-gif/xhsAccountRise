@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import { fmtTime } from "../format";
+import NextStepCard from "../components/NextStepCard";
 import type { InsightReportDTO, DnaArtifact } from "../types";
 
 const CHART_LABELS: Record<string, string> = {
@@ -183,24 +184,123 @@ export default function InsightReport() {
         </div>
       )}
 
-      {/* Raw analyses (collapsed) */}
+      {/* Each AI's full independent report — first-class section, not debug */}
+      <div className="card">
+        <h2>🟣 Claude 独立报告</h2>
+        <p className="muted" style={{fontSize: 12, marginBottom: 12}}>
+          没看过对方的版本，独立分析的结果。下面的「共识」就是从这版 + OpenAI 版交叉评审而来。
+        </p>
+        <AIReportBlock report={claudeAna} accentColor="#a36df0" />
+      </div>
+
+      <div className="card">
+        <h2>🟢 OpenAI 独立报告</h2>
+        <p className="muted" style={{fontSize: 12, marginBottom: 12}}>
+          GPT-5 / GPT-4o 独立看到同一份数据，给出自己的判断。
+        </p>
+        <AIReportBlock report={openaiAna} accentColor="#10a37f" />
+      </div>
+
+      {/* Mutual critique — collapsed by default but accessible */}
       <details className="card">
         <summary style={{cursor: "pointer", fontWeight: 600}}>
-          ▾ 看原始独立分析 + 双方互评（debug 用）
+          ▾ 看两家 AI 互相评审的细节
         </summary>
-        <h3 style={{color: "#a36df0"}}>🟣 Claude 独立报告</h3>
-        <pre style={{background: "#fafafa", padding: 10, fontSize: 11, overflow: "auto", maxHeight: 300}}>
-          {JSON.stringify(claudeAna, null, 2)}
-        </pre>
-        <h3 style={{color: "#10a37f"}}>🟢 OpenAI 独立报告</h3>
-        <pre style={{background: "#fafafa", padding: 10, fontSize: 11, overflow: "auto", maxHeight: 300}}>
-          {JSON.stringify(openaiAna, null, 2)}
-        </pre>
-        <h3>互相评审</h3>
-        <pre style={{background: "#fafafa", padding: 10, fontSize: 11, overflow: "auto", maxHeight: 400}}>
+        <p className="muted" style={{fontSize: 12, marginTop: 6}}>
+          双方读了对方的报告之后写的「我赞成 / 我反对 / 对方漏了什么」。最终主编只把双方都认可的进了共识。
+        </p>
+        <pre style={{background: "#fafafa", padding: 10, fontSize: 11, overflow: "auto", maxHeight: 500}}>
           {JSON.stringify(debate, null, 2)}
         </pre>
       </details>
+
+      <NextStepCard
+        label="去 🚀 起号策略"
+        hint="AI 会基于这份共识报告自动拟方向 + 周历 + 材料清单。报告会一直保留，随时可回来翻。"
+        to="/strategy"
+      />
+    </div>
+  );
+}
+
+function AIReportBlock({report, accentColor}: {report: any; accentColor: string}) {
+  if (!report || typeof report !== "object") {
+    return <p className="muted">（未返回内容）</p>;
+  }
+  return (
+    <div>
+      {report.executive_summary && (
+        <div style={{borderLeft: `3px solid ${accentColor}`, padding: "8px 12px",
+                     background: "#fafafa", borderRadius: 4, marginBottom: 12}}>
+          <div className="muted" style={{fontSize: 11, fontWeight: 600, marginBottom: 4}}>总览</div>
+          <div style={{fontSize: 13.5, lineHeight: 1.7}}>{report.executive_summary}</div>
+        </div>
+      )}
+
+      {(report.key_findings ?? []).length > 0 && (
+        <div style={{marginBottom: 12}}>
+          <h3 style={{margin: "8px 0 6px"}}>关键发现</h3>
+          {report.key_findings.map((f: any, i: number) => (
+            <div key={i} style={{padding: "8px 12px", marginBottom: 6,
+                                 background: "#fafafa", borderRadius: 4}}>
+              <div style={{fontWeight: 600, fontSize: 13.5}}>· {f.title}</div>
+              {f.evidence && (
+                <div style={{fontSize: 12, marginTop: 3, color: "#555"}}>
+                  <b>证据：</b>{f.evidence}
+                </div>
+              )}
+              {f.implication && (
+                <div style={{fontSize: 12, marginTop: 3}}>
+                  <b>意义：</b>{f.implication}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {(report.content_opportunities ?? []).length > 0 && (
+        <div style={{marginBottom: 12}}>
+          <h3 style={{margin: "8px 0 6px"}}>内容机会</h3>
+          {report.content_opportunities.map((o: any, i: number) => (
+            <div key={i} style={{padding: "8px 12px", marginBottom: 6,
+                                 background: "#fafafa", borderRadius: 4}}>
+              <div style={{fontWeight: 600, fontSize: 13.5}}>· {o.opportunity}</div>
+              {o.why && <div style={{fontSize: 12, color: "var(--muted)", marginTop: 3}}>{o.why}</div>}
+              {o.suggested_angle && (
+                <div style={{fontSize: 12, marginTop: 3, color: accentColor}}>
+                  切入：{o.suggested_angle}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {report.audience_insight && (
+        <div style={{marginBottom: 12}}>
+          <h3 style={{margin: "8px 0 6px"}}>受众洞察</h3>
+          <p style={{fontSize: 13, lineHeight: 1.7}}>{report.audience_insight}</p>
+        </div>
+      )}
+
+      {(report.risks_and_blind_spots ?? []).length > 0 && (
+        <div style={{marginBottom: 12}}>
+          <h3 style={{margin: "8px 0 6px"}}>风险 / 盲区</h3>
+          <ul style={{marginLeft: 18, fontSize: 13, lineHeight: 1.7}}>
+            {report.risks_and_blind_spots.map((r: any, i: number) => <li key={i}>{r}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {(report.recommended_next_steps ?? []).length > 0 && (
+        <div>
+          <h3 style={{margin: "8px 0 6px"}}>推荐下一步</h3>
+          <ol style={{marginLeft: 18, fontSize: 13, lineHeight: 1.7}}>
+            {report.recommended_next_steps.map((s: any, i: number) => <li key={i}>{s}</li>)}
+          </ol>
+        </div>
+      )}
     </div>
   );
 }

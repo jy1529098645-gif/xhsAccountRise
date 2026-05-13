@@ -170,19 +170,38 @@ async def autofill(
     platform = lib_meta.platform if lib_meta else "xiaohongshu"
 
     if not dna:
-        raise RuntimeError("no DNA artifact yet — analyze the library first")
+        # Don't hard-fail — build an ad-hoc artifact so we always have *something*
+        from .. import adapt as _adapt
+        try:
+            db_path = library.current_db_path()
+            raw = _adapt.inspect_source(
+                db_path, sample_rows=10, include_top_rows=True, include_aggregates=True,
+            ) if db_path.exists() else {}
+        except Exception:
+            raw = {}
+        dna = {"version": "ad-hoc", "sections": {}, "summary": {},
+               "raw_schema": raw}
 
     t0 = time.time()
     dna_context = strat_prompts.dna_blurb(dna)
 
+    # Include latest insight report (Claude × OpenAI consensus) as 强参考
+    from ..insight.pipeline import latest_completed_for_current_library, consensus_summary_for_prompt
+    report_ctx = consensus_summary_for_prompt(latest_completed_for_current_library())
+
+    report_block = f"\n\n{report_ctx}\n" if report_ctx else ""
+
     user_msg = (
         f"【激活的语料库】 lib_id={lib_meta.lib_id if lib_meta else 'unknown'},"
-        f" platform={platform}, notes={lib_meta.notes_count if lib_meta else 0}\n\n"
+        f" platform={platform}, notes={lib_meta.notes_count if lib_meta else 0}\n"
+        f"{report_block}"
         f"【该平台爆款 DNA】\n{dna_context}\n\n"
         f"【用户可选提示】\n"
         f"  - 个人优势 (用户可能填这个): {personal_hint or '未填'}\n"
         f"  - 偏好约束 (用户可能填这个): {constraints_hint or '未填'}\n\n"
-        "请按 system 给的 schema 拟一版起号初稿（含 2-3 个备选）。"
+        "请按 system 给的 schema 拟一版起号初稿。"
+        + (" **务必结合上面的「共识分析报告」内容**——它是上一步双 AI 协作的产物，权重很高。"
+           if report_ctx else "")
     )
 
     # ---- Phase 1: parallel proposals ----
