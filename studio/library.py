@@ -414,27 +414,21 @@ def delete(lib_id: str) -> None:
 
 
 def ensure_bootstrap() -> None:
-    """Boot-time: if no libraries exist but legacy data/xhs.db is there, adopt
-    it as 'default' so existing users don't need to re-import."""
-    if list_all_libraries():
-        if not ACTIVE_POINTER.exists():
-            ACTIVE_POINTER.write_text(
-                list_all_libraries()[0].lib_id, encoding="utf-8"
-            )
-        return
-    legacy = config.DATA_DIR / "xhs.db"
-    if legacy.exists():
-        register_existing(legacy, display_name="默认库 (default)", lib_id="default")
-        ACTIVE_POINTER.write_text("default", encoding="utf-8")
-        try:
-            legacy.unlink()
-            # also kill -wal/-shm if present
-            for suffix in ("-wal", "-shm"):
-                p = legacy.with_name(legacy.name + suffix)
-                if p.exists():
-                    p.unlink()
-        except OSError:
-            pass
+    """Boot-time housekeeping.
+
+    Fresh installs start *empty* — the user uploads their first .db from
+    the Reports page. We only:
+      - Set the active pointer if any libraries already exist (e.g. after
+        an upload mid-session).
+      - Leave existing libraries alone.
+
+    We deliberately do NOT auto-adopt a legacy data/xhs.db anymore: hiding
+    a 100 MB demo file from the user is more confusing than helpful, and
+    different deployments shouldn't ship the same seed corpus.
+    """
+    libs = list_all_libraries()
+    if libs and not ACTIVE_POINTER.exists():
+        ACTIVE_POINTER.write_text(libs[0].lib_id, encoding="utf-8")
 
 
 # Run bootstrap on import. Cheap (one file check); safe to be a no-op.
