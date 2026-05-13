@@ -250,6 +250,15 @@ export default function Strategy() {
     else if (lastFailedAction.kind === "expand") pickDirection(lastFailedAction.idx);
   }
 
+  async function deleteHistory(packIdToDelete: string) {
+    try {
+      await api.deleteStrategy(packIdToDelete);
+      setHistory(prev => prev.filter(h => h.pack_id !== packIdToDelete));
+    } catch (e: any) {
+      setErr(humaniseError(e));
+    }
+  }
+
   function reset() {
     setPhase("input"); setPackId(null); setDirections([]);
     setChosenIdx(null); setPack(null); setErr(null); setInfo(null);
@@ -329,7 +338,13 @@ export default function Strategy() {
                     )}
                   </td>
                   <td className="muted">{fmtRelative(h.created_at)}</td>
-                  <td><Link to={`/strategy/${h.pack_id}`}>打开 →</Link></td>
+                  <td>
+                    <div className="row" style={{gap: 8, justifyContent: "flex-end"}}>
+                      <Link to={`/strategy/${h.pack_id}`}>打开 →</Link>
+                      <button className="ghost" style={{padding: "2px 8px", fontSize: 11, color: "var(--danger)"}}
+                        onClick={() => deleteHistory(h.pack_id)}>删除</button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
