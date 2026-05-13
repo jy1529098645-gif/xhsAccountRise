@@ -13,13 +13,15 @@ from .base import (
 )
 
 
-# Rough per-1M-token prices for estimation only.
+# Rough per-1M-token (input, output) USD prices for estimation only.
+# Keep this conservative — the dashboard uses these for sanity-check display.
 _PRICE: dict[str, tuple[float, float]] = {
-    "gpt-5": (2.50, 10.00),
-    "gpt-5-mini": (0.25, 2.00),
-    "gpt-5-nano": (0.05, 0.40),
-    "gpt-4o": (2.50, 10.00),
+    "gpt-5":       (2.50, 10.00),
+    "gpt-4o":      (2.50, 10.00),
     "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4-turbo": (10.0, 30.00),
+    "o1":          (15.0, 60.00),
+    "o1-mini":     (3.00, 12.00),
 }
 
 
@@ -123,9 +125,11 @@ class OpenAIGenerator(Generator):
                 continue
 
         if resp is None:
+            import re as _re
+            err_text = _re.sub(r"(sk-(?:proj-)?\w{6})\w+", r"\1***", str(last_err))
             return GeneratedCandidate.failed(
                 self.model,
-                f"all OpenAI models in fallback chain failed: {last_err}",
+                f"all OpenAI models in fallback chain failed: {err_text}",
                 latency_ms=self._measure() - t0,
             )
 

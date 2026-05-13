@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import { fmtRelative, platformLabel } from "../format";
 import PlatformPill from "../components/PlatformPill";
-import ProgressTimeline, { Stage } from "../components/ProgressTimeline";
+import ProgressTimeline, { Stage as TimelineStage } from "../components/ProgressTimeline";
 import { humaniseError } from "../errors";
 import { LLM_CATALOG } from "../catalog";
 import type {
@@ -11,7 +11,7 @@ import type {
   StrategyListItem,
 } from "../types";
 
-const AUTOFILL_STAGES: Stage[] = [
+const AUTOFILL_STAGES: TimelineStage[] = [
   { label: "🤖 Claude 看你的库出一版初稿", durationSec: 20,
     sub: "拟方向 / 受众 / 周期 / 频率 等字段" },
   { label: "🤖 OpenAI 独立出另一版", durationSec: 20,
@@ -19,13 +19,13 @@ const AUTOFILL_STAGES: Stage[] = [
   { label: "🤖 主编融合共识 → 给你一份合并稿", durationSec: 15 },
 ];
 
-const PROPOSE_STAGES: Stage[] = [
+const PROPOSE_STAGES: TimelineStage[] = [
   { label: "🤖 读 DNA + 你的 brief", durationSec: 5 },
   { label: "🤖 Claude 产 3-5 个差异化方向", durationSec: 25,
     sub: "每个方向带 hook / 受众 / 风险 / 备选" },
 ];
 
-const EXPAND_STAGES: Stage[] = [
+const EXPAND_STAGES: TimelineStage[] = [
   { label: "🤖 3 家 LLM 并发起草选题候选（30+ 条）", durationSec: 50 },
   { label: "🤖 排期师融合 + 排进周历", durationSec: 35 },
   { label: "🤖 资源/风险师整理材料清单 + 指标", durationSec: 20 },

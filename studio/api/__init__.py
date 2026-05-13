@@ -44,10 +44,12 @@ from ..insight import pipeline as insight_pipeline
 
 load_dotenv(dotenv_path=config.REPO_ROOT / ".env", override=True)
 
+__version__ = "0.17.0"
+
 app = FastAPI(
-    title="xhs Account Rise Studio API",
-    version="0.2.0",
-    description="Multi-agent xhs content studio backend.",
+    title="EZAccountRise API",
+    version=__version__,
+    description="Multi-agent social-media content studio backend.",
 )
 
 # Allow the static frontend (any origin during dev). Production deploys can
@@ -651,9 +653,16 @@ def list_insights(library_id: str | None = None, limit: int = 30) -> list[dict[s
 
 @app.get("/api/insight/{report_id}")
 def get_insight(report_id: str) -> dict[str, Any]:
+    project.ensure_bootstrap()
+    pid = project.active_project_id()
     r = insight_pipeline.get_report(report_id)
     if not r:
         raise HTTPException(404, "report not found")
+    # Project isolation: a report only visible if it belongs to active project
+    # (legacy reports with project_id=NULL are visible to all, as default fallback).
+    rep_pid = r.get("project_id")
+    if rep_pid and rep_pid != pid:
+        raise HTTPException(404, "report not found in current project")
     return r
 
 
@@ -667,8 +676,13 @@ def list_drafts(limit: int = 50, library_id: str | None = None,
     base_sql = (
         "SELECT d.draft_id, d.generated_at, d.mode, d.library_id, d.project_id,"
         " d.final_candidate_id, d.brief_json,"
-        " (SELECT title FROM studio_draft_candidates"
-        "  WHERE candidate_id = d.final_candidate_id) AS final_title,"
+        " COALESCE("
+        "   (SELECT title FROM studio_draft_candidates"
+        "    WHERE candidate_id = d.final_candidate_id),"
+        "   (SELECT title FROM studio_draft_candidates"
+        "    WHERE draft_id = d.draft_id ORDER BY chosen DESC, self_score DESC LIMIT 1),"
+        "   '(尚无候选)'"
+        " ) AS final_title,"
         " (SELECT COUNT(*) FROM studio_draft_candidates"
         "  WHERE draft_id = d.draft_id) AS candidate_count"
         " FROM studio_drafts d WHERE 1=1"
@@ -694,13 +708,16 @@ def list_drafts(limit: int = 50, library_id: str | None = None,
 
 @app.get("/api/drafts/{draft_id}")
 def get_draft(draft_id: str) -> dict[str, Any]:
+    project.ensure_bootstrap()
+    pid = project.active_project_id()
     with db.connect(read_only=True) as con:
         d = con.execute(
-            "SELECT * FROM studio_drafts WHERE draft_id = ?",
-            (draft_id,),
+            "SELECT * FROM studio_drafts WHERE draft_id = ?"
+            " AND (project_id = ? OR project_id IS NULL)",
+            (draft_id, pid),
         ).fetchone()
         if not d:
-            raise HTTPException(404, "draft not found")
+            raise HTTPException(404, "draft not found in current project")
         cands = [dict(c) for c in con.execute(
             "SELECT * FROM studio_draft_candidates WHERE draft_id = ?"
             " ORDER BY chosen DESC, self_score DESC",
@@ -871,12 +888,16 @@ def list_strategies(limit: int = 30, all_projects: bool = False) -> list[dict[st
 
 @app.get("/api/strategy/{pack_id}")
 def get_strategy(pack_id: str) -> dict[str, Any]:
+    project.ensure_bootstrap()
+    pid = project.active_project_id()
     with db.connect(read_only=True) as con:
         row = con.execute(
-            "SELECT * FROM studio_strategies WHERE pack_id = ?", (pack_id,)
+            "SELECT * FROM studio_strategies WHERE pack_id = ?"
+            " AND (project_id = ? OR project_id IS NULL)",
+            (pack_id, pid),
         ).fetchone()
     if not row:
-        raise HTTPException(404, "strategy pack not found")
+        raise HTTPException(404, "strategy pack not found in current project")
     d = dict(row)
     try: d["input"] = json.loads(d.pop("input_json"))
     except Exception: d["input"] = {}
@@ -889,10 +910,16 @@ def get_strategy(pack_id: str) -> dict[str, Any]:
 
 @app.delete("/api/strategy/{pack_id}")
 def delete_strategy(pack_id: str) -> dict[str, str]:
+    project.ensure_bootstrap()
+    pid = project.active_project_id()
     with db.connect() as con:
-        cur = con.execute("DELETE FROM studio_strategies WHERE pack_id = ?", (pack_id,))
+        cur = con.execute(
+            "DELETE FROM studio_strategies WHERE pack_id = ?"
+            " AND (project_id = ? OR project_id IS NULL)",
+            (pack_id, pid),
+        )
         if cur.rowcount == 0:
-            raise HTTPException(404, "not found")
+            raise HTTPException(404, "not found in current project")
     return {"deleted": pack_id}
 
 

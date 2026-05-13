@@ -3,12 +3,12 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { fmtBytes, fmtRelative, fmtTime, platformLabel } from "../format";
 import PlatformPill from "../components/PlatformPill";
-import ProgressTimeline, { Stage } from "../components/ProgressTimeline";
+import ProgressTimeline, { Stage as TimelineStage } from "../components/ProgressTimeline";
 import { humaniseError } from "../errors";
 import { GITHUB_REPO } from "../catalog";
 import type { Library, Platform } from "../types";
 
-const UPLOAD_STAGES: Stage[] = [
+const UPLOAD_STAGES: TimelineStage[] = [
   { label: "🤖 读取你的数据库", durationSec: 5,
     sub: "AI 正在打开 SQLite 看里面有什么表 / 列" },
   { label: "🤖 看懂数据格式（schema 适配）", durationSec: 15,
@@ -23,7 +23,7 @@ const UPLOAD_STAGES: Stage[] = [
     sub: "只保留双方都认可的洞察，分歧单列" },
 ];
 
-const REANALYZE_STAGES: Stage[] = [
+const REANALYZE_STAGES: TimelineStage[] = [
   { label: "🤖 Claude 独立写一份报告", durationSec: 45, sub: "Anthropic 的视角" },
   { label: "🤖 OpenAI 独立写一份报告", durationSec: 45, sub: "GPT-4o 的视角" },
   { label: "🤖 双方互相评审 + 主编整合共识", durationSec: 40,

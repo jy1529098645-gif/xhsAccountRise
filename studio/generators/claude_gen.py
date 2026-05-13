@@ -15,6 +15,12 @@ from .base import (
 )
 
 
+def _mask_secret(text: str) -> str:
+    """Best-effort redaction of sk-ant-/sk-/gho_ token bodies in error text."""
+    import re as _re
+    return _re.sub(r"(sk-(?:ant-|proj-)?\w{6})\w+", r"\1***", text or "")
+
+
 # Per-1M-token prices (USD) — rough, used for cost_estimate only.
 _PRICE: dict[str, tuple[float, float]] = {
     "claude-opus-4-7": (15.00, 75.00),
@@ -69,7 +75,8 @@ class ClaudeGenerator(Generator):
             )
         except Exception as e:
             return GeneratedCandidate.failed(
-                self.model, f"api error: {e}", latency_ms=self._measure() - t0
+                self.model, f"api error: {_mask_secret(str(e))}",
+                latency_ms=self._measure() - t0,
             )
 
         latency = self._measure() - t0

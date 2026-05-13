@@ -322,8 +322,8 @@ def active_lib_id(default: str = "default") -> str:
     """The active library *within the current project*.
 
     Resolution order:
-      1. Per-project active pointer: data/projects/{pid}/active_library.txt
-      2. Global pointer: data/active_library.txt (legacy)
+      1. Per-project active pointer (validated: lib must belong to this project)
+      2. Global pointer (validated similarly)
       3. First library in current project
       4. `default`
     """
@@ -333,18 +333,18 @@ def active_lib_id(default: str = "default") -> str:
     if proj_pointer.exists():
         text = proj_pointer.read_text(encoding="utf-8").strip()
         if text and _id_exists(text):
-            return text
+            meta = get_meta(text)
+            if meta and meta.project_id == pid:
+                return text
+            # Stale pointer (lib moved to another project or deleted) — fall through
     if ACTIVE_POINTER.exists():
         text = ACTIVE_POINTER.read_text(encoding="utf-8").strip()
         if text and _id_exists(text):
-            # Migrate global pointer to per-project pointer if its library
-            # actually belongs to the current project; otherwise fall through.
             meta = get_meta(text)
             if meta and meta.project_id == pid:
                 proj_dir.mkdir(parents=True, exist_ok=True)
                 proj_pointer.write_text(text, encoding="utf-8")
                 return text
-    # Pick first library in this project (if any)
     libs_in_project = list_libraries(project_id=pid)
     if libs_in_project:
         return libs_in_project[0].lib_id

@@ -5,11 +5,11 @@ import { fmtLikes } from "../format";
 import AgentConfigPanel, {
   AgentSelection, defaultSelection, selectionToSpecs,
 } from "../components/AgentConfigPanel";
-import ProgressTimeline, { Stage } from "../components/ProgressTimeline";
+import ProgressTimeline, { Stage as TimelineStage } from "../components/ProgressTimeline";
 import { humaniseError } from "../errors";
 import type { ComposeBundle, DraftCandidate, Library, Platform } from "../types";
 
-const COMPOSE_STAGES: Stage[] = [
+const COMPOSE_STAGES: TimelineStage[] = [
   { label: "🤖 策略师定方向", durationSec: 25, sub: "选 hook 类型 / 开头钩子 / 结构 / 避坑" },
   { label: "🔍 调研员检索参考爆款 (无 LLM)", durationSec: 3 },
   { label: "🤖🤖🤖 起草团并发起草 N 份候选", durationSec: 60 },

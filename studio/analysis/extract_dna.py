@@ -444,10 +444,13 @@ def build_dna(version: str | None = None) -> dict[str, Any]:
     (e.g. `discover_queue` in a small exported corpus) doesn't kill the whole
     DNA build. Failed sections emit `{"_error": "..."}` so the frontend can
     show what was skipped without losing the rest of the analysis.
+
+    Version format is `YYYY-MM-DD-HHMMSS` so same-day re-runs don't overwrite
+    each other (was just `YYYY-MM-DD` which collided in INSERT OR REPLACE).
     """
     t0 = time.time()
     if version is None:
-        version = datetime.now(_TZ).strftime("%Y-%m-%d")
+        version = datetime.now(_TZ).strftime("%Y-%m-%d-%H%M%S")
 
     artifact: dict[str, Any] = {
         "version": version,

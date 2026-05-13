@@ -188,8 +188,10 @@ def ensure_bootstrap() -> None:
     if not row:
         now = int(time.time())
         with db.connect() as con:
+            # OR IGNORE: race-safe — two concurrent bootstraps won't crash on
+            # PRIMARY KEY uniqueness violation.
             con.execute(
-                "INSERT INTO studio_projects"
+                "INSERT OR IGNORE INTO studio_projects"
                 " (project_id, name, description, emoji,"
                 "  created_at, updated_at, is_default, archived)"
                 " VALUES ('default', '默认项目', '首次使用自动创建', '🏠', ?, ?, 1, 0)",
