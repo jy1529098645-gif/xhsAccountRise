@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { fmtLikes, fmtTime } from "../format";
+import PlatformPill from "../components/PlatformPill";
 import type { DnaArtifact, DraftListItem, Library, Status } from "../types";
 
 export default function Dashboard() {
@@ -31,7 +32,7 @@ export default function Dashboard() {
     <div>
       <div className="page-header">
         <h1>Dashboard</h1>
-        <p>AcademiCats 起号工作台 · 当前库：{active?.display_name ?? "—"}</p>
+        <p>AcademiCats 起号工作台 · 当前库：{active?.display_name ?? "—"} <PlatformPill platform={active?.platform} /></p>
       </div>
 
       {err && <div className="banner danger">{err}</div>}
@@ -110,7 +111,7 @@ export default function Dashboard() {
         ) : (
           <div className="spread">
             <div>
-              <strong>{active.display_name}</strong>
+              <strong>{active.display_name}</strong> <PlatformPill platform={active.platform} />
               <p className="muted">
                 {active.notes_count.toLocaleString()} notes · {active.comments_count.toLocaleString()} 评论 ·
                 lib_id: <code className="kbd">{active.lib_id}</code>

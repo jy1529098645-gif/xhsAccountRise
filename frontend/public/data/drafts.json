@@ -1,5 +1,24 @@
 [
   {
+    "draft_id": "ac245947cf554e9a",
+    "generated_at": 1778695739,
+    "mode": "multi-agent",
+    "library_id": "default",
+    "final_candidate_id": "3f032dd57b5d4d5e",
+    "final_title": null,
+    "candidate_count": 3,
+    "brief": {
+      "topic": "降AI率技巧",
+      "angle": "教程",
+      "target_length": 500,
+      "cta_strength": "soft",
+      "niche": "降AI率",
+      "reference_note_ids": [],
+      "extra_constraints": "",
+      "platform": "xiaohongshu"
+    }
+  },
+  {
     "draft_id": "846d01374f954802",
     "generated_at": 1778694182,
     "mode": "multi-agent",

@@ -57,6 +57,7 @@ class AgentContext:
     critiques: dict[str, list[Critique]] = field(default_factory=dict)
     refined: GeneratedCandidate | None = None
     final: GeneratedCandidate | None = None
+    plan: dict[str, Any] = field(default_factory=dict)
     trace: list[TraceStep] = field(default_factory=list)
     started_at: int = field(default_factory=lambda: int(time.time()))
 

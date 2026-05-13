@@ -33,6 +33,7 @@ from ..generators.base import Generator
 from .base import AgentContext
 from .critic import CriticPoolAgent
 from .drafter import DrafterPoolAgent
+from .planner import PlannerAgent
 from .refiner import RefinerAgent
 from .researcher import ResearcherAgent
 from .strategist import StrategistAgent
@@ -45,7 +46,8 @@ class PipelineConfig:
     drafter_spec: str = "claude:opus,deepseek,openai"
     critic_spec: str = "claude:sonnet,deepseek"
     refiner_spec: str = "claude:opus"
-    synthesizer_spec: str = "claude:opus"  # NEW: LLM that fuses all drafts
+    synthesizer_spec: str = "claude:opus"  # LLM that fuses all drafts
+    planner_spec: str = "claude:opus"      # LLM that builds the execution plan
     k_refs: int = 8
     n_comments: int = 15
     top_hooks: int = 6
@@ -53,6 +55,7 @@ class PipelineConfig:
     skip_critics: bool = False
     skip_refiner: bool = False
     skip_synthesizer: bool = False
+    skip_planner: bool = False
 
 
 def _first(gens: list[Generator]) -> Generator:
@@ -97,6 +100,10 @@ async def run_pipeline(brief: Brief, cfg: PipelineConfig | None = None) -> dict[
         if not cfg.skip_synthesizer else None
     )
     synthesizer = SynthesizerAgent(generator=synth_gen)
+    planner = (
+        PlannerAgent(_first(registry.build(cfg.planner_spec)))
+        if not cfg.skip_planner else None
+    )
 
     # Run sequence: researcher must precede strategist (strategist sees refs).
     await researcher.run(ctx)
@@ -108,6 +115,8 @@ async def run_pipeline(brief: Brief, cfg: PipelineConfig | None = None) -> dict[
     if refiner:
         await refiner.run(ctx)
     await synthesizer.run(ctx)
+    if planner:
+        await planner.run(ctx)
 
     bundle = _persist(ctx, cfg)
     return bundle
@@ -118,6 +127,11 @@ def _persist(ctx: AgentContext, cfg: PipelineConfig) -> dict[str, Any]:
     now = int(time.time())
     lib_id = ctx.library_id or library.active_lib_id()
 
+    notes_payload = {
+        "config": asdict(cfg),
+        "plan": ctx.plan,
+        "strategy": ctx.strategy,
+    }
     with db.connect() as con:
         con.execute(
             "INSERT INTO studio_drafts"
@@ -131,7 +145,7 @@ def _persist(ctx: AgentContext, cfg: PipelineConfig) -> dict[str, Any]:
                 "generated", "multi-agent",
                 lib_id,
                 (ctx.final.candidate_id if ctx.final else None),
-                json.dumps({"config": asdict(cfg)}, ensure_ascii=False),
+                json.dumps(notes_payload, ensure_ascii=False),
             ),
         )
 
@@ -185,6 +199,7 @@ def _persist(ctx: AgentContext, cfg: PipelineConfig) -> dict[str, Any]:
         "library_id": lib_id,
         "brief": asdict(ctx.brief),
         "strategy": ctx.strategy,
+        "plan": ctx.plan,
         "rag": {
             "refs": [
                 {"note_id": r["note_id"], "title": r["title"],

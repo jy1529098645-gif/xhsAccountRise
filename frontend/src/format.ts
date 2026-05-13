@@ -26,3 +26,14 @@ export function fmtRelative(ts: number): string {
   if (diff < 86400) return `${Math.floor(diff / 3600)}小时前`;
   return `${Math.floor(diff / 86400)}天前`;
 }
+
+const PLATFORM_LABELS: Record<string, string> = {
+  xiaohongshu: "小红书", douyin: "抖音", kuaishou: "快手",
+  bilibili: "B站", youtube: "YouTube", reddit: "Reddit",
+  x: "X / Twitter", other: "其他",
+};
+
+export function platformLabel(id: string | undefined): string {
+  if (!id) return "—";
+  return PLATFORM_LABELS[id] ?? id;
+}

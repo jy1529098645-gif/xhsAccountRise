@@ -145,10 +145,17 @@ def _build_draft_payload(con, draft_id: str) -> dict:
         c["tags"] = json.loads(c.pop("tags_json") or "[]")
         c["meta"] = json.loads(c.pop("meta_json") or "{}")
         c["critiques"] = crit_by_cand.get(c["candidate_id"], [])
+    d_dict = dict(d)
+    try:
+        notes_payload = json.loads(d_dict.get("notes") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        notes_payload = {}
     return {
-        "draft": dict(d) | {"brief": json.loads(d["brief_json"])},
+        "draft": d_dict | {"brief": json.loads(d["brief_json"])},
         "candidates": cands,
         "trace": trace,
+        "plan": notes_payload.get("plan", {}),
+        "strategy": notes_payload.get("strategy", {}),
     }
 
 

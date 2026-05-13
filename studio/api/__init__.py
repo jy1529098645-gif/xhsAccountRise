@@ -297,10 +297,12 @@ class ComposeRequest(BaseModel):
     critic_spec: str = "claude:sonnet,deepseek"
     refiner_spec: str = "claude:opus"
     synthesizer_spec: str = "claude:opus"
+    planner_spec: str = "claude:opus"
     skip_strategist: bool = False
     skip_critics: bool = False
     skip_refiner: bool = False
     skip_synthesizer: bool = False
+    skip_planner: bool = False
 
 
 @app.post("/api/compose")
@@ -319,10 +321,12 @@ async def compose(req: ComposeRequest) -> dict[str, Any]:
         critic_spec=req.critic_spec,
         refiner_spec=req.refiner_spec,
         synthesizer_spec=req.synthesizer_spec,
+        planner_spec=req.planner_spec,
         skip_strategist=req.skip_strategist,
         skip_critics=req.skip_critics,
         skip_refiner=req.skip_refiner,
         skip_synthesizer=req.skip_synthesizer,
+        skip_planner=req.skip_planner,
     )
     bundle = await agent_pipeline.run_pipeline(brief, cfg)
     return bundle
@@ -389,6 +393,11 @@ def get_draft(draft_id: str) -> dict[str, Any]:
             " ORDER BY step_index ASC",
             (draft_id,),
         )]
+    d_dict = dict(d)
+    try:
+        notes_payload = json.loads(d_dict.get("notes") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        notes_payload = {}
     crit_by_cand: dict[str, list[dict[str, Any]]] = {}
     for c in crits:
         c["scores"] = json.loads(c.pop("scores_json") or "{}")
@@ -399,9 +408,11 @@ def get_draft(draft_id: str) -> dict[str, Any]:
         c["meta"] = json.loads(c.pop("meta_json") or "{}")
         c["critiques"] = crit_by_cand.get(c["candidate_id"], [])
     return {
-        "draft": dict(d) | {"brief": json.loads(d["brief_json"])},
+        "draft": d_dict | {"brief": json.loads(d["brief_json"])},
         "candidates": cands,
         "trace": trace,
+        "plan": notes_payload.get("plan", {}),
+        "strategy": notes_payload.get("strategy", {}),
     }
 
 

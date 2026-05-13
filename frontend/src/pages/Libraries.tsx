@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { fmtBytes, fmtRelative, fmtTime } from "../format";
+import PlatformPill from "../components/PlatformPill";
 import type { Library, Platform } from "../types";
 
 export default function Libraries() {
@@ -174,7 +175,10 @@ export default function Libraries() {
                 <tr key={l.lib_id} style={l.active ? { background: "var(--primary-soft)" } : undefined}>
                   <td>{l.active ? "★ active" : <span className="muted">—</span>}</td>
                   <td><code className="kbd">{l.lib_id}</code></td>
-                  <td>{l.display_name}</td>
+                  <td>
+                    {l.display_name}
+                    <div style={{marginTop: 3}}><PlatformPill platform={l.platform} /></div>
+                  </td>
                   <td>
                     <select value={l.platform} disabled={offline || working === l.lib_id}
                       onChange={e => changePlatform(l.lib_id, e.target.value)}

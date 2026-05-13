@@ -146,10 +146,12 @@ export const api = {
     critic_spec?: string;
     refiner_spec?: string;
     synthesizer_spec?: string;
+    planner_spec?: string;
     skip_strategist?: boolean;
     skip_critics?: boolean;
     skip_refiner?: boolean;
     skip_synthesizer?: boolean;
+    skip_planner?: boolean;
   }) => postJson<ComposeBundle>("/api/compose", req),
 };
 

@@ -103,6 +103,24 @@ export interface TraceStep {
   error: string;
 }
 
+export interface PlanSlot {
+  slot: string;
+  median_likes: number;
+  why: string;
+}
+export interface PlanAngle {
+  title: string;
+  angle: string;
+  hook_type: string;
+  why: string;
+}
+export interface ExecutionPlan {
+  publish_schedule?: PlanSlot[];
+  follow_up_angles?: PlanAngle[];
+  engagement_tactics?: string[];
+  series_thesis?: string;
+}
+
 export interface ComposeBundle {
   draft_id: string;
   library_id: string;
@@ -115,6 +133,7 @@ export interface ComposeBundle {
     tone?: string;
     avoid?: string[];
   };
+  plan?: ExecutionPlan;
   rag: { refs: { note_id: string; title: string; likes: number }[]; comments_count: number; hooks: string[] };
   drafts: DraftCandidate[];
   refined: DraftCandidate | null;
@@ -139,4 +158,6 @@ export interface DraftDetail {
   draft: any;
   candidates: any[];
   trace: any[];
+  plan?: ExecutionPlan;
+  strategy?: any;
 }
