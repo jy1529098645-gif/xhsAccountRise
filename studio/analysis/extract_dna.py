@@ -486,18 +486,26 @@ def build_dna(version: str | None = None) -> dict[str, Any]:
 
 
 def attach_raw_schema(artifact: dict[str, Any]) -> dict[str, Any]:
-    """Best-effort: include the library's raw table/column structure as a
-    fallback context for Insight when the canonical analysis is sparse.
+    """Always attach a rich raw-data snapshot of the library so downstream
+    Insight LLMs have *real* content to reason over, not just DNA stats.
 
-    This makes the system genuinely 'just accept any SQLite' — even if DNA
-    sections all fail, the Insight LLMs have *something* (raw schema +
-    sample rows) to reason over.
+    Pulls:
+      - schema (tables + columns + types)
+      - 15 sample rows per table
+      - 10 top rows ordered by an engagement-like column when detected
+      - aggregate stats (count/avg/min/max for numeric, distinct/avg_len for text)
     """
     try:
         from .. import adapt as _adapt, library as _library
         db_path = _library.current_db_path()
         if db_path.exists():
-            artifact["raw_schema"] = _adapt.inspect_source(db_path, sample_rows=2)
+            artifact["raw_schema"] = _adapt.inspect_source(
+                db_path,
+                sample_rows=15,
+                include_top_rows=True,
+                include_aggregates=True,
+                text_max=300,
+            )
     except Exception as e:
         artifact["raw_schema_error"] = str(e)
     return artifact

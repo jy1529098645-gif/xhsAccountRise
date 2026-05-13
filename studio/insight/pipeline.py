@@ -108,18 +108,68 @@ def _build_dna_context(dna: dict[str, Any]) -> str:
             for x in top_perf["top_collect_rate"][:8]
         ))
 
-    return "\n\n".join(parts)
+    # ---- Raw-content snapshot ------------------------------------------
+    # Always include schema + actual data samples. AIs need to see the
+    # real content, not just DNA-derived statistics.
+    raw = dna.get("raw_schema") or {}
+    raw_tables = raw.get("tables") or []
+    if raw_tables:
+        sch_lines: list[str] = []
+        for tbl in raw_tables[:6]:
+            cols = ", ".join(
+                f"{c['name']}({c.get('type','')})"
+                for c in (tbl.get("columns") or [])[:20]
+            )
+            header = f"━━━ 表 `{tbl['name']}` ({tbl.get('row_count', 0)} 行)"
+            if tbl.get("engagement_col"):
+                header += f" · 按 `{tbl['engagement_col']}` 排序"
+            sch_lines.append(header)
+            sch_lines.append(f"  columns: {cols}")
+
+            aggs = tbl.get("aggregates") or {}
+            if aggs:
+                sch_lines.append("  aggregate stats:")
+                for cn, a in list(aggs.items())[:8]:
+                    if "avg" in a:  # numeric
+                        sch_lines.append(
+                            f"    · {cn}: n={a.get('non_null')} avg={a.get('avg')} "
+                            f"min={a.get('min')} max={a.get('max')}"
+                        )
+                    else:  # text
+                        sch_lines.append(
+                            f"    · {cn}: distinct={a.get('distinct')} "
+                            f"avg_len={a.get('avg_len')}"
+                        )
+
+            top = tbl.get("top_rows") or []
+            if top:
+                sch_lines.append(f"  ── 按 {tbl['engagement_col']} 排序的 top {len(top)} 行 ──")
+                for i, r in enumerate(top, 1):
+                    sch_lines.append(f"    [#{i}] " + json.dumps(r, ensure_ascii=False))
+
+            samples = tbl.get("samples") or []
+            if samples:
+                sch_lines.append(f"  ── 随机/前 {len(samples)} 行样本 ──")
+                for i, r in enumerate(samples, 1):
+                    sch_lines.append(f"    [{i}] " + json.dumps(r, ensure_ascii=False))
+        parts.append("【原始数据快照（真实数据，请直接看这里下结论）】\n"
+                     + "\n".join(sch_lines))
+
+    return "\n\n".join(parts) or "（库里几乎没有可分析的内容，请基于 schema 推测）"
 
 
 # ---- Prompts ------------------------------------------------------------
 
 INDEPENDENT_SYSTEM = """\
-你是「数据洞察分析师」。给你一份数据库的内容（可能是社交平台爆款数据，也可能是任意其它类型 SQLite），请独立分析，输出一份结构化报告。
+你是「数据洞察分析师」。给你一份数据库（可能是社交平台爆款数据库，也可能是任意其它 SQLite），请独立分析，输出一份结构化报告。
 
-**重要**：数据可能很稀疏甚至几乎全空。这种情况下你依然要尽力：
-- 如果有 raw_schema 兜底，从表名 + 列名 + 样本行推测这库装的是什么
-- 不要因为数据少就摆烂；从有限信息能挖什么就挖什么
-- 数据极度稀疏时，可以建议用户「这个数据库不像是社交平台爆款数据，更像 X / Y 用途」
+**重点**：你拿到的材料里包含「原始数据快照」——真实的表 / 列 / 样本行 / top 行。**先看这部分原始内容**，再看 DNA 加工统计。你的报告必须基于真实数据，**不能光看 DNA 统计就下结论**：
+- 真实样本行里有什么 title / body / 数据特征？
+- top_rows 显示哪些内容互动最高？模式是什么？
+- aggregate stats 揭示了什么分布（平均字数？平均赞数？分布偏态？）
+- 表名/列名暗示这是什么类型的内容（小红书笔记？抖音视频？产品库？）
+
+如果原始数据是空的，**不要假装有洞察**，直接说"数据库为空 — 无法分析"。否则，你的结论必须**引用具体的样本行 / 数字 / 数据特征**作为证据，不能是泛泛而谈。
 
 不要参考任何「其他 AI 的观点」（你现在是独立分析阶段）。报告输出 JSON：
 

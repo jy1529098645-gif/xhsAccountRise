@@ -333,28 +333,63 @@ async def import_library(
             result["adapter_error"] = str(e)
 
     if analyze in ("1", "true", "yes"):
+        # Run analysis in granular sub-tries so a partial failure (e.g. FTS
+        # build crashes due to a weird view) STILL produces a DNA artifact.
+        # The insight pipeline reads the latest persisted artifact, so it
+        # matters more that *something* is saved than that everything works.
+        from ..analysis import extract_dna, promote_hooks, render_report
+        from ..rag import build_index
+
         try:
             db.apply_migrations(verbose=False)
-            from ..analysis import extract_dna, promote_hooks, render_report
-            from ..rag import build_index
+        except Exception as e:
+            result["migrate_error"] = repr(e)
+
+        try:
             fts_stats = build_index.rebuild_all()
-            artifact = extract_dna.build_dna()
-            # Each DNA section is independently fault-tolerant; the build only
-            # really "fails" if persistence itself blows up.
-            extract_dna.persist(artifact)
-            render_report.render(artifact)
-            try:
-                promo = promote_hooks.promote()
-                result["promoted_hooks"] = promo.get("promoted", [])
-            except Exception as e:
-                result["promote_warning"] = str(e)
-            result["dna_version"] = artifact["version"]
             result["fts"] = fts_stats
+        except Exception as e:
+            result["fts_error"] = repr(e)
+
+        artifact: dict[str, Any] = {}
+        try:
+            artifact = extract_dna.build_dna()
+        except Exception as e:
+            # build_dna already swallows per-section errors; if it still
+            # blew up we craft a minimal envelope so persist() can attach
+            # raw_schema and we have *something* on disk.
+            import time as _time
+            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+            artifact = {
+                "version": _dt.now(_tz(_td(hours=8))).strftime("%Y-%m-%d"),
+                "generated_at": int(_time.time()),
+                "sections": {},
+                "section_errors": {"build_dna": repr(e)},
+                "summary": {"total_notes_analysed": 0, "dominant_hooks": [],
+                            "generated_in_seconds": 0,
+                            "section_errors": ["build_dna"]},
+            }
+            result["build_dna_error"] = repr(e)
+
+        try:
+            extract_dna.persist(artifact)  # attaches raw_schema inside
+            result["dna_version"] = artifact["version"]
             result["section_errors"] = artifact.get("section_errors", {})
             result["analyzed"] = True
         except Exception as e:
-            result["analyze_error"] = str(e)
+            result["persist_error"] = repr(e)
             result["analyzed"] = False
+
+        try:
+            render_report.render(artifact)
+        except Exception as e:
+            result["render_error"] = repr(e)
+
+        try:
+            promo = promote_hooks.promote()
+            result["promoted_hooks"] = promo.get("promoted", [])
+        except Exception as e:
+            result["promote_warning"] = repr(e)
 
     return result
 

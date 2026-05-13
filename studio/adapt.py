@@ -104,8 +104,50 @@ def save_map(lib_id: str, mapping: dict[str, Any]) -> Path:
 
 # ---- Source schema inspection ------------------------------------------
 
-def inspect_source(db_path: Path | str, *, sample_rows: int = 3) -> dict[str, Any]:
-    """Read an SQLite file and dump its tables, columns, and a few sample rows."""
+_ENGAGEMENT_COL_HINTS = (
+    "like", "digg", "fav", "collect", "share", "view", "play",
+    "comment_count", "repost", "click", "engagement",
+)
+_CONTENT_COL_HINTS = (
+    "title", "desc", "body", "content", "text", "caption", "message",
+)
+
+
+def _pick_engagement_col(cols: list[dict[str, Any]]) -> str | None:
+    """Find a column that looks like an engagement signal (likes/views/etc)
+    so we can ORDER BY it and surface the most useful sample rows."""
+    for c in cols:
+        n = (c["name"] or "").lower()
+        if any(h in n for h in _ENGAGEMENT_COL_HINTS):
+            t = (c["type"] or "").upper()
+            if "INT" in t or "REAL" in t or "NUM" in t or t == "":
+                return c["name"]
+    return None
+
+
+def _truncate(v: Any, n: int = 200) -> Any:
+    if v is None:
+        return None
+    s = str(v)
+    return s if len(s) <= n else s[:n] + "…"
+
+
+def inspect_source(
+    db_path: Path | str, *,
+    sample_rows: int = 5,
+    include_top_rows: bool = False,
+    include_aggregates: bool = False,
+    text_max: int = 200,
+) -> dict[str, Any]:
+    """Read an SQLite file and dump its tables, columns, and sample rows.
+
+    Args:
+        sample_rows: how many random/leading rows per table.
+        include_top_rows: also include rows sorted by an engagement-like column
+            (likes/views/etc) when one is detected. Helpful for AI context.
+        include_aggregates: add COUNT/MIN/MAX/AVG/distinct on numeric cols.
+        text_max: per-cell text length cap (so the prompt stays manageable).
+    """
     con = sqlite3.connect(f"file:{Path(db_path).as_posix()}?mode=ro", uri=True)
     cur = con.cursor()
     tables_meta: list[dict[str, Any]] = []
@@ -122,25 +164,81 @@ def inspect_source(db_path: Path | str, *, sample_rows: int = 3) -> dict[str, An
                 ]
             except sqlite3.OperationalError:
                 cols_info = []
+            col_names = [c["name"] for c in cols_info]
+
             try:
                 row_count = cur.execute(f"SELECT COUNT(*) FROM '{name}'").fetchone()[0]
             except sqlite3.OperationalError:
                 row_count = 0
+
             try:
-                samples = list(cur.execute(f"SELECT * FROM '{name}' LIMIT ?", (sample_rows,)))
-                col_names = [c["name"] for c in cols_info]
+                samples = list(cur.execute(
+                    f"SELECT * FROM '{name}' LIMIT ?", (sample_rows,)
+                ))
                 sample_rows_dicts = [
-                    {col_names[i]: (str(v)[:120] if v is not None else None)
+                    {col_names[i]: _truncate(v, text_max)
                      for i, v in enumerate(row)}
                     for row in samples
                 ]
             except sqlite3.OperationalError:
                 sample_rows_dicts = []
+
+            top_rows: list[dict[str, Any]] = []
+            eng_col = _pick_engagement_col(cols_info)
+            if include_top_rows and eng_col:
+                try:
+                    quoted = '"' + eng_col.replace('"', '""') + '"'
+                    rows = list(cur.execute(
+                        f"SELECT * FROM '{name}' "
+                        f"WHERE {quoted} IS NOT NULL "
+                        f"ORDER BY {quoted} DESC LIMIT 10"
+                    ))
+                    top_rows = [
+                        {col_names[i]: _truncate(v, text_max)
+                         for i, v in enumerate(row)}
+                        for row in rows
+                    ]
+                except sqlite3.OperationalError:
+                    pass
+
+            aggs: dict[str, Any] = {}
+            if include_aggregates:
+                for c in cols_info:
+                    cn = c["name"]
+                    ct = (c["type"] or "").upper()
+                    is_num = "INT" in ct or "REAL" in ct or "NUM" in ct
+                    is_text = "TEXT" in ct or "CHAR" in ct or "CLOB" in ct or ct == ""
+                    try:
+                        if is_num:
+                            r = cur.execute(
+                                f"SELECT COUNT(*), AVG({cn!r}), MIN({cn!r}), MAX({cn!r})"
+                                f" FROM '{name}' WHERE {cn!r} IS NOT NULL"
+                                .replace("'", '"')
+                            ).fetchone()
+                            if r and r[0]:
+                                aggs[cn] = {"non_null": r[0],
+                                            "avg": float(r[1]) if r[1] is not None else None,
+                                            "min": r[2], "max": r[3]}
+                        elif is_text:
+                            r = cur.execute(
+                                f'SELECT COUNT(DISTINCT "{cn}"), '
+                                f'AVG(LENGTH("{cn}")) FROM "{name}" '
+                                f'WHERE "{cn}" IS NOT NULL'
+                            ).fetchone()
+                            if r and r[0]:
+                                aggs[cn] = {"distinct": r[0],
+                                            "avg_len": float(r[1]) if r[1] is not None else None}
+                    except sqlite3.OperationalError:
+                        continue
+
             tables_meta.append({
                 "name": name,
                 "columns": cols_info,
                 "row_count": row_count,
                 "samples": sample_rows_dicts,
+                "top_rows": top_rows,
+                "engagement_col": eng_col,
+                "aggregates": aggs,
             })
     finally:
         con.close()
