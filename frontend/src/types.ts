@@ -161,3 +161,87 @@ export interface DraftDetail {
   plan?: ExecutionPlan;
   strategy?: any;
 }
+
+// ---- Account launch strategy ---------------------------------------------
+
+export interface AccountInputDTO {
+  positioning: string;
+  target_audience: string;
+  cycle_weeks: number;
+  posts_per_week: number;
+  personal_strengths: string;
+  constraints: string;
+  platform: string;
+}
+
+export interface StrategicDirectionDTO {
+  name: string;
+  positioning_statement: string;
+  target_audience: string;
+  hook_angles: string[];
+  differentiator: string;
+  risk: string;
+  score: number;
+  why_works: string;
+}
+
+export interface TopicSlotDTO {
+  week: number;
+  day_of_week: number;
+  publish_slot: string;
+  title: string;
+  title_variants: string[];
+  angle: string;
+  hook_type: string;
+  outline: string[];
+  materials_needed: string[];
+  intent: string;
+}
+
+export interface WeekThemeDTO {
+  week: number;
+  theme: string;
+  intent: string;
+  notes: string;
+}
+
+export interface StrategyPackDTO {
+  pack_id: string;
+  library_id: string;
+  platform: string;
+  created_at: number;
+  input: AccountInputDTO;
+  chosen_direction: StrategicDirectionDTO;
+  series_thesis: string;
+  weekly_themes: WeekThemeDTO[];
+  schedule: TopicSlotDTO[];
+  materials_checklist: string[];
+  risks_and_mitigations: string[];
+  success_metrics: string[];
+}
+
+export interface StrategyListItem {
+  pack_id: string;
+  library_id: string | null;
+  platform: string | null;
+  created_at: number;
+  updated_at: number;
+  status: "directions" | "expanded";
+  input: AccountInputDTO;
+  chosen_direction_idx: number | null;
+  elapsed_s: number | null;
+}
+
+export interface StrategyDetail {
+  pack_id: string;
+  library_id: string | null;
+  platform: string | null;
+  created_at: number;
+  updated_at: number;
+  status: "directions" | "expanded";
+  input: AccountInputDTO;
+  directions: StrategicDirectionDTO[];
+  chosen_direction_idx: number | null;
+  pack: StrategyPackDTO | null;
+  elapsed_s: number | null;
+}

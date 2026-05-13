@@ -168,12 +168,7 @@ export default function Libraries() {
               {libs.map(l => (
                 <tr key={l.lib_id} style={l.active ? { background: "var(--primary-soft)" } : undefined}>
                   <td>{l.active ? "★ 激活中" : <span className="muted">—</span>}</td>
-                  <td>
-                    {l.display_name}
-                    <div style={{ marginTop: 3 }}>
-                      <code className="kbd" style={{fontSize: 10}}>{l.lib_id}</code>
-                    </div>
-                  </td>
+                  <td>{l.display_name}</td>
                   <td>
                     <PlatformPill platform={l.platform} />
                     <select value={l.platform} disabled={offline || working === l.lib_id}

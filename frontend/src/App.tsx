@@ -9,6 +9,7 @@ import Drafts from "./pages/Drafts";
 import DraftDetail from "./pages/DraftDetail";
 import Libraries from "./pages/Libraries";
 import Settings from "./pages/Settings";
+import Strategy from "./pages/Strategy";
 
 export default function App() {
   const [connected, setConnected] = useState<boolean>(api.isConnected());
@@ -33,7 +34,8 @@ export default function App() {
           <div className="logo">A</div>
           <div>AcademiCats · Studio</div>
         </div>
-        <NavLink to="/libraries" className={({isActive}) => isActive ? "active" : ""}>📥 资源库 / 上传</NavLink>
+        <NavLink to="/strategy" className={({isActive}) => isActive ? "active" : ""}>🚀 起号策略 <span style={{fontSize: 10, color: "var(--muted)"}}>第 1 步</span></NavLink>
+        <NavLink to="/libraries" className={({isActive}) => isActive ? "active" : ""}>📥 资源库 · 上传</NavLink>
         <NavLink to="/composer" className={({isActive}) => isActive ? "active" : ""}>✍️ 出稿</NavLink>
         <NavLink to="/dashboard" className={({isActive}) => isActive ? "active" : ""}>📊 数据总览</NavLink>
         <NavLink to="/analysis" className={({isActive}) => isActive ? "active" : ""}>🧬 爆款分析</NavLink>
@@ -57,7 +59,8 @@ export default function App() {
       <main className="main">
         <ConnectionBanner />
         <Routes>
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/" element={<Navigate to="/strategy" replace />} />
+          <Route path="/strategy" element={<Strategy />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/analysis" element={<Analysis />} />
           <Route path="/composer" element={<Composer />} />

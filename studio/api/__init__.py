@@ -38,6 +38,8 @@ from ..agents import pipeline as agent_pipeline
 from ..analysis import extract_dna, promote_hooks, render_report
 from ..brief import Brief
 from ..rag import build_index, retrieve
+from ..strategy import pipeline as strategy_pipeline
+from ..strategy.models import AccountInput
 
 load_dotenv(dotenv_path=config.REPO_ROOT / ".env", override=True)
 
@@ -522,6 +524,113 @@ def score_candidate(draft_id: str, candidate_id: str, req: ScoreRequest) -> dict
         if cur.rowcount == 0:
             raise HTTPException(404, "candidate not found")
     return {"ok": True, "score": req.score}
+
+
+# ---------------- strategy (起号策略) -----------------
+
+class StrategyInput(BaseModel):
+    positioning: str
+    target_audience: str
+    cycle_weeks: int = Field(default=4, ge=1, le=24)
+    posts_per_week: int = Field(default=3, ge=1, le=14)
+    personal_strengths: str = ""
+    constraints: str = ""
+    platform: str | None = None
+    positioner_spec: str = "claude:opus"
+
+
+class StrategyExpandRequest(BaseModel):
+    chosen_direction_idx: int = Field(ge=0)
+    topicgen_spec: str = "claude:opus,deepseek,openai"
+    scheduler_spec: str = "claude:opus"
+    resourcer_spec: str = "claude:opus"
+
+
+@app.post("/api/strategy/propose")
+async def strategy_propose(req: StrategyInput) -> dict[str, Any]:
+    plat = req.platform
+    if not plat:
+        meta = library.get_meta(library.active_lib_id())
+        plat = meta.platform if meta else "xiaohongshu"
+    inp = AccountInput(
+        positioning=req.positioning,
+        target_audience=req.target_audience,
+        cycle_weeks=req.cycle_weeks,
+        posts_per_week=req.posts_per_week,
+        personal_strengths=req.personal_strengths,
+        constraints=req.constraints,
+        platform=library.normalise_platform(plat),
+    )
+    try:
+        result = await strategy_pipeline.propose(inp, positioner_spec=req.positioner_spec)
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+    return result
+
+
+@app.post("/api/strategy/{pack_id}/expand")
+async def strategy_expand(pack_id: str, req: StrategyExpandRequest) -> dict[str, Any]:
+    try:
+        return await strategy_pipeline.expand(
+            pack_id, req.chosen_direction_idx,
+            topicgen_spec=req.topicgen_spec,
+            scheduler_spec=req.scheduler_spec,
+            resourcer_spec=req.resourcer_spec,
+        )
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except IndexError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/strategy")
+def list_strategies(limit: int = 30) -> list[dict[str, Any]]:
+    with db.connect(read_only=True) as con:
+        try:
+            rows = list(con.execute(
+                "SELECT pack_id, library_id, platform, created_at, updated_at,"
+                " status, input_json, chosen_direction_idx, elapsed_s"
+                " FROM studio_strategies ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ))
+        except Exception:
+            return []
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["input"] = json.loads(d.pop("input_json"))
+        except Exception:
+            d["input"] = {}
+        out.append(d)
+    return out
+
+
+@app.get("/api/strategy/{pack_id}")
+def get_strategy(pack_id: str) -> dict[str, Any]:
+    with db.connect(read_only=True) as con:
+        row = con.execute(
+            "SELECT * FROM studio_strategies WHERE pack_id = ?", (pack_id,)
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "strategy pack not found")
+    d = dict(row)
+    try: d["input"] = json.loads(d.pop("input_json"))
+    except Exception: d["input"] = {}
+    try: d["directions"] = json.loads(d.pop("directions_json"))
+    except Exception: d["directions"] = []
+    pack_json = d.pop("pack_json", None)
+    d["pack"] = json.loads(pack_json) if pack_json else None
+    return d
+
+
+@app.delete("/api/strategy/{pack_id}")
+def delete_strategy(pack_id: str) -> dict[str, str]:
+    with db.connect() as con:
+        cur = con.execute("DELETE FROM studio_strategies WHERE pack_id = ?", (pack_id,))
+        if cur.rowcount == 0:
+            raise HTTPException(404, "not found")
+    return {"deleted": pack_id}
 
 
 @app.post("/api/drafts/{draft_id}/candidates/{candidate_id}/choose")

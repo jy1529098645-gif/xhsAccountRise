@@ -48,12 +48,10 @@ export default function Dashboard() {
       )}
 
       <div className="cards-grid">
-        <Stat label="Notes 总数" value={status?.counts.notes ?? active?.notes_count ?? 0} />
+        <Stat label="语料总数" value={status?.counts.notes ?? active?.notes_count ?? 0} />
         <Stat label="评论总数" value={status?.counts.comments ?? active?.comments_count ?? 0} />
-        <Stat label="DNA artifacts" value={status?.counts.dna_artifacts ?? 0} />
-        <Stat label="已生成 drafts" value={status?.counts.drafts ?? drafts.length} />
-        <Stat label="LLM 候选数" value={status?.counts.candidates ?? 0} />
-        <Stat label="Agent traces" value={status?.counts.agent_traces ?? 0} />
+        <Stat label="历史出稿" value={status?.counts.drafts ?? drafts.length} />
+        <Stat label="AI 候选稿" value={status?.counts.candidates ?? 0} />
       </div>
 
       <div className="card">

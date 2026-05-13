@@ -1,6 +1,7 @@
 import type {
   Brief, ComposeBundle, DnaArtifact, DraftDetail, DraftListItem,
   Library, Platform, Status,
+  AccountInputDTO, StrategicDirectionDTO, StrategyDetail, StrategyListItem, StrategyPackDTO,
 } from "./types";
 
 const STATIC_PLATFORMS: Platform[] = [
@@ -75,6 +76,22 @@ async function postJson<T>(path: string, body: any): Promise<T> {
     throw new HttpError(res.status, `${path} → ${res.status}: ${text.slice(0, 400)}`);
   }
   return res.json();
+}
+
+interface StrategyProposeResult {
+  pack_id: string;
+  directions: StrategicDirectionDTO[];
+  elapsed_s: number;
+}
+
+interface StrategyExpandResult {
+  pack_id: string;
+  pack: StrategyPackDTO;
+  topicgen_errors?: string[];
+  scheduler_error?: string;
+  resourcer_error?: string;
+  topic_candidate_count?: number;
+  elapsed_s: number;
 }
 
 export const api = {
@@ -170,6 +187,21 @@ export const api = {
     postJson(`/api/drafts/${draftId}/candidates/${candidateId}/score`, { score }),
   chooseCandidate: (draftId: string, candidateId: string) =>
     postJson(`/api/drafts/${draftId}/candidates/${candidateId}/choose`, {}),
+
+  // Strategy -----------------
+  proposeStrategy: (req: Partial<AccountInputDTO> & { positioning: string; target_audience: string; positioner_spec?: string }) =>
+    postJson<StrategyProposeResult>("/api/strategy/propose", req),
+  expandStrategy: (packId: string, chosenIdx: number, opts?: { topicgen_spec?: string; scheduler_spec?: string; resourcer_spec?: string }) =>
+    postJson<StrategyExpandResult>(`/api/strategy/${packId}/expand`, { chosen_direction_idx: chosenIdx, ...opts }),
+  listStrategies: () => getJson<StrategyListItem[]>("/api/strategy", "strategies.json").catch(() => [] as StrategyListItem[]),
+  getStrategy: (packId: string) => getJson<StrategyDetail>(`/api/strategy/${packId}`),
+  deleteStrategy: async (packId: string) => {
+    const backend = backendUrl();
+    if (!backend) throw new HttpError(0, "需要本地后端");
+    const res = await fetch(`${backend}/api/strategy/${packId}`, { method: "DELETE" });
+    if (!res.ok) throw new HttpError(res.status, await res.text());
+    return res.json();
+  },
 
   // Compose -----------------
   compose: (req: Brief & {

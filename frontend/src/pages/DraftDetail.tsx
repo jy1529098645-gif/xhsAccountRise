@@ -36,13 +36,13 @@ export default function DraftDetail() {
   return (
     <div>
       <div className="page-header">
-        <h1>Draft {d.draft_id}</h1>
+        <h1>{brief?.topic ?? "出稿详情"}</h1>
         <p>
-          {fmtTime(d.generated_at)} · mode={d.mode} · library={d.library_id ?? "—"}
-          {brief.platform && <> · <PlatformPill platform={brief.platform} /></>}
+          {fmtTime(d.generated_at)} · {d.mode === "multi-agent" ? "多 AI 协作" : "单 AI"}
+          {brief?.platform && <> · <PlatformPill platform={brief.platform} /></>}
         </p>
       </div>
-      <Link to="/drafts">← 全部 drafts</Link>
+      <Link to="/drafts">← 全部历史出稿</Link>
 
       <div className="card" style={{marginTop: 12}}>
         <h2>Brief</h2>
