@@ -8,7 +8,20 @@ import type {
   AccountInputDTO, Library, Platform, StrategicDirectionDTO, StrategyPackDTO,
 } from "../types";
 
-type Phase = "input" | "loading-propose" | "directions" | "loading-expand" | "pack";
+type Phase = "autofilling" | "input" | "loading-propose" | "directions" | "loading-expand" | "pack";
+
+interface FieldRationale {
+  source: string;          // 'merged' | 'consensus' | 'claude' | 'openai'
+  rationale: string;
+  alternatives?: any[];
+}
+interface AutofillResult {
+  input: AccountInputDTO;
+  field_rationale: Record<string, FieldRationale>;
+  consensus_notes: string[];
+  single_side_views: { side: string; field: string; point: string; note?: string }[];
+  elapsed_s: number;
+}
 
 const DOW_LABELS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 const INTENT_COLORS: Record<string, string> = {
@@ -16,7 +29,7 @@ const INTENT_COLORS: Record<string, string> = {
 };
 
 export default function Strategy() {
-  const [phase, setPhase] = useState<Phase>("input");
+  const [phase, setPhase] = useState<Phase>("autofilling");
   const [input, setInput] = useState<AccountInputDTO>({
     positioning: "",
     target_audience: "",
@@ -39,11 +52,48 @@ export default function Strategy() {
   const [topicgenSpec, setTopicgenSpec] = useState("claude:opus,deepseek,openai");
   const [schedulerSpec, setSchedulerSpec] = useState("claude:opus");
   const [resourcerSpec, setResourcerSpec] = useState("claude:opus");
+  const [autofill, setAutofill] = useState<AutofillResult | null>(null);
+  const [autofillErr, setAutofillErr] = useState<string | null>(null);
 
   useEffect(() => {
     api.libraries().then(ls => setActiveLib(ls.find(l => l.active) ?? null)).catch(() => {});
     api.platforms().then(setPlatforms).catch(() => {});
+
+    // Auto-trigger autofill on mount if backend reachable.
+    if (api.isConnected()) {
+      runAutofill();
+    } else {
+      setPhase("input");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function runAutofill(extraHints?: { personal?: string; constraints?: string }) {
+    setPhase("autofilling"); setAutofillErr(null);
+    try {
+      const r = await api.autofillStrategy({
+        personal_hint: extraHints?.personal ?? input.personal_strengths ?? "",
+        constraints_hint: extraHints?.constraints ?? input.constraints ?? "",
+        claude_spec: "claude:opus",
+        openai_spec: "openai",
+        moderator_spec: "claude:opus",
+      });
+      setAutofill(r);
+      setInput({
+        positioning: r.input.positioning || "",
+        target_audience: r.input.target_audience || "",
+        cycle_weeks: r.input.cycle_weeks || 4,
+        posts_per_week: r.input.posts_per_week || 3,
+        personal_strengths: r.input.personal_strengths || "",
+        constraints: r.input.constraints || "",
+        platform: r.input.platform || "",
+      });
+      setPhase("input");
+    } catch (e: any) {
+      setAutofillErr(e.message);
+      setPhase("input");
+    }
+  }
 
   const platform = input.platform || activeLib?.platform || "xiaohongshu";
 
@@ -111,17 +161,50 @@ export default function Strategy() {
       {err && <div className="banner danger" onClick={() => setErr(null)}>{err}</div>}
       {info && <div className="banner info">{info}</div>}
 
-      {phase === "input" && (
-        <InputForm
-          input={input} setInput={setInput}
-          platforms={platforms} platformHint={activeLib?.platform}
-          showAdvanced={showAdvanced} setShowAdvanced={setShowAdvanced}
-          positionerSpec={positionerSpec} setPositionerSpec={setPositionerSpec}
-          topicgenSpec={topicgenSpec} setTopicgenSpec={setTopicgenSpec}
-          schedulerSpec={schedulerSpec} setSchedulerSpec={setSchedulerSpec}
-          resourcerSpec={resourcerSpec} setResourcerSpec={setResourcerSpec}
-          onSubmit={submitInput}
+      {phase === "autofilling" && (
+        <LoadingCard
+          title="AI 双方正在分析数据库为你拟初稿…"
+          subtitle="Claude + OpenAI 独立分析 → 互评 → 主编融合共识 (约 30-60s)"
         />
+      )}
+
+      {phase === "input" && (
+        <>
+          {autofill && (
+            <div className="banner info" style={{display: "block"}}>
+              <div className="row" style={{justifyContent: "space-between", alignItems: "flex-start"}}>
+                <div>
+                  <b>✨ AI 已为你拟好初稿</b> · {autofill.elapsed_s}s 完成
+                  <div className="muted" style={{fontSize: 12, marginTop: 2}}>
+                    下面每个字段都可以编辑。带 💡 的字段点开看 AI 是怎么推的（含备选）。
+                  </div>
+                </div>
+                <button className="ghost" onClick={() => runAutofill()}
+                  style={{fontSize: 12, padding: "4px 10px"}}>🪄 重新让 AI 拟</button>
+              </div>
+            </div>
+          )}
+          {autofillErr && (
+            <div className="banner warn">
+              ⚠️ AI 自动拟稿失败：{autofillErr} · 你可以自己填，或者
+              <button className="ghost" onClick={() => runAutofill()}
+                style={{fontSize: 12, padding: "2px 8px", marginLeft: 6}}>🪄 再试一次</button>
+            </div>
+          )}
+          <InputForm
+            input={input} setInput={setInput}
+            platforms={platforms} platformHint={activeLib?.platform}
+            showAdvanced={showAdvanced} setShowAdvanced={setShowAdvanced}
+            positionerSpec={positionerSpec} setPositionerSpec={setPositionerSpec}
+            topicgenSpec={topicgenSpec} setTopicgenSpec={setTopicgenSpec}
+            schedulerSpec={schedulerSpec} setSchedulerSpec={setSchedulerSpec}
+            resourcerSpec={resourcerSpec} setResourcerSpec={setResourcerSpec}
+            onSubmit={submitInput}
+            fieldRationale={autofill?.field_rationale ?? {}}
+            consensusNotes={autofill?.consensus_notes ?? []}
+            singleSideViews={autofill?.single_side_views ?? []}
+          />
+        </>
       )}
 
       {phase === "loading-propose" && (
@@ -178,44 +261,56 @@ function InputForm(props: {
   resourcerSpec: string;
   setResourcerSpec: (s: string) => void;
   onSubmit: () => void;
+  fieldRationale: Record<string, FieldRationale>;
+  consensusNotes: string[];
+  singleSideViews: { side: string; field: string; point: string; note?: string }[];
 }) {
   const i = props.input;
   function set<K extends keyof AccountInputDTO>(k: K, v: AccountInputDTO[K]) {
     props.setInput({ ...i, [k]: v });
   }
+  const hasAutofill = Object.keys(props.fieldRationale).length > 0;
   return (
     <div className="card">
-      <h2>1. 你的账号想法</h2>
-      <div style={{marginBottom: 10}}>
-        <label>账号定位（一句话说清楚做什么）<span style={{color: "var(--danger)"}}>*</span></label>
+      <h2>{hasAutofill ? "1. 检查 / 编辑 AI 拟好的初稿" : "1. 你的账号想法"}</h2>
+
+      <FieldWithRationale label="账号定位（一句话说清楚做什么）" required
+        rationale={props.fieldRationale.positioning}
+        onAlt={(v) => set("positioning", v)}>
         <input value={i.positioning} onChange={e => set("positioning", e.target.value)}
           placeholder="比如：留学生写论文工具种草 / 考研一战经验分享 / AI 学术副业" />
-      </div>
-      <div style={{marginBottom: 10}}>
-        <label>目标受众<span style={{color: "var(--danger)"}}>*</span></label>
+      </FieldWithRationale>
+
+      <FieldWithRationale label="目标受众" required
+        rationale={props.fieldRationale.target_audience}
+        onAlt={(v) => set("target_audience", v)}>
         <input value={i.target_audience} onChange={e => set("target_audience", e.target.value)}
           placeholder="比如：赶 ddl 的留学生 / 文科类毕业班学生 / 想做 AI 副业的应届生" />
-      </div>
+      </FieldWithRationale>
 
-      <div className="row">
-        <div style={{flex: 1}}>
-          <label>运营周期</label>
+      <div className="row" style={{gap: 12, marginBottom: 4}}>
+        <FieldWithRationale label="运营周期"
+          rationale={props.fieldRationale.cycle_weeks}
+          onAlt={(v) => set("cycle_weeks", Number(v))}
+          style={{flex: 1}}>
           <select value={i.cycle_weeks} onChange={e => set("cycle_weeks", Number(e.target.value))}>
             <option value={2}>2 周（冲短期）</option>
             <option value={4}>4 周（推荐起步）</option>
             <option value={8}>8 周（中长期）</option>
             <option value={12}>12 周（深耕）</option>
           </select>
-        </div>
-        <div style={{flex: 1}}>
-          <label>每周更新</label>
+        </FieldWithRationale>
+        <FieldWithRationale label="每周更新"
+          rationale={props.fieldRationale.posts_per_week}
+          onAlt={(v) => set("posts_per_week", Number(v))}
+          style={{flex: 1}}>
           <select value={i.posts_per_week} onChange={e => set("posts_per_week", Number(e.target.value))}>
             <option value={2}>2 篇 / 周（轻量）</option>
             <option value={3}>3 篇 / 周（推荐）</option>
             <option value={5}>5 篇 / 周（高产）</option>
             <option value={7}>每天一篇</option>
           </select>
-        </div>
+        </FieldWithRationale>
       </div>
 
       <div style={{marginBottom: 10}}>
@@ -261,6 +356,90 @@ function InputForm(props: {
         style={{width: "100%", fontSize: 15, padding: "10px 0"}}>
         🚀 启动 AI 团队 → 出 3-5 个候选方向
       </button>
+
+      {(props.consensusNotes.length > 0 || props.singleSideViews.length > 0) && (
+        <details style={{marginTop: 14}}>
+          <summary style={{cursor: "pointer", fontSize: 12.5, color: "var(--muted)"}}>
+            ▾ 看 AI 双方分析的共识 + 分歧（共 {props.consensusNotes.length} 条共识 / {props.singleSideViews.length} 条分歧）
+          </summary>
+          {props.consensusNotes.length > 0 && (
+            <div style={{marginTop: 8}}>
+              <div style={{fontSize: 12, fontWeight: 600, color: "#555", marginBottom: 4}}>双方共识</div>
+              <ul style={{margin: 0, marginLeft: 18, fontSize: 12, lineHeight: 1.7}}>
+                {props.consensusNotes.map((n, j) => <li key={j}>{n}</li>)}
+              </ul>
+            </div>
+          )}
+          {props.singleSideViews.length > 0 && (
+            <div style={{marginTop: 10}}>
+              <div style={{fontSize: 12, fontWeight: 600, color: "#555", marginBottom: 4}}>分歧 / 单方观点</div>
+              {props.singleSideViews.map((v, j) => (
+                <div key={j} style={{padding: "4px 8px", marginBottom: 4, fontSize: 11.5,
+                  borderLeft: `3px solid ${v.side === "claude" ? "#a36df0" : "#10a37f"}`,
+                  background: "#fafafa"}}>
+                  <b>{v.side === "claude" ? "🟣 Claude" : "🟢 OpenAI"}</b> · {v.field}：{v.point}
+                </div>
+              ))}
+            </div>
+          )}
+        </details>
+      )}
+    </div>
+  );
+}
+
+function FieldWithRationale({label, required, rationale, onAlt, children, style}: {
+  label: string;
+  required?: boolean;
+  rationale?: FieldRationale;
+  onAlt?: (value: string) => void;
+  children: React.ReactNode;
+  style?: React.CSSProperties;
+}) {
+  const [showRat, setShowRat] = useState(false);
+  const hasRat = rationale?.rationale;
+  const hasAlts = rationale?.alternatives && rationale.alternatives.length > 0;
+  return (
+    <div style={{marginBottom: 10, ...style}}>
+      <div className="row" style={{justifyContent: "space-between", alignItems: "baseline", gap: 6}}>
+        <label>
+          {label}{required && <span style={{color: "var(--danger)"}}> *</span>}
+        </label>
+        {hasRat && (
+          <button className="ghost" onClick={() => setShowRat(!showRat)} type="button"
+            style={{fontSize: 11, padding: "1px 8px"}}>
+            💡 AI 怎么推的{rationale!.source ? ` [${rationale!.source}]` : ""}
+          </button>
+        )}
+      </div>
+      {children}
+      {showRat && rationale && (
+        <div style={{
+          marginTop: 6, padding: "8px 10px",
+          background: "#fff7e6", border: "1px solid #fde2a3",
+          borderRadius: 6, fontSize: 12, lineHeight: 1.6,
+        }}>
+          <div style={{color: "#92400e"}}>💡 {rationale.rationale}</div>
+          {hasAlts && (
+            <div style={{marginTop: 6}}>
+              <div className="muted" style={{fontSize: 11, marginBottom: 3}}>备选（点击采用）：</div>
+              {rationale.alternatives!.map((alt, i) => (
+                <button key={i} type="button"
+                  onClick={() => { onAlt?.(String(alt)); setShowRat(false); }}
+                  className="ghost"
+                  style={{
+                    display: "block", width: "100%", textAlign: "left",
+                    fontSize: 11.5, padding: "4px 8px", marginBottom: 2,
+                    background: "#fff", border: "1px solid var(--border)",
+                    borderRadius: 4,
+                  }}>
+                  {String(alt)}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

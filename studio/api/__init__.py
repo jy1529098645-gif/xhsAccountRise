@@ -656,6 +656,35 @@ class StrategyExpandRequest(BaseModel):
     resourcer_spec: str = "claude:opus"
 
 
+class StrategyAutofillRequest(BaseModel):
+    personal_hint: str = ""
+    constraints_hint: str = ""
+    claude_spec: str = "claude:opus"
+    openai_spec: str = "openai"
+    moderator_spec: str = "claude:opus"
+
+
+@app.post("/api/strategy/autofill")
+async def strategy_autofill(req: StrategyAutofillRequest) -> dict[str, Any]:
+    """AI multi-agent debate to produce a starter brief from the DB.
+
+    Returns a prefilled AccountInput + per-field rationale + 共识/分歧 notes,
+    so the frontend can show the form with intelligent defaults that the user
+    can then edit (not the other way around).
+    """
+    from ..strategy import autofill as _af
+    try:
+        return await _af.autofill(
+            personal_hint=req.personal_hint,
+            constraints_hint=req.constraints_hint,
+            claude_spec=req.claude_spec,
+            openai_spec=req.openai_spec,
+            moderator_spec=req.moderator_spec,
+        )
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
 @app.post("/api/strategy/propose")
 async def strategy_propose(req: StrategyInput) -> dict[str, Any]:
     plat = req.platform

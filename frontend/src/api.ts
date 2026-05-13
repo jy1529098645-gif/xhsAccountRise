@@ -230,6 +230,18 @@ export const api = {
   getInsight: (reportId: string) => getJson<InsightReportDTO>(`/api/insight/${reportId}`),
 
   // Strategy -----------------
+  autofillStrategy: (opts?: { personal_hint?: string; constraints_hint?: string;
+                              claude_spec?: string; openai_spec?: string;
+                              moderator_spec?: string }) =>
+    postJson<{
+      input: AccountInputDTO;
+      field_rationale: Record<string, { source: string; rationale: string; alternatives?: any[] }>;
+      consensus_notes: string[];
+      single_side_views: { side: string; field: string; point: string; note?: string }[];
+      claude_proposal: any;
+      openai_proposal: any;
+      elapsed_s: number;
+    }>("/api/strategy/autofill", opts ?? {}),
   proposeStrategy: (req: Partial<AccountInputDTO> & { positioning: string; target_audience: string; positioner_spec?: string }) =>
     postJson<StrategyProposeResult>("/api/strategy/propose", req),
   expandStrategy: (packId: string, chosenIdx: number, opts?: { topicgen_spec?: string; scheduler_spec?: string; resourcer_spec?: string }) =>
