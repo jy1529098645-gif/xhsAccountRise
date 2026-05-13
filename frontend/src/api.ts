@@ -207,6 +207,40 @@ export const api = {
   chooseCandidate: (draftId: string, candidateId: string) =>
     postJson(`/api/drafts/${draftId}/candidates/${candidateId}/choose`, {}),
 
+  // Retrospective ----------------------------------------------------------
+  markPublished: (draftId: string, body: {
+    published_title?: string | null;
+    published_body?: string | null;
+    published_url?: string | null;
+    published_notes?: string | null;
+  }) => postJson<{ draft_id: string; published_at: number }>(
+    `/api/drafts/${draftId}/publish`, body),
+  unmarkPublished: async (draftId: string) => {
+    const backend = backendUrl();
+    if (!backend) throw new HttpError(0, "需要本地后端");
+    const res = await fetch(`${backend}/api/drafts/${draftId}/publish`, { method: "DELETE" });
+    if (!res.ok) throw new HttpError(res.status, await res.text());
+    return res.json();
+  },
+  recordDraftPerformance: (draftId: string, body: {
+    likes?: number | null; comments?: number | null; saves?: number | null;
+    shares?: number | null; views?: number | null; follower_delta?: number | null;
+    notes?: string;
+  }) => postJson<{ perf_id: string; recorded_at: number }>(
+    `/api/drafts/${draftId}/performance`, body),
+  listPublishedDrafts: (libraryId?: string) =>
+    getJson<any[]>(`/api/retrospective/published${libraryId ? `?library_id=${libraryId}` : ""}`)
+      .catch(() => []),
+  runRetrospective: (body: {
+    draft_ids?: string[]; library_id?: string | null; model_spec?: string;
+  }) => postJson<{ review_id: string; elapsed_s: number; analysis: any; draft_ids: string[] }>(
+    "/api/retrospective/analyze", body),
+  listRetrospectives: (libraryId?: string) =>
+    getJson<any[]>(`/api/retrospective/reviews${libraryId ? `?library_id=${libraryId}` : ""}`)
+      .catch(() => []),
+  getRetrospective: (reviewId: string) =>
+    getJson<any>(`/api/retrospective/reviews/${reviewId}`),
+
   // Projects ----------------
   listProjects: (includeArchived = false) =>
     getJson<{ projects: ProjectDTO[]; active: string }>(`/api/projects?include_archived=${includeArchived}`, "projects.json")

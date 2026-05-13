@@ -16,6 +16,7 @@ import Strategy from "./pages/Strategy";
 import InsightReport from "./pages/InsightReport";
 import IntegratedReport from "./pages/IntegratedReport";
 import Reports from "./pages/Reports";
+import Retrospective from "./pages/Retrospective";
 
 // Re-keys the ErrorBoundary by pathname so a crashed page auto-resets
 // the boundary when the user navigates somewhere else.
@@ -69,6 +70,7 @@ export default function App() {
         <NavLink to="/reports" className={({isActive}) => isActive ? "active" : ""}>📊 分析报告 <span style={{fontSize: 10, color: "var(--muted)"}}>第 1 步</span></NavLink>
         <NavLink to="/strategy" className={({isActive}) => isActive ? "active" : ""}>🚀 起号策略 <span style={{fontSize: 10, color: "var(--muted)"}}>第 2 步</span></NavLink>
         <NavLink to="/composer" className={({isActive}) => isActive ? "active" : ""}>✍️ 出稿 <span style={{fontSize: 10, color: "var(--muted)"}}>第 3 步</span></NavLink>
+        <NavLink to="/retrospective" className={({isActive}) => isActive ? "active" : ""}>📊 复盘 <span style={{fontSize: 10, color: "var(--muted)"}}>第 4 步</span></NavLink>
         <NavLink to="/libraries" className={({isActive}) => isActive ? "active" : ""}>📥 资源库 · 上传</NavLink>
         <NavLink to="/dashboard" className={({isActive}) => isActive ? "active" : ""}>🗂️ 数据总览</NavLink>
         <NavLink to="/analysis" className={({isActive}) => isActive ? "active" : ""}>🧬 爆款分析（粗粒度）</NavLink>
@@ -101,6 +103,7 @@ export default function App() {
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/analysis" element={<Analysis />} />
             <Route path="/composer" element={<Composer />} />
+            <Route path="/retrospective" element={<Retrospective />} />
             <Route path="/drafts" element={<Drafts />} />
             <Route path="/drafts/:id" element={<DraftDetail />} />
             <Route path="/libraries" element={<Libraries />} />

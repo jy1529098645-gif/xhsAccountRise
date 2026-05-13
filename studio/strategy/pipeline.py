@@ -224,10 +224,14 @@ _RESOURCES_SCHEMA = {
 async def expand(
     pack_id: str,
     chosen_idx: int,
-    topicgen_spec: str = "claude:opus,deepseek,openai",
-    scheduler_spec: str = "claude:opus",
-    resourcer_spec: str = "claude:opus",
-    drafter_spec: str = "claude:sonnet",   # body drafts don't need opus
+    # Topic generation: keep one Opus (best variety) + 2 cheap fast models.
+    topicgen_spec: str = "claude:sonnet,deepseek,openai",
+    # Scheduler is mechanical (merge + arrange); Sonnet is plenty.
+    scheduler_spec: str = "claude:sonnet",
+    # Resourcer aggregates lists; Sonnet handles it.
+    resourcer_spec: str = "claude:sonnet",
+    # Per-slot body drafts (300-600 chars) — Sonnet plenty.
+    drafter_spec: str = "claude:sonnet",
 ) -> dict[str, Any]:
     """Phase 2: turn a chosen direction into a full StrategyPack."""
     db.apply_migrations(verbose=False)

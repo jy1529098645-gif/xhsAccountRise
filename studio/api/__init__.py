@@ -42,6 +42,7 @@ from ..strategy import pipeline as strategy_pipeline
 from ..strategy.models import AccountInput
 from ..insight import pipeline as insight_pipeline
 from ..insight import external as external_reports
+from .. import retrospective as retro
 
 load_dotenv(dotenv_path=config.REPO_ROOT / ".env", override=True)
 
@@ -584,11 +585,11 @@ class ComposeRequest(BaseModel):
     extra_constraints: str = ""
     platform: str | None = None  # auto-inherit from active library if None
     strategist_spec: str = "claude:opus"
-    drafter_spec: str = "claude:opus,deepseek,openai"
+    drafter_spec: str = "claude:sonnet,deepseek,openai"
     critic_spec: str = "claude:sonnet,deepseek"
-    refiner_spec: str = "claude:opus"
+    refiner_spec: str = "claude:sonnet"
     synthesizer_spec: str = "claude:opus"
-    planner_spec: str = "claude:opus"
+    planner_spec: str = "claude:sonnet"
     skip_strategist: bool = False
     skip_critics: bool = False
     skip_refiner: bool = False
@@ -900,16 +901,16 @@ class StrategyInput(BaseModel):
 
 class StrategyExpandRequest(BaseModel):
     chosen_direction_idx: int = Field(ge=0)
-    topicgen_spec: str = "claude:opus,deepseek,openai"
-    scheduler_spec: str = "claude:opus"
-    resourcer_spec: str = "claude:opus"
+    topicgen_spec: str = "claude:sonnet,deepseek,openai"
+    scheduler_spec: str = "claude:sonnet"
+    resourcer_spec: str = "claude:sonnet"
     drafter_spec: str = "claude:sonnet"
 
 
 class StrategyAutofillRequest(BaseModel):
     personal_hint: str = ""
     constraints_hint: str = ""
-    claude_spec: str = "claude:opus"
+    claude_spec: str = "claude:sonnet"
     openai_spec: str = "openai"
     moderator_spec: str = "claude:opus"
 
@@ -1042,6 +1043,96 @@ def delete_strategy(pack_id: str) -> dict[str, str]:
         if cur.rowcount == 0:
             raise HTTPException(404, "not found in current project")
     return {"deleted": pack_id}
+
+
+# ---------------- retrospective (复盘) endpoints --------------------
+
+class PublishMarkRequest(BaseModel):
+    published_title: str | None = None
+    published_body: str | None = None
+    published_url: str | None = None
+    published_notes: str | None = None
+
+
+@app.post("/api/drafts/{draft_id}/publish")
+def mark_draft_published(draft_id: str, req: PublishMarkRequest) -> dict[str, Any]:
+    try:
+        return retro.mark_published(
+            draft_id,
+            published_title=req.published_title,
+            published_body=req.published_body,
+            published_url=req.published_url,
+            published_notes=req.published_notes,
+        )
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.delete("/api/drafts/{draft_id}/publish")
+def unmark_draft_published(draft_id: str) -> dict[str, Any]:
+    try:
+        return retro.unmark_published(draft_id)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+
+
+class DraftPerformanceRequest(BaseModel):
+    likes: int | None = None
+    comments: int | None = None
+    saves: int | None = None
+    shares: int | None = None
+    views: int | None = None
+    follower_delta: int | None = None
+    notes: str = ""
+
+
+@app.post("/api/drafts/{draft_id}/performance")
+def record_draft_performance(draft_id: str, req: DraftPerformanceRequest) -> dict[str, Any]:
+    try:
+        return retro.record_performance(
+            draft_id,
+            likes=req.likes, comments=req.comments, saves=req.saves,
+            shares=req.shares, views=req.views,
+            follower_delta=req.follower_delta, notes=req.notes,
+        )
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.get("/api/retrospective/published")
+def list_published_drafts(library_id: str | None = None) -> list[dict[str, Any]]:
+    return retro.list_published_with_perf(library_id=library_id)
+
+
+class RetroAnalyzeRequest(BaseModel):
+    draft_ids: list[str] | None = None
+    library_id: str | None = None
+    model_spec: str = "claude:opus"
+
+
+@app.post("/api/retrospective/analyze")
+async def retrospective_analyze(req: RetroAnalyzeRequest) -> dict[str, Any]:
+    try:
+        return await retro.analyze(
+            draft_ids=req.draft_ids,
+            library_id=req.library_id,
+            model_spec=req.model_spec,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/retrospective/reviews")
+def list_retrospective_reviews(library_id: str | None = None) -> list[dict[str, Any]]:
+    return retro.list_reviews(library_id=library_id)
+
+
+@app.get("/api/retrospective/reviews/{review_id}")
+def get_retrospective_review(review_id: str) -> dict[str, Any]:
+    r = retro.get_review(review_id)
+    if not r:
+        raise HTTPException(404, "review not found")
+    return r
 
 
 # ---------------- strategy iteration loop -------------------------------

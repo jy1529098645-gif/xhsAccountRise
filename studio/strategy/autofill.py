@@ -157,7 +157,9 @@ _CONSENSUS_SCHEMA = {
 async def autofill(
     personal_hint: str = "",
     constraints_hint: str = "",
-    claude_spec: str = "claude:opus",
+    # Autofill = quick first draft of the form. Sonnet handles it well;
+    # moderator that fuses the two still uses Opus for the final call.
+    claude_spec: str = "claude:sonnet",
     openai_spec: str = "openai",
     moderator_spec: str = "claude:opus",
 ) -> dict[str, Any]:
