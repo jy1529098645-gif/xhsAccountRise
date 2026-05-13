@@ -1,5 +1,41 @@
 [
   {
+    "draft_id": "78d3cfd0669047f1",
+    "generated_at": 1778693581,
+    "mode": "multi-agent",
+    "library_id": "default",
+    "final_candidate_id": "7dd345f7d7f742c1",
+    "final_title": "写出高质量论文的3个逆天技巧，AI检测不再是问题",
+    "candidate_count": 4,
+    "brief": {
+      "topic": "降AI率技巧",
+      "angle": "教程",
+      "target_length": 500,
+      "cta_strength": "soft",
+      "niche": "降AI率",
+      "reference_note_ids": [],
+      "extra_constraints": ""
+    }
+  },
+  {
+    "draft_id": "4d228bba80e34614",
+    "generated_at": 1778693500,
+    "mode": "multi-agent",
+    "library_id": "default",
+    "final_candidate_id": "e4ab44bee38349e4",
+    "final_title": "这3个神器组合，把AI率从80%砍到20%以下",
+    "candidate_count": 4,
+    "brief": {
+      "topic": "降AI率技巧",
+      "angle": "教程",
+      "target_length": 500,
+      "cta_strength": "soft",
+      "niche": "降AI率",
+      "reference_note_ids": [],
+      "extra_constraints": ""
+    }
+  },
+  {
     "draft_id": "e04a60d6de3a4ee4",
     "generated_at": 1778692690,
     "mode": "multi-agent",

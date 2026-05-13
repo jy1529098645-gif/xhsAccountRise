@@ -26,7 +26,7 @@ _PRICE: dict[str, tuple[float, float]] = {
 class OpenAIGenerator(Generator):
     def __init__(self, model: str | None = None):
         self.name = "openai"
-        self.model = model or os.environ.get("OPENAI_MODEL", "gpt-5")
+        self.model = model or os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
         self._client = None
 
     def _ensure_client(self):
