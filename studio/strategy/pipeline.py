@@ -96,7 +96,7 @@ async def propose(inp: AccountInput, positioner_spec: str = "claude:opus") -> di
         f"【用户初步定位】\n{prompts.input_blurb(inp)}"
         f"{report_block}\n"
         f"【该平台爆款 DNA】\n{prompts.dna_blurb(dna)}\n\n"
-        f"输出 3-5 个差异化的账号定位方向。"
+        f"输出 8-12 个差异化的账号定位方向（宁多勿少 ；用户需要足够的选项来挑）。"
         + ("\n**优先采纳上面所有「分析 / 整合报告」中提到的方向和机会作为候选**（包括用户自己上传的外部报告整合稿，如有）。"
            if report_ctx else "")
     )
@@ -104,6 +104,8 @@ async def propose(inp: AccountInput, positioner_spec: str = "claude:opus") -> di
     try:
         parsed = await _call_json(
             gen, prompts.POSITIONER_SYSTEM, user_text,
+            # 8-12 directions × ~250 char rationale apiece needs more headroom.
+            max_tokens=8000,
             tool_name="submit_directions", schema=_DIRECTIONS_SCHEMA,
         )
     except Exception as e:
@@ -245,6 +247,40 @@ async def expand(
     lib_id = row["library_id"] or library.active_lib_id()
     platform = row["platform"] or inp.platform
 
+    # Mark as 'expanding' so the frontend can detect "still in progress" if
+    # its HTTPS-to-localhost connection drops mid-call (60-180s requests are
+    # routinely killed by browser / mixed-content / wifi blip).
+    with db.connect() as con:
+        con.execute(
+            "UPDATE studio_strategies SET status='expanding', chosen_direction_idx=?,"
+            " updated_at=? WHERE pack_id=?",
+            (chosen_idx, int(time.time()), pack_id),
+        )
+
+    try:
+        return await _expand_inner(pack_id, chosen_idx, chosen, inp, lib_id, platform,
+                                    topicgen_spec, scheduler_spec, resourcer_spec, t0)
+    except Exception as e:
+        # Any uncaught failure → mark pack so frontend stops polling.
+        try:
+            with db.connect() as con:
+                con.execute(
+                    "UPDATE studio_strategies SET status='expand_failed',"
+                    " updated_at=?, trace_json=?"
+                    " WHERE pack_id=?",
+                    (int(time.time()), json.dumps({"error": repr(e)}), pack_id),
+                )
+        except Exception:
+            pass
+        raise
+
+
+async def _expand_inner(
+    pack_id: str, chosen_idx: int, chosen: StrategicDirection,
+    inp: AccountInput, lib_id: str, platform: str,
+    topicgen_spec: str, scheduler_spec: str, resourcer_spec: str,
+    t0: float,
+) -> dict[str, Any]:
     dna = _latest_dna_payload()
     topic_count = inp.cycle_weeks * inp.posts_per_week
 

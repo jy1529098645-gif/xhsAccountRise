@@ -54,6 +54,23 @@ const INTENT_COLORS: Record<string, string> = {
 
 // localStorage key for in-progress brief draft (per project)
 const DRAFT_KEY = "studio.strategy.draftInput";
+
+/** Poll a pack until status leaves 'expanding'. Returns the StrategyDetail
+ * on success ('expanded'), null if it stayed 'expanding' past the timeout
+ * or transitioned to 'expand_failed'. */
+async function pollPackUntilDone(packId: string, timeoutMs: number) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    await new Promise(r => setTimeout(r, 5000));
+    try {
+      const d = await api.getStrategy(packId);
+      if (d.status === "expanded" && d.pack) return d;
+      if (d.status === "expand_failed") return null;
+      // status === 'expanding' or anything else → keep polling
+    } catch { /* network still flaky — keep trying */ }
+  }
+  return null;
+}
 function emptyInput(): AccountInputDTO {
   return {
     positioning: "", target_audience: "",
@@ -234,7 +251,7 @@ export default function Strategy() {
   async function pickDirection(idx: number) {
     if (!packId) return;
     setChosenIdx(idx); setErr(null);
-    setInfo("AI 正在生成 N 周完整排期 + 材料清单（约 60-120s）…");
+    setInfo("AI 正在生成 N 周完整排期 + 材料清单（约 60-180s）…");
     setPhase("loading-expand");
     try {
       const res = await api.expandStrategy(packId, idx, {
@@ -246,13 +263,30 @@ export default function Strategy() {
       setInfo(null);
       setLastFailedAction(null);
       setPhase("pack");
-      // Update URL so refresh / bookmark works
       navigate(`/strategy/${packId}`, { replace: true });
-      // Once expanded successfully, clear in-progress input draft
       try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
-      // Refresh history list
       api.listStrategies().then(setHistory).catch(() => {});
     } catch (e: any) {
+      // Connection might have dropped mid-call (browser/wifi/mixed content)
+      // but the backend keeps running. Poll the pack for up to 4 min before
+      // giving up — backend writes status='expanding' on entry, 'expanded'
+      // on success, 'expand_failed' on hard error.
+      const msg = e instanceof Error ? e.message : String(e);
+      const isNetwork = /Failed to fetch|NetworkError|TypeError.*fetch|net::ERR/.test(msg);
+      if (isNetwork) {
+        setInfo("⚡ 网络断了一下，但后端可能还在跑。正在尝试自动恢复…（最多 4 分钟）");
+        const recovered = await pollPackUntilDone(packId, 4 * 60_000);
+        if (recovered?.pack) {
+          setPack(recovered.pack);
+          setInfo(null);
+          setLastFailedAction(null);
+          setPhase("pack");
+          navigate(`/strategy/${packId}`, { replace: true });
+          try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+          api.listStrategies().then(setHistory).catch(() => {});
+          return;
+        }
+      }
       setErr(await humaniseErrorAsync(e)); setInfo(null);
       setLastFailedAction({ kind: "expand", idx });
       setPhase("directions");
