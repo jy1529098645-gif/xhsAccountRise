@@ -77,6 +77,25 @@ export default function Reports() {
   const [includeOwnConsensus, setIncludeOwnConsensus] = useState(true);
   const textFileRef = useRef<HTMLInputElement>(null);
 
+  // Per-file feedback for the current session — user explicitly asked to
+  // see "uploaded which files / did they succeed".
+  interface UploadLogItem {
+    id: string; name: string; status: "uploading" | "ok" | "fail";
+    chars?: number; format?: string; warn?: string; error?: string;
+  }
+  const [uploadLog, setUploadLog] = useState<UploadLogItem[]>([]);
+  function pushLog(item: Omit<UploadLogItem, "id">) {
+    const id = `u_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    setUploadLog(prev => [{ ...item, id }, ...prev].slice(0, 8));
+    return id;
+  }
+  function updateLog(id: string, patch: Partial<UploadLogItem>) {
+    setUploadLog(prev => prev.map(x => x.id === id ? { ...x, ...patch } : x));
+  }
+  function dismissLog(id: string) {
+    setUploadLog(prev => prev.filter(x => x.id !== id));
+  }
+
   async function load() {
     try {
       const [ls, rs, ps, exts, ints] = await Promise.all([
@@ -108,18 +127,19 @@ export default function Reports() {
 
   async function handleAnyFile(f: File | null) {
     if (!f) return;
+    const logId = pushLog({ name: f.name, status: "uploading" });
     setErr(null); setInfo(null); setUploadBusy(true);
     try {
       const r = await api.uploadExternalReportFile(
         f, f.name.replace(/\.[^.]+$/, ""), selectedLibId || null
       );
-      let msg = `✓ 已上传《${r.name}》(${r.content_chars.toLocaleString()} 字 · ${r.format})。`;
-      if (r.extract_warning) msg += ` ⚠️ ${r.extract_warning}`;
-      else msg += " 勾选它 + 其它报告 → 让 GPT-4o 整合。";
-      setInfo(msg);
+      updateLog(logId, {
+        status: "ok", name: r.name,
+        chars: r.content_chars, format: r.format, warn: r.extract_warning,
+      });
       await load();
     } catch (e: any) {
-      setErr(humaniseError(e));
+      updateLog(logId, { status: "fail", error: humaniseError(e) });
     } finally {
       setUploadBusy(false);
     }
@@ -128,18 +148,21 @@ export default function Reports() {
   async function submitUpload() {
     if (!uploadName.trim()) { setErr("给这份报告起个名字"); return; }
     if (!uploadContent.trim()) { setErr("报告内容不能为空"); return; }
+    const logId = pushLog({ name: uploadName.trim(), status: "uploading" });
     setErr(null); setUploadBusy(true);
     try {
-      await api.uploadExternalReport({
+      const r = await api.uploadExternalReport({
         name: uploadName.trim(), content: uploadContent,
         library_id: selectedLibId || null,
         format: /^#|\*\*|^\s*[-*]\s/m.test(uploadContent) ? "markdown" : "text",
       });
+      updateLog(logId, {
+        status: "ok", chars: r.content_chars, format: r.format,
+      });
       setUploadName(""); setUploadContent(""); setShowUpload(false);
-      setInfo("✓ 上传完成。下面可以勾选这份 + 其它报告 → 让 GPT-4o 整合。");
       await load();
     } catch (e: any) {
-      setErr(humaniseError(e));
+      updateLog(logId, { status: "fail", error: humaniseError(e) });
     } finally {
       setUploadBusy(false);
     }
@@ -455,15 +478,71 @@ export default function Reports() {
           </div>
         )}
 
-        {externals.length === 0 && !showUpload && (
+        {/* Live per-file upload log — shows immediately so the user sees what
+            they uploaded + whether each succeeded. */}
+        {uploadLog.length > 0 && (
+          <div style={{marginTop: 14, padding: 12,
+                       background: "#fafbff", borderRadius: 8,
+                       border: "1px solid #e6e9f5"}}>
+            <div className="row" style={{justifyContent: "space-between", alignItems: "baseline"}}>
+              <b style={{fontSize: 13}}>📋 本次上传记录</b>
+              <button className="ghost" onClick={() => setUploadLog([])}
+                style={{fontSize: 11, padding: "2px 8px"}}>清空记录</button>
+            </div>
+            <div style={{marginTop: 8, display: "grid", gap: 6}}>
+              {uploadLog.map(item => {
+                const tone = item.status === "ok" ? {bg: "#ecfdf5", color: "#065f46", icon: "✓"}
+                          : item.status === "fail" ? {bg: "#fef2f2", color: "#991b1b", icon: "✗"}
+                          : {bg: "#fef3c7", color: "#92400e", icon: "⏳"};
+                return (
+                  <div key={item.id} style={{
+                    display: "flex", justifyContent: "space-between",
+                    alignItems: "flex-start", gap: 10,
+                    padding: "8px 10px", background: tone.bg,
+                    color: tone.color, borderRadius: 6, fontSize: 12.5,
+                  }}>
+                    <div style={{flex: 1, minWidth: 0}}>
+                      <span style={{fontWeight: 700, marginRight: 6}}>{tone.icon}</span>
+                      <span style={{fontWeight: 600}}>{item.name}</span>
+                      {item.status === "uploading" && (
+                        <span style={{marginLeft: 6, fontStyle: "italic"}}>解析 + 上传中…</span>
+                      )}
+                      {item.status === "ok" && (
+                        <span className="muted" style={{marginLeft: 6, color: "inherit", opacity: 0.85}}>
+                          · 已成功 · {item.chars?.toLocaleString() ?? "?"} 字 · {item.format}
+                          {item.warn ? ` · ⚠️ ${item.warn}` : ""}
+                        </span>
+                      )}
+                      {item.status === "fail" && item.error && (
+                        <div style={{marginTop: 4, fontSize: 11.5, whiteSpace: "pre-wrap"}}>
+                          {item.error}
+                        </div>
+                      )}
+                    </div>
+                    <button className="ghost" onClick={() => dismissLog(item.id)}
+                      style={{fontSize: 11, padding: "0 6px", color: "inherit"}}>×</button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {externals.length === 0 && !showUpload && uploadLog.length === 0 && (
           <p className="muted" style={{margin: "12px 0 0", fontSize: 12.5}}>
-            还没上传任何外部报告。点上方「＋ 上传 / 粘贴」开始。
+            还没上传任何外部报告。上方拖文件或点「＋ 打开粘贴框」开始。
           </p>
         )}
 
         {externals.length > 0 && (
           <>
-            <table className="table" style={{marginTop: 14}}>
+            <h3 style={{margin: "18px 0 4px", fontSize: 14}}>
+              ✓ 已成功保存的报告（{externals.length}）
+            </h3>
+            <p className="muted" style={{margin: "0 0 6px", fontSize: 11.5}}>
+              起号策略 / Composer 出稿都会**自动引用所有**这些报告。删了就不再用。
+            </p>
+            <table className="table" style={{marginTop: 6}}>
               <thead>
                 <tr>
                   <th style={{width: 36}}>选</th>
@@ -555,6 +634,22 @@ export default function Reports() {
           </div>
         )}
       </div>
+
+      {/* "Next step" hand-off — only shown once user has at least one external
+          report saved, since that's when the downstream features start
+          benefiting from these uploads. */}
+      {externals.length > 0 && (
+        <NextStepCard
+          label={`去 🚀 起号策略 — 现在会引用你上传的 ${externals.length} 份外部报告`}
+          hint={
+            integrated.length > 0
+              ? `Strategy / Composer 都会自动读最新的整合稿 + 工具自身的共识。报告改动会即时生效。`
+              : `还没点「🚀 整合所选」？没关系 — Strategy 会直接读你上传的原文（最多 5 份，每份 3000 字截断）。整合一下效果更好。`
+          }
+          to="/strategy"
+          emoji="→"
+        />
+      )}
 
       {/* ====== Pipeline explainer ====== */}
       <details className="card" style={{background: "#fafafa"}}>
