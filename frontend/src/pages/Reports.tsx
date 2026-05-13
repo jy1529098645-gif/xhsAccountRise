@@ -146,7 +146,6 @@ export default function Reports() {
   }
 
   async function deleteExt(id: string) {
-    if (!confirm("删除这份外部报告？整合时不会再用它。")) return;
     try {
       await api.deleteExternalReport(id);
       setSelectedSourceIds(prev => {
