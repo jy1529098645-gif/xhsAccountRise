@@ -1,1 +1,1 @@
-xhs3000
+minimal-test

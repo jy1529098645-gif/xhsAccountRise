@@ -438,7 +438,13 @@ def analyse_top_performers(n: int = 50) -> dict[str, Any]:
 # --- main orchestrator ---------------------------------------------------
 
 def build_dna(version: str | None = None) -> dict[str, Any]:
-    """Run all sections, return the assembled artifact dict."""
+    """Run all sections, return the assembled artifact dict.
+
+    Each section is wrapped in its own try/except so a missing optional table
+    (e.g. `discover_queue` in a small exported corpus) doesn't kill the whole
+    DNA build. Failed sections emit `{"_error": "..."}` so the frontend can
+    show what was skipped without losing the rest of the analysis.
+    """
     t0 = time.time()
     if version is None:
         version = datetime.now(_TZ).strftime("%Y-%m-%d")
@@ -447,27 +453,34 @@ def build_dna(version: str | None = None) -> dict[str, Any]:
         "version": version,
         "generated_at": int(time.time()),
         "sections": {},
+        "section_errors": {},
     }
 
-    artifact["sections"]["titles"] = analyse_titles()
-    artifact["sections"]["body_and_shape"] = analyse_body_and_shape()
-    artifact["sections"]["timing"] = analyse_timing()
-    artifact["sections"]["tags"] = analyse_tags()
-    artifact["sections"]["keyword_blueocean"] = analyse_keyword_blueocean()
-    artifact["sections"]["comment_demand"] = analyse_comment_demand()
-    artifact["sections"]["top_performers"] = analyse_top_performers()
+    sections: list[tuple[str, callable]] = [
+        ("titles",            analyse_titles),
+        ("body_and_shape",    analyse_body_and_shape),
+        ("timing",            analyse_timing),
+        ("tags",              analyse_tags),
+        ("keyword_blueocean", analyse_keyword_blueocean),
+        ("comment_demand",    analyse_comment_demand),
+        ("top_performers",    analyse_top_performers),
+    ]
+    for name, fn in sections:
+        try:
+            artifact["sections"][name] = fn()
+        except Exception as e:
+            artifact["sections"][name] = {"_error": str(e)}
+            artifact["section_errors"][name] = repr(e)
 
-    # Headline summary numbers for the dashboard ribbon.
-    titles_sec = artifact["sections"]["titles"]
-    top_cats = sorted(
-        titles_sec["primary_distribution"].items(),
-        key=lambda kv: kv[1],
-        reverse=True,
-    )[:3]
+    # Headline summary numbers — be tolerant of a missing/empty titles section.
+    titles_sec = artifact["sections"].get("titles") or {}
+    primary = titles_sec.get("primary_distribution") or {}
+    top_cats = sorted(primary.items(), key=lambda kv: kv[1], reverse=True)[:3]
     artifact["summary"] = {
-        "total_notes_analysed": titles_sec["note_count"],
+        "total_notes_analysed": titles_sec.get("note_count", 0),
         "dominant_hooks": [{"category": c, "count": n} for c, n in top_cats],
         "generated_in_seconds": round(time.time() - t0, 2),
+        "section_errors": list(artifact["section_errors"].keys()),
     }
     return artifact
 

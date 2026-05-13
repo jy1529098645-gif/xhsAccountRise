@@ -83,6 +83,77 @@ def normalise_platform(p: str | None) -> str:
     return aliases.get(p, p if p in SUPPORTED_PLATFORMS else "other")
 
 
+def validate_schema_blob(blob: bytes) -> dict[str, Any]:
+    """Sanity-check an uploaded .db before adopting it.
+
+    Returns {ok: bool, tables: [...], missing: [...], notes_count: int,
+    comments_count: int, warnings: [...], fatal: str|None}.
+
+    The studio's analysis pipelines expect at minimum a `notes` table with
+    {note_id, title, body, liked_count, comment_count}. `comments` is
+    recommended but optional. `discover_queue` is optional (used only by the
+    keyword-blue-ocean section).
+    """
+    if len(blob) < 100 or blob[:16] != b"SQLite format 3\x00":
+        return {"ok": False, "fatal": "uploaded file isn't a SQLite database",
+                "tables": [], "missing": [], "notes_count": 0,
+                "comments_count": 0, "warnings": []}
+    import sqlite3, tempfile, os
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp.write(blob)
+        tmp_path = tmp.name
+    out: dict[str, Any] = {
+        "ok": True, "fatal": None, "tables": [], "missing": [],
+        "notes_count": 0, "comments_count": 0, "warnings": [],
+    }
+    try:
+        con = sqlite3.connect(f"file:{tmp_path}?mode=ro", uri=True)
+        cur = con.cursor()
+        tables = {r[0] for r in cur.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+            " AND name NOT LIKE 'sqlite_%'"
+        )}
+        out["tables"] = sorted(tables)
+        if "notes" not in tables:
+            out["fatal"] = "缺少必备表 `notes`（建议: 含 note_id/title/body/liked_count/comment_count 列）"
+            out["ok"] = False
+            return out
+        # Required columns on notes
+        cols = {row[1].lower() for row in cur.execute("PRAGMA table_info('notes')")}
+        required = ["note_id", "title", "liked_count"]
+        recommended = ["body", "comment_count", "collected_count", "image_count",
+                       "publish_time_ms", "tags_json", "type"]
+        missing_req = [c for c in required if c not in cols]
+        if missing_req:
+            out["fatal"] = f"`notes` 缺少必备字段: {missing_req}"
+            out["ok"] = False
+            return out
+        missing_rec = [c for c in recommended if c not in cols]
+        if missing_rec:
+            out["warnings"].append(f"`notes` 缺少推荐字段（影响部分分析）: {missing_rec}")
+        try:
+            out["notes_count"] = cur.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
+        except sqlite3.OperationalError:
+            pass
+        if "comments" in tables:
+            try:
+                out["comments_count"] = cur.execute("SELECT COUNT(*) FROM comments").fetchone()[0]
+            except sqlite3.OperationalError:
+                pass
+        else:
+            out["warnings"].append("缺少 `comments` 表 — 评论需求挖掘部分会跳过")
+        if "discover_queue" not in tables:
+            out["warnings"].append("缺少 `discover_queue` 表 — 蓝海关键词排行会跳过（其他分析仍可用）")
+        con.close()
+    except sqlite3.Error as e:
+        out["fatal"] = f"无法打开 SQLite：{e}"
+        out["ok"] = False
+    finally:
+        try: os.unlink(tmp_path)
+        except OSError: pass
+    return out
+
+
 # ---- Platform auto-detection from a SQLite blob -----------------------
 
 # Per-platform schema fingerprints. Each entry maps a platform id to a set of

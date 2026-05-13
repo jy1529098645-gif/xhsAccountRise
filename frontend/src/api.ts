@@ -146,7 +146,16 @@ export const api = {
     }
     return res.json();
   },
-  importLibrary: async (file: File, displayName: string, platform: string | "auto" = "auto"): Promise<{ lib_id: string; platform: string; notes_count: number; dna_version?: string }> => {
+  importLibrary: async (file: File, displayName: string, platform: string | "auto" = "auto"): Promise<{
+    lib_id: string; platform: string; notes_count: number; size_bytes: number;
+    detected_platform?: string | null;
+    schema_warnings?: string[];
+    dna_version?: string;
+    analyzed?: boolean;
+    analyze_error?: string;
+    section_errors?: Record<string, string>;
+    promote_warning?: string;
+  }> => {
     const backend = backendUrl();
     if (!backend) throw new HttpError(0, "导入需要本地后端");
     const fd = new FormData();

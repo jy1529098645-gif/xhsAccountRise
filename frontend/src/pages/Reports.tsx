@@ -59,11 +59,37 @@ export default function Reports() {
     try {
       // Step A: upload + detect + activate + DNA analyze
       setStage("uploading");
-      setProgress("📤 上传 + 嗅探平台…");
-      // import endpoint chains: adopt → detect → activate → analyze
+      setProgress("📤 上传 + 校验 schema + 嗅探平台…");
       setStage("analyzing-dna");
-      setProgress("📦 平台嗅探 + 建索引 + 跑爆款 DNA…（10-30s）");
+      setProgress("📦 建索引 + 跑爆款 DNA…（10-30s）");
       const imp = await api.importLibrary(f, displayName, pendingPlatform);
+
+      // ---- Validate the analyze step actually succeeded -------------
+      if (imp.analyzed === false || imp.analyze_error) {
+        setErr(
+          `数据库导入成功（${imp.notes_count.toLocaleString()} 条），但爆款 DNA 分析失败：\n` +
+          `${imp.analyze_error || "未知"}\n\n` +
+          `常见原因：数据库 schema 不完整（缺关键列）。请检查 notes 表 + 必要字段，` +
+          `或换一个标准 xhs 爬取的 .db 重试。也可以去「📥 资源库」页面手动重跑分析看更详细的报错。`
+        );
+        setStage("idle");
+        setProgress("");
+        await load();  // refresh lib list so user sees the imported (but unanalyzed) one
+        return;
+      }
+
+      // Surface non-fatal warnings inline so user knows what was skipped
+      if (imp.schema_warnings && imp.schema_warnings.length > 0) {
+        setInfo(`✓ 已导入，但有些非致命警告（不影响主流程）：${imp.schema_warnings.join(" · ")}`);
+      }
+      if (imp.section_errors && Object.keys(imp.section_errors).length > 0) {
+        const skipped = Object.keys(imp.section_errors).join("、");
+        setInfo((prev) =>
+          (prev ?? "") +
+          `\n⚠️ 以下 DNA 子部分跳过了（其他分析正常）：${skipped}`
+        );
+      }
+
       const platDetected = imp.detected_platform
         ? `识别为 ${platformLabel(imp.detected_platform)}`
         : `用户指定 ${platformLabel(imp.platform)}`;
@@ -79,7 +105,12 @@ export default function Reports() {
       setStage("done");
       setTimeout(() => navigate(`/reports/${r.report_id}`), 500);
     } catch (e: any) {
-      setErr(e.message);
+      // Surface schema fatal errors cleanly
+      let msg: string = e.message || String(e);
+      if (msg.includes("422")) {
+        msg = "数据库 schema 不兼容：" + msg.replace(/^.+422[^:]*:\s*/, "");
+      }
+      setErr(msg);
       setStage("idle");
       setProgress("");
     }

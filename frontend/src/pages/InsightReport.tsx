@@ -44,6 +44,10 @@ export default function InsightReport() {
   const openaiAna = data.openai_analysis || {};
   const debate = data.debate || {};
 
+  const claudeFindings = (claudeAna.key_findings || []).length;
+  const openaiFindings = (openaiAna.key_findings || []).length;
+  const consensusFindings = (c.consensus_findings || []).length;
+
   return (
     <div>
       <div className="page-header">
@@ -54,7 +58,33 @@ export default function InsightReport() {
         </p>
       </div>
 
-      <Link to="/libraries">← 回资源库</Link>
+      <Link to="/reports">← 回分析报告页</Link>
+
+      {/* AI collaboration timeline — make the 2-AI process visually obvious */}
+      <div className="card" style={{background: "linear-gradient(90deg, #f5f0ff 0%, #fff 50%, #ecfdf5 100%)"}}>
+        <h2>🤝 AI 协作过程</h2>
+        <div className="cards-grid" style={{gridTemplateColumns: "1fr 1fr 1fr", gap: 12}}>
+          <div className="stat-card" style={{background: "#f5f0ff", borderColor: "#d9c5f5"}}>
+            <div className="label" style={{color: "#7c3aed"}}>🟣 Claude 独立分析</div>
+            <div className="value" style={{color: "#7c3aed"}}>{claudeFindings}</div>
+            <div className="sub">条关键发现</div>
+          </div>
+          <div className="stat-card" style={{background: "#ecfdf5", borderColor: "#a7f3d0"}}>
+            <div className="label" style={{color: "#10a37f"}}>🟢 OpenAI 独立分析</div>
+            <div className="value" style={{color: "#10a37f"}}>{openaiFindings}</div>
+            <div className="sub">条关键发现</div>
+          </div>
+          <div className="stat-card" style={{background: "var(--primary-soft)", borderColor: "#fab8c4"}}>
+            <div className="label" style={{color: "var(--primary)"}}>⭐ 双方共识（已融合）</div>
+            <div className="value" style={{color: "var(--primary)"}}>{consensusFindings}</div>
+            <div className="sub">条双方都认可</div>
+          </div>
+        </div>
+        <p className="muted" style={{fontSize: 11.5, marginTop: 8, marginBottom: 0}}>
+          流程：双方各写一份 → 互相评审「赞成 / 反对 / 漏了的」 → 主编只把双方都认可的进正文，分歧单列。
+          这样保证你看到的不是单一 AI 的偏见。
+        </p>
+      </div>
 
       {/* Executive summary */}
       {c.executive_summary && (
@@ -102,12 +132,12 @@ export default function InsightReport() {
         </div>
       )}
 
-      {/* Embedded charts */}
+      {/* Embedded charts — open by default for the first 2 */}
       {c.charts_to_show?.length > 0 && dna && (
         <div className="card">
-          <h2>📈 数据图表（点开看）</h2>
-          {c.charts_to_show.map((key: string) => (
-            <ChartBlock key={key} chartKey={key} dna={dna} />
+          <h2>📈 数据图表（{c.charts_to_show.length} 个）</h2>
+          {c.charts_to_show.map((key: string, i: number) => (
+            <ChartBlock key={key} chartKey={key} dna={dna} defaultOpen={i < 2} />
           ))}
         </div>
       )}
@@ -175,11 +205,11 @@ export default function InsightReport() {
   );
 }
 
-function ChartBlock({chartKey, dna}: {chartKey: string; dna: DnaArtifact}) {
+function ChartBlock({chartKey, dna, defaultOpen}: {chartKey: string; dna: DnaArtifact; defaultOpen?: boolean}) {
   const label = CHART_LABELS[chartKey] || chartKey;
   const s = (dna.sections as any) || {};
   return (
-    <details style={{marginBottom: 8}}>
+    <details open={defaultOpen} style={{marginBottom: 8}}>
       <summary style={{cursor: "pointer", padding: "8px 10px", background: "#fafafa",
                        borderRadius: 6, fontSize: 13.5, fontWeight: 600}}>
         {label}

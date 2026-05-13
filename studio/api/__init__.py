@@ -266,14 +266,17 @@ async def import_library(
     activate: str = Form("1"),
     analyze: str = Form("1"),
 ) -> dict[str, Any]:
-    """One-shot import: detect platform + adopt + activate + analyze.
-
-    This is the path the frontend hero dropzone calls — turns "drag a .db in"
-    into "fully ready to compose" with no extra clicks.
+    """One-shot import: schema-validate + detect platform + adopt + activate +
+    DNA analyze. Returns rich status so the frontend can decide whether to
+    proceed to the insight step.
     """
     blob = await file.read()
-    if len(blob) < 4 or blob[:4] != b"SQLi":
-        raise HTTPException(400, "uploaded file is not a SQLite database")
+
+    # Pre-flight: SQLite + required schema (must have notes with note_id/title/
+    # liked_count). Warnings for missing optional tables.
+    validation = library.validate_schema_blob(blob)
+    if not validation["ok"]:
+        raise HTTPException(422, validation.get("fatal") or "schema validation failed")
 
     final_platform = platform
     detected_scores: dict[str, int] = {}
@@ -295,6 +298,7 @@ async def import_library(
         "size_bytes": meta.size_bytes,
         "detected_platform": final_platform if platform == "auto" else None,
         "detection_scores": detected_scores,
+        "schema_warnings": validation.get("warnings", []),
     }
 
     # Activate first so subsequent analyze() targets the new lib.
@@ -312,12 +316,18 @@ async def import_library(
             from ..rag import build_index
             fts_stats = build_index.rebuild_all()
             artifact = extract_dna.build_dna()
+            # Each DNA section is independently fault-tolerant; the build only
+            # really "fails" if persistence itself blows up.
             extract_dna.persist(artifact)
             render_report.render(artifact)
-            promo = promote_hooks.promote()
+            try:
+                promo = promote_hooks.promote()
+                result["promoted_hooks"] = promo.get("promoted", [])
+            except Exception as e:
+                result["promote_warning"] = str(e)
             result["dna_version"] = artifact["version"]
             result["fts"] = fts_stats
-            result["promoted_hooks"] = promo.get("promoted", [])
+            result["section_errors"] = artifact.get("section_errors", {})
             result["analyzed"] = True
         except Exception as e:
             result["analyze_error"] = str(e)
