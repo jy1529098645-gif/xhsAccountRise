@@ -57,19 +57,37 @@ const DRAFT_KEY = "studio.strategy.draftInput";
 
 /** Poll a pack until status leaves 'expanding'. Returns the StrategyDetail
  * on success ('expanded'), null if it stayed 'expanding' past the timeout
- * or transitioned to 'expand_failed'. */
-async function pollPackUntilDone(packId: string, timeoutMs: number) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    await new Promise(r => setTimeout(r, 5000));
-    try {
-      const d = await api.getStrategy(packId);
-      if (d.status === "expanded" && d.pack) return d;
-      if (d.status === "expand_failed") return null;
-      // status === 'expanding' or anything else → keep polling
-    } catch { /* network still flaky — keep trying */ }
-  }
-  return null;
+ * or transitioned to 'expand_failed'.
+ *
+ * Critical: deduplicates on packId via a module-level map. If a poll is
+ * already running for the same pack, new callers piggy-back on it instead
+ * of spawning their own — without this, repeated retry clicks pile up
+ * N parallel poll loops that hammer the backend at ~N req/sec, starving
+ * the actual expand POST and wedging uvicorn. */
+const _activePolls = new Map<string, Promise<any>>();
+
+async function pollPackUntilDone(packId: string, timeoutMs: number): Promise<any> {
+  const existing = _activePolls.get(packId);
+  if (existing) return existing;
+  const p = (async () => {
+    const start = Date.now();
+    let consecutiveFails = 0;
+    while (Date.now() - start < timeoutMs) {
+      await new Promise(r => setTimeout(r, 6000));
+      try {
+        const d = await api.getStrategy(packId);
+        consecutiveFails = 0;
+        if (d.status === "expanded" && d.pack) return d;
+        if (d.status === "expand_failed") return null;
+      } catch {
+        consecutiveFails++;
+        if (consecutiveFails >= 20) return null;
+      }
+    }
+    return null;
+  })().finally(() => { _activePolls.delete(packId); });
+  _activePolls.set(packId, p);
+  return p;
 }
 function emptyInput(): AccountInputDTO {
   return {
@@ -267,15 +285,19 @@ export default function Strategy() {
       try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
       api.listStrategies().then(setHistory).catch(() => {});
     } catch (e: any) {
-      // Connection might have dropped mid-call (browser/wifi/mixed content)
-      // but the backend keeps running. Poll the pack for up to 4 min before
-      // giving up — backend writes status='expanding' on entry, 'expanded'
-      // on success, 'expand_failed' on hard error.
+      // Two recovery paths:
+      //   (a) Network drop mid-call: backend is probably still running →
+      //       poll for completion.
+      //   (b) 409 'already expanding': another tab/click started one and
+      //       it's still in flight → also just poll.
       const msg = e instanceof Error ? e.message : String(e);
       const isNetwork = /Failed to fetch|NetworkError|TypeError.*fetch|net::ERR/.test(msg);
-      if (isNetwork) {
-        setInfo("⚡ 网络断了一下，但后端可能还在跑。正在尝试自动恢复…（最多 4 分钟）");
-        const recovered = await pollPackUntilDone(packId, 4 * 60_000);
+      const isAlreadyRunning = /409|expand 已经在跑/.test(msg);
+      if (isNetwork || isAlreadyRunning) {
+        setInfo(isAlreadyRunning
+          ? "⏳ 这个 pack 已经有 expand 在跑了，正在等结果…（最多 8 分钟）"
+          : "⚡ 网络断了一下，但后端可能还在跑。正在尝试自动恢复…（最多 8 分钟）");
+        const recovered = await pollPackUntilDone(packId, 8 * 60_000);
         if (recovered?.pack) {
           setPack(recovered.pack);
           setInfo(null);

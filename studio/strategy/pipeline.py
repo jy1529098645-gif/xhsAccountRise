@@ -227,6 +227,7 @@ async def expand(
     topicgen_spec: str = "claude:opus,deepseek,openai",
     scheduler_spec: str = "claude:opus",
     resourcer_spec: str = "claude:opus",
+    drafter_spec: str = "claude:sonnet",   # body drafts don't need opus
 ) -> dict[str, Any]:
     """Phase 2: turn a chosen direction into a full StrategyPack."""
     db.apply_migrations(verbose=False)
@@ -247,6 +248,22 @@ async def expand(
     lib_id = row["library_id"] or library.active_lib_id()
     platform = row["platform"] or inp.platform
 
+    # Idempotency guard: reject a duplicate expand if one is already in flight.
+    # Without this, repeated clicks / network-retry loops accumulate parallel
+    # LLM call storms (12 body-drafters × N concurrent expands) that hammer
+    # Anthropic rate limits and wedge uvicorn's connection pool.
+    with db.connect(read_only=True) as con:
+        cur_row = con.execute(
+            "SELECT status, updated_at FROM studio_strategies WHERE pack_id = ?",
+            (pack_id,),
+        ).fetchone()
+    if cur_row and cur_row["status"] == "expanding":
+        age_s = int(time.time()) - int(cur_row["updated_at"] or 0)
+        if age_s < 8 * 60:  # 8 min stale-protect window
+            raise RuntimeError(
+                f"expand 已经在跑了（已 {age_s}s）。前端会自动 poll 等结果，请不要重复点。"
+            )
+
     # Mark as 'expanding' so the frontend can detect "still in progress" if
     # its HTTPS-to-localhost connection drops mid-call (60-180s requests are
     # routinely killed by browser / mixed-content / wifi blip).
@@ -259,7 +276,8 @@ async def expand(
 
     try:
         return await _expand_inner(pack_id, chosen_idx, chosen, inp, lib_id, platform,
-                                    topicgen_spec, scheduler_spec, resourcer_spec, t0)
+                                    topicgen_spec, scheduler_spec, resourcer_spec,
+                                    drafter_spec, t0)
     except Exception as e:
         # Any uncaught failure → mark pack so frontend stops polling.
         try:
@@ -279,7 +297,7 @@ async def _expand_inner(
     pack_id: str, chosen_idx: int, chosen: StrategicDirection,
     inp: AccountInput, lib_id: str, platform: str,
     topicgen_spec: str, scheduler_spec: str, resourcer_spec: str,
-    t0: float,
+    drafter_spec: str, t0: float,
 ) -> dict[str, Any]:
     dna = _latest_dna_payload()
     topic_count = inp.cycle_weeks * inp.posts_per_week
@@ -404,7 +422,9 @@ async def _expand_inner(
     # observation that a single 12-slot body-draft call would silently
     # return an empty schedule once total tokens crossed ~10k. Each call
     # here is small + focused, and failures isolate per slot.
-    drafter_chosen = registry.build(scheduler_spec)[0]
+    # Defaults to claude:sonnet which is ~3x faster than opus and plenty
+    # capable for a 300-600 char drop-in draft.
+    drafter_chosen = registry.build(drafter_spec)[0]
     direction_block = (
         f"【账号方向】{chosen.name}\n"
         f"【一句话定位】{chosen.positioning_statement}\n"

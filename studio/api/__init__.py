@@ -903,6 +903,7 @@ class StrategyExpandRequest(BaseModel):
     topicgen_spec: str = "claude:opus,deepseek,openai"
     scheduler_spec: str = "claude:opus"
     resourcer_spec: str = "claude:opus"
+    drafter_spec: str = "claude:sonnet"
 
 
 class StrategyAutofillRequest(BaseModel):
@@ -964,11 +965,18 @@ async def strategy_expand(pack_id: str, req: StrategyExpandRequest) -> dict[str,
             topicgen_spec=req.topicgen_spec,
             scheduler_spec=req.scheduler_spec,
             resourcer_spec=req.resourcer_spec,
+            drafter_spec=req.drafter_spec,
         )
     except LookupError as e:
         raise HTTPException(404, str(e))
     except IndexError as e:
         raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        # Idempotency conflict — see expand() docstring. Frontend should
+        # interpret this as "go poll, don't retry POST".
+        if "expand 已经在跑" in str(e):
+            raise HTTPException(409, str(e))
+        raise
 
 
 @app.get("/api/strategy")
