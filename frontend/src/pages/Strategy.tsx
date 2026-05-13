@@ -144,8 +144,11 @@ export default function Strategy() {
   return (
     <div>
       <div className="page-header">
-        <h1>🚀 起号策略 · 第一步先做这个</h1>
+        <h1>🚀 起号策略 · 第 2 步</h1>
         <p>多 AI 团队帮你定方向 + 排周期 + 写每篇标题大纲 + 列要准备的材料</p>
+        <p className="muted" style={{fontSize: 12, marginTop: 4}}>
+          💡 建议先去 <Link to="/reports">📊 分析报告</Link> 看一眼 Claude × OpenAI 对你库的共识洞察，再回这里拟策略，效果更准。
+        </p>
       </div>
 
       {!api.isConnected() && (

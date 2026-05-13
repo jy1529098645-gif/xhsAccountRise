@@ -12,6 +12,7 @@ import Libraries from "./pages/Libraries";
 import Settings from "./pages/Settings";
 import Strategy from "./pages/Strategy";
 import InsightReport from "./pages/InsightReport";
+import Reports from "./pages/Reports";
 
 export default function App() {
   const [connected, setConnected] = useState<boolean>(api.isConnected());
@@ -37,11 +38,12 @@ export default function App() {
           <div>EZAccountRise</div>
         </div>
         <ProjectPicker />
-        <NavLink to="/strategy" className={({isActive}) => isActive ? "active" : ""}>🚀 起号策略 <span style={{fontSize: 10, color: "var(--muted)"}}>第 1 步</span></NavLink>
+        <NavLink to="/reports" className={({isActive}) => isActive ? "active" : ""}>📊 分析报告 <span style={{fontSize: 10, color: "var(--muted)"}}>第 1 步</span></NavLink>
+        <NavLink to="/strategy" className={({isActive}) => isActive ? "active" : ""}>🚀 起号策略 <span style={{fontSize: 10, color: "var(--muted)"}}>第 2 步</span></NavLink>
+        <NavLink to="/composer" className={({isActive}) => isActive ? "active" : ""}>✍️ 出稿 <span style={{fontSize: 10, color: "var(--muted)"}}>第 3 步</span></NavLink>
         <NavLink to="/libraries" className={({isActive}) => isActive ? "active" : ""}>📥 资源库 · 上传</NavLink>
-        <NavLink to="/composer" className={({isActive}) => isActive ? "active" : ""}>✍️ 出稿</NavLink>
-        <NavLink to="/dashboard" className={({isActive}) => isActive ? "active" : ""}>📊 数据总览</NavLink>
-        <NavLink to="/analysis" className={({isActive}) => isActive ? "active" : ""}>🧬 爆款分析</NavLink>
+        <NavLink to="/dashboard" className={({isActive}) => isActive ? "active" : ""}>🗂️ 数据总览</NavLink>
+        <NavLink to="/analysis" className={({isActive}) => isActive ? "active" : ""}>🧬 爆款分析（粗粒度）</NavLink>
         <NavLink to="/drafts" className={({isActive}) => isActive ? "active" : ""}>📝 历史出稿</NavLink>
         <NavLink to="/settings" className={({isActive}) => isActive ? "active" : ""}>⚙️ 设置</NavLink>
 
@@ -62,7 +64,9 @@ export default function App() {
       <main className="main">
         <ConnectionBanner />
         <Routes>
-          <Route path="/" element={<Navigate to="/strategy" replace />} />
+          <Route path="/" element={<Navigate to="/reports" replace />} />
+          <Route path="/reports" element={<Reports />} />
+          <Route path="/reports/:id" element={<InsightReport />} />
           <Route path="/strategy" element={<Strategy />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/analysis" element={<Analysis />} />

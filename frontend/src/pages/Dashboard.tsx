@@ -42,7 +42,8 @@ export default function Dashboard() {
       {noLibs && api.isConnected() && (
         <div className="banner info">
           <div>
-            <b>👋 还没有数据库</b> · 去 <Link to="/libraries">📥 资源库</Link> 拖一个 .db 进来，全自动跑完检测+分析就能开始用了。
+            <b>👋 还没有数据库</b> · 去 <Link to="/libraries">📥 资源库</Link> 拖一个 .db 进来，
+            自动跑完平台检测+爆款分析。完事建议先看 <Link to="/reports">📊 分析报告</Link>（第 1 步），再去做策略。
           </div>
         </div>
       )}

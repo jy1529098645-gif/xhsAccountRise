@@ -85,16 +85,12 @@ export default function Libraries() {
   }
 
   async function runInsight(libId: string) {
-    setWorking(libId); setErr(null);
-    setInfo("📊 双 AI (Claude + OpenAI) 协作分析中…(约 60-180s)");
-    try {
-      // Activate the library first so the latest DNA artifact is used.
-      await api.activateLibrary(libId);
-      const r = await api.runInsight(libId);
-      setInfo("✓ 分析完成，跳转到报告…");
-      setTimeout(() => navigate(`/insight/${r.report_id}`), 600);
-    } catch (e: any) { setErr(e.message); }
-    finally { setWorking(null); }
+    // The Libraries page has a shortcut button; the canonical entry is the
+    // /reports page, so just hop over and let it run there.
+    if (!libs.find(l => l.lib_id === libId)?.active) {
+      try { await api.activateLibrary(libId); } catch {/* keep going */}
+    }
+    navigate("/reports");
   }
 
   async function changePlatform(libId: string, newPlatform: string) {
