@@ -1,0 +1,81 @@
+{
+  "draft": {
+    "draft_id": "5b0ca7c9fcea48fb",
+    "generated_at": 1778691920,
+    "prompt_version": "title_body_gen-1.0.0",
+    "brief_json": "{\"topic\": \"降AI率技巧\", \"angle\": \"教程\", \"target_length\": 600, \"cta_strength\": \"soft\", \"niche\": \"降AI率\", \"reference_note_ids\": [], \"extra_constraints\": \"\"}",
+    "status": "generated",
+    "notes": null,
+    "mode": "single",
+    "library_id": null,
+    "final_candidate_id": null,
+    "brief": {
+      "topic": "降AI率技巧",
+      "angle": "教程",
+      "target_length": 600,
+      "cta_strength": "soft",
+      "niche": "降AI率",
+      "reference_note_ids": [],
+      "extra_constraints": ""
+    }
+  },
+  "candidates": [
+    {
+      "candidate_id": "02c240b410ed4df2",
+      "draft_id": "5b0ca7c9fcea48fb",
+      "llm": "claude-opus-4-7",
+      "title": "",
+      "body": "",
+      "cover_prompt": "",
+      "hook_type": "",
+      "predicted_likes": 0,
+      "self_score": 0.0,
+      "self_critique": "",
+      "human_score": null,
+      "chosen": 0,
+      "created_at": 1778691920,
+      "tags": [],
+      "meta": {
+        "latency_ms": 0,
+        "token_usage": {},
+        "cost_estimate_usd": 0.0,
+        "error": "anthropic SDK not installed. Run `pip install anthropic`.",
+        "rag": {
+          "ref_count": 8,
+          "comment_count": 15,
+          "hook_count": 5
+        }
+      },
+      "critiques": []
+    },
+    {
+      "candidate_id": "eb5ed2f990a24e84",
+      "draft_id": "5b0ca7c9fcea48fb",
+      "llm": "deepseek-chat",
+      "title": "",
+      "body": "",
+      "cover_prompt": "",
+      "hook_type": "",
+      "predicted_likes": 0,
+      "self_score": 0.0,
+      "self_critique": "",
+      "human_score": null,
+      "chosen": 0,
+      "created_at": 1778691920,
+      "tags": [],
+      "meta": {
+        "latency_ms": 0,
+        "token_usage": {},
+        "cost_estimate_usd": 0.0,
+        "error": "openai SDK not installed. Run `pip install openai`.",
+        "rag": {
+          "ref_count": 8,
+          "comment_count": 15,
+          "hook_count": 5
+        }
+      },
+      "critiques": []
+    }
+  ],
+  "trace": []
+}

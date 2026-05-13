@@ -1,0 +1,24 @@
+[
+  {
+    "version": "2026-05-14",
+    "created_at": 1778691520,
+    "summary": {
+      "total_notes_analysed": 9729,
+      "dominant_hooks": [
+        {
+          "category": "其他",
+          "count": 2640
+        },
+        {
+          "category": "工具型",
+          "count": 2363
+        },
+        {
+          "category": "数字型",
+          "count": 1629
+        }
+      ],
+      "generated_in_seconds": 1.3
+    }
+  }
+]

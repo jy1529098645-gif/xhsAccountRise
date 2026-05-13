@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/api.ts","./src/format.ts","./src/main.tsx","./src/types.ts","./src/pages/analysis.tsx","./src/pages/composer.tsx","./src/pages/dashboard.tsx","./src/pages/draftdetail.tsx","./src/pages/drafts.tsx","./src/pages/libraries.tsx","./src/pages/settings.tsx"],"checkPending":true,"version":"5.9.3"}

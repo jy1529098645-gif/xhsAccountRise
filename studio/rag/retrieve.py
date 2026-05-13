@@ -1,0 +1,195 @@
+"""Retrieve references for a Brief.
+
+Strategy:
+    1. Build an FTS5 MATCH query from the brief's topic (and optionally extras).
+    2. For notes: pull top-100 candidates by FTS rank, then re-rank by a hybrid
+       score `bm25_norm + alpha * log10(likes + 1)`. Return top-K.
+    3. For comments: same query, top-N by FTS rank (relevance is enough).
+    4. Hook templates: read top-N from studio_hook_templates (W2 baseline
+       falls back to the latest DNA artifact's by_category section).
+
+Trigram tokenizer requires query tokens >= 3 chars. We auto-explode topics
+into 3-gram windows when they are >= 3 chars, and fall back to title LIKE
+substring search for shorter queries.
+"""
+from __future__ import annotations
+
+import json
+import math
+import re
+from typing import Any
+
+from .. import config, db
+
+
+_NON_TOKEN = re.compile(r"[\s,，、;；]+", flags=re.UNICODE)
+# Strip characters FTS5 treats as operators or punctuation when building the
+# phrase. Brace, paren, asterisk, quote, hyphen, plus etc.
+_FTS_SCRUB = re.compile(r'[\(\)\{\}\[\]"\'`~!@#\$%\^&\*\+=\-\.,/\\:;<>\?|]')
+
+
+def _trigrams(piece: str) -> list[str]:
+    """Sliding 3-char windows. Trigram tokenizer needs the *exact* trigram so
+    we OR every window we can extract."""
+    if len(piece) < 3:
+        return []
+    return [piece[i : i + 3] for i in range(len(piece) - 2)]
+
+
+def _split_topic(topic: str) -> list[str]:
+    """Break a topic into search-friendly chunks (>= 3 chars each)."""
+    pieces = [p.strip() for p in _NON_TOKEN.split(topic)]
+    pieces = [_FTS_SCRUB.sub("", p) for p in pieces if p]
+    return [p for p in pieces if len(p) >= 3]
+
+
+def _fts_query(topic: str) -> str:
+    pieces = _split_topic(topic)
+    if not pieces:
+        return ""
+    seen: set[str] = set()
+    grams: list[str] = []
+    for piece in pieces:
+        if len(piece) == 3:
+            if piece not in seen:
+                seen.add(piece)
+                grams.append(piece)
+            continue
+        # > 3 chars: emit overlapping trigrams to match any inflection.
+        for tri in _trigrams(piece):
+            if tri not in seen:
+                seen.add(tri)
+                grams.append(tri)
+    return " OR ".join(f'"{g}"' for g in grams)
+
+
+def search_notes(
+    topic: str,
+    k: int = 8,
+    candidate_pool: int = 200,
+    likes_weight: float = 0.5,
+) -> list[dict[str, Any]]:
+    """Return up to `k` notes ranked by FTS relevance × engagement."""
+    fts_q = _fts_query(topic)
+    with db.connect(read_only=True) as con:
+        if fts_q:
+            cur = con.execute(
+                "SELECT n.note_id, n.title, n.body, n.liked_count,"
+                "       n.collected_count, n.comment_count, n.image_count,"
+                "       n.tags_json, n.author_nickname, n.url,"
+                "       bm25(studio_fts_notes) AS bm"
+                " FROM studio_fts_notes"
+                " JOIN notes n ON n.note_id = studio_fts_notes.note_id"
+                " WHERE studio_fts_notes MATCH ?"
+                " ORDER BY bm LIMIT ?",
+                (fts_q, candidate_pool),
+            )
+            rows = [dict(r) for r in cur]
+        else:
+            # Topic too short for trigram; fall back to LIKE on title.
+            like = f"%{topic}%"
+            cur = con.execute(
+                "SELECT note_id, title, body, liked_count, collected_count,"
+                "       comment_count, image_count, tags_json, author_nickname, url,"
+                "       0 AS bm"
+                " FROM notes WHERE title LIKE ? OR body LIKE ?"
+                " ORDER BY liked_count DESC LIMIT ?",
+                (like, like, candidate_pool),
+            )
+            rows = [dict(r) for r in cur]
+
+    if not rows:
+        return []
+    bms = [r["bm"] for r in rows]
+    bm_min, bm_max = min(bms), max(bms)
+    bm_span = max(1e-6, bm_max - bm_min)
+    for r in rows:
+        # bm25 is negative; lower = better. Normalise to [0,1] where 1 = best.
+        relevance = (bm_max - r["bm"]) / bm_span if bm_max != bm_min else 1.0
+        engagement = math.log10((r["liked_count"] or 0) + 1) / 6.0  # 100K → ~0.83
+        r["hybrid_score"] = relevance + likes_weight * engagement
+    rows.sort(key=lambda r: r["hybrid_score"], reverse=True)
+    return rows[:k]
+
+
+def search_comments(topic: str, n: int = 15) -> list[dict[str, Any]]:
+    fts_q = _fts_query(topic)
+    if not fts_q:
+        return []
+    with db.connect(read_only=True) as con:
+        cur = con.execute(
+            "SELECT c.comment_id, c.note_id, c.content, c.like_count,"
+            "       bm25(studio_fts_comments) AS bm"
+            " FROM studio_fts_comments"
+            " JOIN comments c ON c.comment_id = studio_fts_comments.comment_id"
+            " WHERE studio_fts_comments MATCH ?"
+            " ORDER BY bm LIMIT ?",
+            (fts_q, n * 3),
+        )
+        rows = [dict(r) for r in cur]
+    # Prefer comments with higher likes.
+    rows.sort(key=lambda r: (r["like_count"] or 0), reverse=True)
+    return rows[:n]
+
+
+def fetch_hook_summaries(top_n: int = 5) -> list[dict[str, Any]]:
+    """Pull hook templates from the latest DNA artifact (W2 fallback) or
+    from studio_hook_templates if any have been promoted."""
+    with db.connect(read_only=True) as con:
+        # Prefer curated templates table if populated. Order by per-post payoff
+        # (avg_likes), not sample size — we want the LLM to anchor on what
+        # actually performs, not what's just frequent.
+        rows = list(
+            con.execute(
+                "SELECT category, pattern, example_note_ids_json, avg_likes,"
+                "       sample_size FROM studio_hook_templates WHERE active = 1"
+                " ORDER BY avg_likes DESC LIMIT ?",
+                (top_n,),
+            )
+        )
+        if rows:
+            return [
+                {
+                    "category": r["category"],
+                    "pattern": r["pattern"],
+                    "count": r["sample_size"],
+                    "median_likes": r["avg_likes"],
+                    "examples": json.loads(r["example_note_ids_json"] or "[]"),
+                }
+                for r in rows
+            ]
+        # Fallback: read latest DNA artifact.
+        row = con.execute(
+            "SELECT payload_json FROM studio_dna_artifacts"
+            " ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+    if not row:
+        return []
+    try:
+        artifact = json.loads(row["payload_json"])
+        by_cat = artifact["sections"]["titles"]["by_category"]
+    except (KeyError, json.JSONDecodeError):
+        return []
+    items = []
+    for cat, data in by_cat.items():
+        if cat in {"其他", "无标题"}:
+            continue
+        items.append(
+            {
+                "category": cat,
+                "pattern": f"{cat} 标题",
+                "count": data["count"],
+                "median_likes": data.get("likes", {}).get("median", 0),
+                "examples": data.get("examples", [])[:3],
+            }
+        )
+    items.sort(key=lambda i: i["median_likes"] or 0, reverse=True)
+    return items[:top_n]
+
+
+def retrieve_for_brief(topic: str, k_notes: int = 8, n_comments: int = 15) -> dict[str, Any]:
+    return {
+        "refs": search_notes(topic, k=k_notes),
+        "comments": search_comments(topic, n=n_comments),
+        "hooks": fetch_hook_summaries(),
+    }

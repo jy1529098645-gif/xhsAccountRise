@@ -1,0 +1,30 @@
+.env
+.venv/
+.claude/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# DB and large data
+data/*.db
+data/*.db-wal
+data/*.db-shm
+
+# Generated artifacts — keep dir, not contents
+exports/analysis/*
+!exports/analysis/.gitkeep
+exports/drafts/*
+!exports/drafts/.gitkeep
+
+# Frontend build
+frontend/node_modules/
+frontend/dist/
+frontend/tsbuild-node/
+
+# Library storage (live data; never commit)
+data/libraries/
+data/active_library.txt
+data/*.db-wal
+data/*.db-shm

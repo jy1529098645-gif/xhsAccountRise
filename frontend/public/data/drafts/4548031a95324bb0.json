@@ -1,0 +1,81 @@
+{
+  "draft": {
+    "draft_id": "4548031a95324bb0",
+    "generated_at": 1778692231,
+    "prompt_version": "title_body_gen-1.0.0",
+    "brief_json": "{\"topic\": \"降AI率技巧\", \"angle\": \"教程\", \"target_length\": 500, \"cta_strength\": \"soft\", \"niche\": \"降AI率\", \"reference_note_ids\": [], \"extra_constraints\": \"\"}",
+    "status": "generated",
+    "notes": null,
+    "mode": "single",
+    "library_id": null,
+    "final_candidate_id": null,
+    "brief": {
+      "topic": "降AI率技巧",
+      "angle": "教程",
+      "target_length": 500,
+      "cta_strength": "soft",
+      "niche": "降AI率",
+      "reference_note_ids": [],
+      "extra_constraints": ""
+    }
+  },
+  "candidates": [
+    {
+      "candidate_id": "6f08cf42b78640f2",
+      "draft_id": "4548031a95324bb0",
+      "llm": "claude-haiku-4-5-20251001",
+      "title": "",
+      "body": "",
+      "cover_prompt": "",
+      "hook_type": "",
+      "predicted_likes": 0,
+      "self_score": 0.0,
+      "self_critique": "",
+      "human_score": null,
+      "chosen": 0,
+      "created_at": 1778692231,
+      "tags": [],
+      "meta": {
+        "latency_ms": 0,
+        "token_usage": {},
+        "cost_estimate_usd": 0.0,
+        "error": "ANTHROPIC_API_KEY missing from environment.",
+        "rag": {
+          "ref_count": 8,
+          "comment_count": 15,
+          "hook_count": 5
+        }
+      },
+      "critiques": []
+    },
+    {
+      "candidate_id": "88a45c5ccc9c407d",
+      "draft_id": "4548031a95324bb0",
+      "llm": "deepseek-chat",
+      "title": "",
+      "body": "",
+      "cover_prompt": "",
+      "hook_type": "",
+      "predicted_likes": 0,
+      "self_score": 0.0,
+      "self_critique": "",
+      "human_score": null,
+      "chosen": 0,
+      "created_at": 1778692231,
+      "tags": [],
+      "meta": {
+        "latency_ms": 1936,
+        "token_usage": {},
+        "cost_estimate_usd": 0.0,
+        "error": "api error: Error code: 402 - {'error': {'message': 'Insufficient Balance', 'type': 'unknown_error', 'param': None, 'code': 'invalid_request_error'}}",
+        "rag": {
+          "ref_count": 8,
+          "comment_count": 15,
+          "hook_count": 5
+        }
+      },
+      "critiques": []
+    }
+  ],
+  "trace": []
+}

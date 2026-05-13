@@ -1,0 +1,66 @@
+{
+  "draft": {
+    "draft_id": "8b35cb6d020d479c",
+    "generated_at": 1778692283,
+    "prompt_version": "title_body_gen-1.0.0",
+    "brief_json": "{\"topic\": \"降AI率技巧\", \"angle\": \"教程\", \"target_length\": 400, \"cta_strength\": \"soft\", \"niche\": \"降AI率\", \"reference_note_ids\": [], \"extra_constraints\": \"\"}",
+    "status": "generated",
+    "notes": null,
+    "mode": "single",
+    "library_id": null,
+    "final_candidate_id": null,
+    "brief": {
+      "topic": "降AI率技巧",
+      "angle": "教程",
+      "target_length": 400,
+      "cta_strength": "soft",
+      "niche": "降AI率",
+      "reference_note_ids": [],
+      "extra_constraints": ""
+    }
+  },
+  "candidates": [
+    {
+      "candidate_id": "859d64123bf44626",
+      "draft_id": "8b35cb6d020d479c",
+      "llm": "claude-haiku-4-5-20251001",
+      "title": "AI率爆表救急指南｜5个小技巧实测有效",
+      "body": "论文AI率一查就爆表，还剩一周就要交？我也是这么焦虑过来的 😅\n\n最开始我全文靠AI写，结果维普一查直接80%+，比知网高得多，后来在评论区学了堆方法，现在总结出最实用的5招给大家 👇\n\n1️⃣ 分段降AI很关键\n不要一次性把全文丢进去降，改成按逻辑段落来，每段200-300字用不同的降AI指令，deepseek的「减少AIGC痕迹」加「避免总分总结构」效果最稳定。我试过用同一个指令降全文，AI检测器容易识别出规律，分段就不一样了 🎯\n\n2️⃣ 混用AI检测平台摸规律\n维普和知网的检测逻辑不同，有人说把多个改写版本同时上传维普，哪段被标记就删，一次查就能定方向。我没那么激进，但确实发现知网比维普「松」，所以先过知网再冲维普 ⚡\n\n3️⃣ 人工改写 > 纯AI改写\n最重要的是这个！让AI改完后，我再手动修改30%的表述，改掉明显的「AI腔」，比如「总的来说」「可以看出」这类固定句式，改成自己的口头语。这步最费时但最有效 ✍️\n\n4️⃣ 参考文献要真实\n千万别全是AI编的参考文献，我见过有人论文内容AI率40%，结果被查出参考文献都是胡编的直接挂科。去知网或谷歌学术真实找相关文献，这是基础线 📚\n\n5️⃣ 早查早改别裸交\n有人说反复查要花钱，但交上去被查出来AI率超标后果更严重。我的建议是初稿完成就查一次，给自己至少2周的调整期，这样不会被逼到最后一秒用黑魔法 ⏰\n\n说句实话，没有100%的绝招，最终还是得靠自己的思路和逻辑框架打底。AI只是辅助工具，把框架搭好、文献真实、表述改自然，AI率自然就下来了 💪\n\n你们的论文现在什么情况？评论区讨论一下吧～",
+      "cover_prompt": "A minimalist desk setup with a laptop showing a highlighted AIGC detection report, red warning marks visible. Text overlay in large bold Chinese: \"5招降AI率\" with a progress bar showing 85%→35%. Color scheme: white background, red accent, modern flat design style. Include a small stressed student emoji in corner.",
+      "hook_type": "教程型",
+      "predicted_likes": 1200,
+      "self_score": 8.2,
+      "self_critique": "风险点在于涉及AI率作弊边界，虽然内容强调「人工改写」和「真实参考文献」，但仍需注意是否触及某些高校的学术诚信红线；此外「分段降AI」等具体操作可能被视为作弊指导，建议后续观察评论区反馈。",
+      "human_score": null,
+      "chosen": 0,
+      "created_at": 1778692283,
+      "tags": [
+        "降AI率",
+        "毕业论文",
+        "AI率检测",
+        "论文降重",
+        "deepseek",
+        "论文技巧",
+        "维普查重",
+        "AIGC降低",
+        "写论文"
+      ],
+      "meta": {
+        "latency_ms": 14834,
+        "token_usage": {
+          "input": 4324,
+          "output": 1121
+        },
+        "cost_estimate_usd": 0.0099,
+        "error": "",
+        "rag": {
+          "ref_count": 8,
+          "comment_count": 15,
+          "hook_count": 5
+        }
+      },
+      "critiques": []
+    }
+  ],
+  "trace": []
+}
