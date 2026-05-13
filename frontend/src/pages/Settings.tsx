@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, backendUrl, setBackendUrl, resetBackendUrl, DEFAULT_BACKEND_URL } from "../api";
+import { GITHUB_REPO } from "../catalog";
 
 const DEFAULT = DEFAULT_BACKEND_URL;
 
@@ -26,15 +27,33 @@ export default function Settings() {
   return (
     <div>
       <div className="page-header">
-        <h1>Settings</h1>
-        <p>配置本地后端连接、查看 LLM keys 状态、首次使用引导。</p>
+        <h1>⚙️ 设置（高级）</h1>
+        <p>多数情况下不用动这里 —— 默认配置已经够用。</p>
       </div>
 
       <div className="card">
-        <h2>Backend URL（高级）</h2>
+        <h2>🚀 在新设备 / 服务器上启动后端</h2>
+        <p style={{fontSize: 13}}>
+          整个工具的源码都在 GitHub 仓库里，任何能装 Python 3.11+ 的设备都能跑：
+        </p>
+        <ol style={{marginLeft: 20, lineHeight: 1.9, fontSize: 13}}>
+          <li>克隆仓库：<code className="kbd">git clone {GITHUB_REPO}.git</code></li>
+          <li>进目录：<code className="kbd">cd xhsAccountRise</code></li>
+          <li>Windows：双击 <code className="kbd">start.ps1</code>（或 <code className="kbd">.\start.ps1</code>）</li>
+          <li>Mac/Linux：<code className="kbd">chmod +x start.sh && ./start.sh</code></li>
+          <li>首次运行会自动建 venv + 装依赖 + 让你填 .env 里 3 个 API key</li>
+          <li>看到 <code className="kbd">Uvicorn running on http://127.0.0.1:8765</code> 就好 → 浏览器会自动打开本前端 → 自动连上</li>
+        </ol>
+        <div style={{textAlign: "right", marginTop: 8}}>
+          <a href={GITHUB_REPO} target="_blank" rel="noreferrer">📦 打开 GitHub 仓库 →</a>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>Backend URL</h2>
         <p className="muted">
-          默认已经指向 <code className="kbd">{DEFAULT}</code> —— 通常你不用改。
-          只在你把后端跑在别的端口或别的机器上时才需要改这里。
+          默认指向 <code className="kbd">{DEFAULT}</code> —— 通常不用改。
+          只在你把后端跑在别的端口、别的机器、或者云服务器上时才需要改。
         </p>
         <div className="row">
           <input style={{flex: 1}} value={url} onChange={e => setUrl(e.target.value)}
@@ -49,51 +68,41 @@ export default function Settings() {
           ) : checking ? (
             <span className="muted">检测中…</span>
           ) : healthy ? (
-            <span style={{color: "var(--ok)"}}>✓ 后端在 {url} 上正常响应</span>
+            <span style={{color: "var(--ok)"}}>✓ 后端在 {url} 正常响应</span>
           ) : healthy === false ? (
-            <span style={{color: "var(--danger)"}}>✗ 无法访问 {url}</span>
+            <span style={{color: "var(--danger)"}}>✗ 无法访问 {url}（可能没启动 / 端口冲突 / 防火墙）</span>
           ) : null}
         </div>
       </div>
 
       <div className="card">
-        <h2>本地后端启动指南</h2>
-        <ol style={{marginLeft: 20, lineHeight: 1.9}}>
-          <li>克隆仓库：<code className="kbd">git clone https://github.com/jy1529098645-gif/xhsAccountRise.git</code></li>
-          <li>装 Python deps：<code className="kbd">python -m venv .venv && .venv\Scripts\pip install -r requirements.txt</code></li>
-          <li>复制 <code className="kbd">.env.example</code> 到 <code className="kbd">.env</code>，填三家 API key</li>
-          <li>初始化：<code className="kbd">python -m studio migrate && python -m studio rag build</code></li>
-          <li>跑分析：<code className="kbd">python -m studio analyze && python -m studio promote-hooks</code></li>
-          <li>启服务：<code className="kbd">python -m studio serve --port 8765</code></li>
-          <li>回这里把 Backend URL 填 <code className="kbd">http://127.0.0.1:8765</code></li>
-        </ol>
-      </div>
-
-      <div className="card">
-        <h2>LLM 配置</h2>
-        <p className="muted">所有 keys 通过本地 .env 注入到后端进程，前端永远看不到也不会传输。</p>
-        <ul style={{lineHeight: 1.9}}>
-          <li><b>Anthropic Claude</b>：<code className="kbd">ANTHROPIC_API_KEY=sk-ant-...</code> — 推荐主力（Strategist + Refiner + Critic）</li>
-          <li><b>DeepSeek</b>：<code className="kbd">DEEPSEEK_API_KEY=sk-...</code> — 中文下沉感强，适合 Drafter / Critic</li>
-          <li><b>OpenAI</b>：<code className="kbd">OPENAI_API_KEY=sk-...</code> + <code className="kbd">OPENAI_MODEL=gpt-5</code> — Drafter 多样性</li>
+        <h2>🤖 关于 LLM keys</h2>
+        <p className="muted">所有 API key 通过本地 .env 文件注入后端进程。前端永远不会看到 / 不会传输 / 不会上云。</p>
+        <ul style={{lineHeight: 1.9, fontSize: 13}}>
+          <li><b>Anthropic Claude</b>：<code className="kbd">ANTHROPIC_API_KEY=sk-ant-...</code> —— 推荐主力（策略师 / 改稿师 / 融合师 默认它）</li>
+          <li><b>DeepSeek</b>：<code className="kbd">DEEPSEEK_API_KEY=sk-...</code> —— 中文下沉感强，价格最便宜</li>
+          <li><b>OpenAI</b>：<code className="kbd">OPENAI_API_KEY=sk-...</code> + 默认 <code className="kbd">OPENAI_MODEL=gpt-4o</code></li>
         </ul>
-        <p className="muted">在 Composer 里可以为每个 Agent role 指定 LLM 组合。</p>
+        <p className="muted" style={{fontSize: 12, marginTop: 8}}>
+          想换模型变体（比如 OpenAI 切到 gpt-5 / o1）在 .env 改 <code className="kbd">OPENAI_MODEL</code>。重启后端生效。
+        </p>
       </div>
 
       <div className="card">
-        <h2>多 Agent 架构</h2>
-        <p style={{lineHeight: 1.8}}>
-          这套 pipeline 设计追求「最贴近真实创作流程」而非「N 个 LLM 投票」：
+        <h2>🧩 多 Agent 协作架构（在 Composer 里可自定义）</h2>
+        <p style={{lineHeight: 1.8, fontSize: 13}}>
+          这套 pipeline 不是"N 个 AI 投票"——是真实创作流程的拟态：
         </p>
-        <ol style={{marginLeft: 20, lineHeight: 1.9}}>
-          <li><b>Strategist</b>（1 个强 LLM）—— 先看 brief 和 RAG 参考，定 hook 类型、开头钩子、结构、语气、避坑。一锤定音，避免下游 drafter 各自为政。</li>
-          <li><b>Researcher</b>（无 LLM）—— FTS5 检索 top 参考爆款 + 用户原话评论 + 高表现 hook 模板，喂给下游所有 agent。</li>
-          <li><b>Drafter Pool</b>（N 个不同 LLM 并发）—— 同一 brief 各家出一稿。Claude 严谨，DeepSeek 下沉感强，GPT 多样性。</li>
-          <li><b>Critic Pool</b>（M 个不同 LLM 并发）—— 给每份候选打 5 维分（hook / 语言贴合 / 转发欲望 / 品牌安全 / 结构）。跨 LLM 评分降低自夸偏差。</li>
-          <li><b>Refiner</b>（1 个强 LLM）—— 拿到 critic 共识 top 候选，按具体建议改稿。不换 hook 类型，只修缺陷。</li>
-          <li><b>Synthesizer</b>（无 LLM）—— 选 final（默认拿 Refiner 改后的版本）。</li>
+        <ol style={{marginLeft: 20, lineHeight: 1.9, fontSize: 13}}>
+          <li><b>策略师 Strategist</b>（1 个）—— 看 brief + RAG 参考，定 hook 类型、开头钩子、结构、语气、避坑。一锤定音。</li>
+          <li><b>调研员 Researcher</b>（无 LLM）—— FTS5 检索 top 参考爆款 + 用户原话评论 + hook 模板。</li>
+          <li><b>起草团 Drafter Pool</b>（N 个不同家并发）—— 同一 brief 各家出一稿。Claude 严谨 / DeepSeek 下沉 / GPT 多样。</li>
+          <li><b>审稿团 Critic Pool</b>（M 个跨家）—— 5 维分（hook / 语言 / 转发 / 品牌 / 结构）。挑跟起草不同家来审，避免自夸。</li>
+          <li><b>改稿师 Refiner</b>（1 个）—— 拿评分最高 + critic 反馈 → 改稿。</li>
+          <li><b>融合师 Synthesizer</b>（1 个，★ 核心）—— 看完所有候选 + 评审 + 改稿 → 综合各家优点写最终融合稿。输出 rationale 标明从哪家取什么。</li>
+          <li><b>计划师 Planner</b>（1 个）—— 给发布时段（基于历史 DNA 热力图）+ 后续 3-5 个选题 + 互动运营建议。</li>
         </ol>
-        <p className="muted">每一步在 Composer 的「Agent 时间线」中都可以看到 latency / cost / 输入输出 summary，全程透明。</p>
+        <p className="muted">每步 latency / 成本 / 错误状态都在 Composer 时间线可见。</p>
       </div>
     </div>
   );

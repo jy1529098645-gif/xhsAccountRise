@@ -34,11 +34,11 @@ export default function App() {
           <div>AcademiCats · Studio</div>
         </div>
         <NavLink to="/libraries" className={({isActive}) => isActive ? "active" : ""}>📥 资源库 / 上传</NavLink>
-        <NavLink to="/composer" className={({isActive}) => isActive ? "active" : ""}>✍️ Composer 出稿</NavLink>
-        <NavLink to="/dashboard" className={({isActive}) => isActive ? "active" : ""}>📊 Dashboard</NavLink>
-        <NavLink to="/analysis" className={({isActive}) => isActive ? "active" : ""}>🧬 爆款 DNA</NavLink>
-        <NavLink to="/drafts" className={({isActive}) => isActive ? "active" : ""}>📝 历史 Drafts</NavLink>
-        <NavLink to="/settings" className={({isActive}) => isActive ? "active" : ""}>⚙️ 设置 (高级)</NavLink>
+        <NavLink to="/composer" className={({isActive}) => isActive ? "active" : ""}>✍️ 出稿</NavLink>
+        <NavLink to="/dashboard" className={({isActive}) => isActive ? "active" : ""}>📊 数据总览</NavLink>
+        <NavLink to="/analysis" className={({isActive}) => isActive ? "active" : ""}>🧬 爆款分析</NavLink>
+        <NavLink to="/drafts" className={({isActive}) => isActive ? "active" : ""}>📝 历史出稿</NavLink>
+        <NavLink to="/settings" className={({isActive}) => isActive ? "active" : ""}>⚙️ 设置</NavLink>
 
         <div className={connected && healthOk ? "conn ok" : "conn off"}>
           <span className="dot"></span>

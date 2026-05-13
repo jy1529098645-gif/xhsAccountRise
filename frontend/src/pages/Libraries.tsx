@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import { fmtBytes, fmtRelative, fmtTime, platformLabel } from "../format";
 import PlatformPill from "../components/PlatformPill";
+import { PLATFORM_GUIDES, GITHUB_REPO } from "../catalog";
 import type { Library, Platform } from "../types";
 
 export default function Libraries() {
@@ -15,6 +16,7 @@ export default function Libraries() {
   const [working, setWorking] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [platform, setPlatform] = useState<string>("auto");
+  const [expandedGuide, setExpandedGuide] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   async function load() {
@@ -39,15 +41,13 @@ export default function Libraries() {
 
   async function runImport(f: File, displayName: string) {
     setImporting(true);
-    setImportStep("📤 上传文件…");
+    setImportStep("📤 上传 + 自动嗅探平台 + 建索引 + 跑 DNA…");
     setInfo(null);
     try {
-      // The /api/libraries/import endpoint does: upload + detect + activate + analyze in one shot
-      setImportStep("📦 解析 + 检测平台 + 建索引 + 跑 DNA…(10-30s)");
       const res = await api.importLibrary(f, displayName, platform);
       const platDetected = res.detected_platform
-        ? `（自动识别为 ${platformLabel(res.detected_platform)}）`
-        : `（用户指定 ${platformLabel(res.platform)}）`;
+        ? `（🪄 自动识别为 ${platformLabel(res.detected_platform)}）`
+        : `（你选了 ${platformLabel(res.platform)}）`;
       const dnaPart = res.dna_version ? ` · DNA v${res.dna_version}` : "";
       setInfo(`✓ 全部就绪 · ${res.lib_id} · ${res.notes_count.toLocaleString()} notes${dnaPart} ${platDetected}`);
       await load();
@@ -99,11 +99,11 @@ export default function Libraries() {
   return (
     <div>
       <div className="page-header">
-        <h1>📥 资源库 · 上传 / 管理</h1>
+        <h1>📥 资源库 · 拖一个 .db 进来就能用</h1>
         <p>
           {isEmpty
-            ? "把任意 .db 拖进下方区域，几秒后就能在 Composer 出稿。"
-            : `当前 ${libs.length} 个库 · 拖新文件进来直接添加 / 一键切换激活库`}
+            ? "把任意平台的 SQLite 数据库拖进来，自动检测平台 → 自动建索引 → 自动跑分析 → 直接去 Composer 出稿。"
+            : `当前 ${libs.length} 个库 · 拖新文件进来直接添加 / 行内可改平台`}
         </p>
       </div>
 
@@ -125,14 +125,14 @@ export default function Libraries() {
           <>
             <div className="big-icon">⏳</div>
             <h2>{importStep || "处理中…"}</h2>
-            <div className="muted">不要关闭页面</div>
+            <div className="muted">不要关闭页面（10-30s）</div>
           </>
         ) : (
           <>
             <div className="big-icon">📂</div>
-            <h2>把数据库拖进来 / 点击选择</h2>
+            <h2>把数据库拖到这里 / 点击选择</h2>
             <div className="muted">
-              支持 .db / .sqlite / .sqlite3 · 自动检测平台 · 自动跑 DNA 分析 + 激活 · 完事直接去 Composer 出稿
+              SQLite (.db / .sqlite / .sqlite3) · 自动检测平台 · 自动跑分析 + 激活 · 完事直接出稿
             </div>
           </>
         )}
@@ -140,16 +140,16 @@ export default function Libraries() {
 
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div>
-          <label style={{ marginBottom: 4 }}>平台来源</label>
+          <label style={{ marginBottom: 4 }}>来源平台</label>
           <select value={platform} onChange={e => setPlatform(e.target.value)} disabled={offline || importing}
             style={{ minWidth: 200 }}>
-            <option value="auto">🪄 自动检测（推荐）</option>
+            <option value="auto">🪄 自动检测（推荐，看 schema 字段）</option>
             {platforms.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
           </select>
         </div>
         <div className="muted" style={{ fontSize: 12, textAlign: "right", maxWidth: 360 }}>
-          自动检测看 SQLite schema 里的特征字段（note_id / aweme_id / bvid 等）匹配平台。
-          不准就在表格里手动改。
+          自动检测看 SQLite schema 里的特征字段命中得分（note_id / aweme_id / bvid / ...）。
+          检测不准就在表格里手动改。
         </div>
       </div>
 
@@ -167,11 +167,11 @@ export default function Libraries() {
             <tbody>
               {libs.map(l => (
                 <tr key={l.lib_id} style={l.active ? { background: "var(--primary-soft)" } : undefined}>
-                  <td>{l.active ? "★ active" : <span className="muted">—</span>}</td>
+                  <td>{l.active ? "★ 激活中" : <span className="muted">—</span>}</td>
                   <td>
                     {l.display_name}
                     <div style={{ marginTop: 3 }}>
-                      <code className="kbd">{l.lib_id}</code>
+                      <code className="kbd" style={{fontSize: 10}}>{l.lib_id}</code>
                     </div>
                   </td>
                   <td>
@@ -191,12 +191,12 @@ export default function Libraries() {
                       {!l.active && (
                         <button className="secondary" style={{ padding: "4px 8px", fontSize: 12 }}
                           disabled={offline || !!working}
-                          onClick={() => activate(l.lib_id)}>激活</button>
+                          onClick={() => activate(l.lib_id)}>切换为当前</button>
                       )}
                       <button className="secondary" style={{ padding: "4px 8px", fontSize: 12 }}
                         disabled={offline || working === l.lib_id}
                         onClick={() => analyze(l.lib_id)}>
-                        {working === l.lib_id ? "..." : "重跑 DNA"}
+                        {working === l.lib_id ? "..." : "重跑分析"}
                       </button>
                       {!l.active && (
                         <button className="ghost" style={{ padding: "4px 8px", fontSize: 12, color: "var(--danger)" }}
@@ -212,15 +212,46 @@ export default function Libraries() {
         </div>
       )}
 
-      <div className="card" style={{ background: "#fafafa" }}>
-        <h2>📖 怎么用 / 平台兼容性</h2>
-        <ol style={{ marginLeft: 20, lineHeight: 1.8, fontSize: 13 }}>
-          <li>把任意 SQLite .db 拖到上面的大框 → 自动检测平台、跑 DNA、激活 → 几十秒后去 Composer 用</li>
-          <li><b>平台自动识别</b>看 schema 里的关键字段：<code className="kbd">xsec_token</code>=小红书 / <code className="kbd">aweme_id</code>=抖音 / <code className="kbd">bvid</code>=B站 / 等</li>
-          <li><b>schema 要求</b>：核心表 <code className="kbd">notes</code>（含 title/body/liked_count/note_id）+ <code className="kbd">comments</code>。其他平台需要 ETL 映射到这个 schema。</li>
-          <li>已有库 → 行内可换平台 / 重跑 DNA / 切换激活 / 删除</li>
-          <li>跑稿 → <Link to="/composer">✍️ Composer</Link>；看历史 → <Link to="/drafts">📝 Drafts</Link></li>
-        </ol>
+      <div className="card">
+        <h2>📖 各平台数据库格式说明（点开看建议字段）</h2>
+        <p className="muted" style={{fontSize: 13}}>
+          本工具按一套统一 schema 工作：核心两张表 <code className="kbd">notes</code> + <code className="kbd">comments</code>。
+          不同平台的字段对应见下表。如果你的 .db 字段名不一致，可以写一个 SQL VIEW 别名或先 ETL。
+        </p>
+        <div className="platform-guides">
+          {PLATFORM_GUIDES.map(g => {
+            const expanded = expandedGuide === g.id;
+            return (
+              <div key={g.id} className="platform-guide-card"
+                onClick={() => setExpandedGuide(expanded ? null : g.id)}
+                style={{cursor: "pointer"}}>
+                <h3>{g.emoji} {g.label}</h3>
+                <div className="section">
+                  <b>必备表：</b><code>{g.expectedTables}</code>
+                </div>
+                <div className="section">
+                  <b>核心字段：</b>
+                  <div className="field-list">
+                    {g.keyFields.slice(0, expanded ? 99 : 4).map(f => <code key={f}>{f}</code>)}
+                    {!expanded && g.keyFields.length > 4 && <span className="muted" style={{fontSize: 11}}>+{g.keyFields.length - 4} 更多</span>}
+                  </div>
+                </div>
+                {expanded && (
+                  <>
+                    <div className="section"><b>每行内容：</b>{g.contentExamples}</div>
+                    <div className="section"><b>推荐数据源：</b>{g.bestSource}</div>
+                    {g.notes && <div className="section muted" style={{fontStyle: "italic"}}>💡 {g.notes}</div>}
+                  </>
+                )}
+                <div className="muted" style={{fontSize: 11, textAlign: "right"}}>{expanded ? "▴ 收起" : "▾ 展开详情"}</div>
+              </div>
+            );
+          })}
+        </div>
+        <p className="muted" style={{fontSize: 12, marginTop: 16}}>
+          没有现成 .db？可以参考 <a href={GITHUB_REPO + "#%E5%A4%9A%E5%B9%B3%E5%8F%B0--%E5%A4%9A-library"} target="_blank" rel="noreferrer">仓库 README</a> 里
+          的爬虫推荐，或者自己从 CSV / JSON / API 导出转成 SQLite。
+        </p>
       </div>
     </div>
   );

@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { fmtLikes } from "../format";
+import AgentConfigPanel, {
+  AgentSelection, defaultSelection, selectionToSpecs,
+} from "../components/AgentConfigPanel";
 import type { ComposeBundle, DraftCandidate, Library, Platform } from "../types";
 
 const ANGLES = ["教程", "痛点", "故事", "工具评测", "对比", "感悟", "数字", "种草", "建议"];
@@ -13,21 +16,11 @@ export default function Composer() {
   const [cta, setCta] = useState<"none" | "soft" | "strong">("soft");
   const [niche, setNiche] = useState("");
   const [extra, setExtra] = useState("");
-  const [platform, setPlatform] = useState<string>("");  // "" = inherit from active library
+  const [platform, setPlatform] = useState<string>("");
   const [platforms, setPlatforms] = useState<Platform[]>([]);
   const [activeLib, setActiveLib] = useState<Library | null>(null);
-
-  const [strategist, setStrategist] = useState("claude:opus");
-  const [drafters, setDrafters] = useState("claude:opus,deepseek,openai");
-  const [critics, setCritics] = useState("claude:sonnet,deepseek");
-  const [refiner, setRefiner] = useState("claude:opus");
-  const [synthesizer, setSynthesizer] = useState("claude:opus");
-  const [planner, setPlanner] = useState("claude:opus");
-  const [skipStrategist, setSkipStrategist] = useState(false);
-  const [skipCritics, setSkipCritics] = useState(false);
-  const [skipRefiner, setSkipRefiner] = useState(false);
-  const [skipSynthesizer, setSkipSynthesizer] = useState(false);
-  const [skipPlanner, setSkipPlanner] = useState(false);
+  const [agentConfig, setAgentConfig] = useState<AgentSelection>(defaultSelection());
+  const [showAgentConfig, setShowAgentConfig] = useState(false);
 
   const [running, setRunning] = useState(false);
   const [bundle, setBundle] = useState<ComposeBundle | null>(null);
@@ -45,17 +38,7 @@ export default function Composer() {
         topic, angle, target_length: length, cta_strength: cta,
         niche, extra_constraints: extra,
         platform: platform || undefined,
-        strategist_spec: strategist,
-        drafter_spec: drafters,
-        critic_spec: critics,
-        refiner_spec: refiner,
-        synthesizer_spec: synthesizer,
-        planner_spec: planner,
-        skip_strategist: skipStrategist,
-        skip_critics: skipCritics,
-        skip_refiner: skipRefiner,
-        skip_synthesizer: skipSynthesizer,
-        skip_planner: skipPlanner,
+        ...selectionToSpecs(agentConfig),
       });
       setBundle(res);
     } catch (e: any) {
@@ -63,31 +46,34 @@ export default function Composer() {
     } finally { setRunning(false); }
   }
 
+  const noBackend = !api.isConnected();
+
   return (
     <div>
       <div className="page-header">
-        <h1>Composer · 多 Agent 内容生成</h1>
-        <p>Strategist → Researcher → Drafter pool → Critic pool → Refiner → Synthesizer</p>
+        <h1>✍️ Composer · AI 起号助手</h1>
+        <p>填主题 → 点开始 → 多个 AI 协作出最佳稿件 + 发布计划</p>
       </div>
 
-      {!api.isConnected() && (
+      {noBackend && (
         <div className="banner warn">
-          后端没连上。顶部已经显示了启动命令；先把后端起起来再回来。
+          ⚠️ 本地后端没起来。看顶部黄色 banner 复制命令启动。
         </div>
       )}
-      {api.isConnected() && !activeLib && (
+      {!noBackend && !activeLib && (
         <div className="banner info">
-          <b>还没有激活的库。</b> 去 <Link to="/libraries">📥 资源库</Link> 拖一个 .db 进来再回这里。
+          <b>还没有数据库。</b> 去 <Link to="/libraries">📥 资源库</Link> 拖一个 .db 进来（10 秒就好），再回这里出稿。
         </div>
       )}
 
       <div className="compose-grid">
         <div className="compose-form card">
-          <h2>Brief</h2>
+          <h2>1. 主题</h2>
 
           <div style={{marginBottom: 8}}>
-            <label>主题（必填）</label>
-            <input value={topic} onChange={e => setTopic(e.target.value)} />
+            <label>这篇要写什么？</label>
+            <input value={topic} onChange={e => setTopic(e.target.value)}
+              placeholder="比如：降AI率技巧 / 论文怎么写引言 / 留学党赶ddl" />
           </div>
           <div className="row">
             <div style={{flex: 1}}>
@@ -97,50 +83,59 @@ export default function Composer() {
               </select>
             </div>
             <div style={{flex: 1}}>
-              <label>正文目标字数</label>
+              <label>正文字数</label>
               <input type="number" min={120} max={3000} step={50}
                 value={length} onChange={e => setLength(Number(e.target.value))} />
             </div>
           </div>
           <div className="row">
             <div style={{flex: 1}}>
-              <label>CTA 强度</label>
+              <label>结尾引导强度</label>
               <select value={cta} onChange={e => setCta(e.target.value as any)}>
-                <option value="none">none</option>
-                <option value="soft">soft</option>
-                <option value="strong">strong</option>
+                <option value="none">无（不刻意引流）</option>
+                <option value="soft">轻引导（评论/收藏）</option>
+                <option value="strong">强转化（求私信/求资源）</option>
               </select>
             </div>
             <div style={{flex: 1}}>
               <label>赛道（可选）</label>
-              <input value={niche} onChange={e => setNiche(e.target.value)} />
+              <input value={niche} onChange={e => setNiche(e.target.value)}
+                placeholder="比如：考研 / 留子 / 文献综述" />
             </div>
           </div>
           <div style={{marginBottom: 10}}>
-            <label>平台风格 {activeLib && <span className="muted">· 默认随激活库 ({activeLib.platform})</span>}</label>
+            <label>平台风格 {activeLib?.platform && <span className="muted">· 默认随激活库 ({activeLib.platform})</span>}</label>
             <select value={platform} onChange={e => setPlatform(e.target.value)}>
               <option value="">▾ 跟随激活库</option>
               {platforms.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
             </select>
           </div>
           <div style={{marginBottom: 10}}>
-            <label>附加要求（可选）</label>
+            <label>额外要求（可选）</label>
             <textarea value={extra} onChange={e => setExtra(e.target.value)}
-              placeholder='例如："不要露出 ChatGPT 字样"' />
+              placeholder='比如："不要露出 ChatGPT 字样" / "本帖要带降重案例数字"' />
           </div>
 
-          <h2 style={{marginTop: 20}}>Agent 配置</h2>
-          <p className="muted">spec 格式：<code className="kbd">claude:opus,deepseek,openai</code>。每家可选 <code className="kbd">opus/sonnet/haiku/chat/...</code></p>
+          <h2 style={{marginTop: 18}}>
+            <span style={{display: "inline-flex", justifyContent: "space-between", width: "100%"}}>
+              <span>2. AI 配置</span>
+              <button className="ghost" type="button" style={{fontSize: 12, padding: "2px 8px"}}
+                onClick={() => setShowAgentConfig(!showAgentConfig)}>
+                {showAgentConfig ? "▴ 收起" : "▾ 自定义"}
+              </button>
+            </span>
+          </h2>
+          {!showAgentConfig ? (
+            <div className="muted" style={{fontSize: 12, padding: 8, background: "#fafafa", borderRadius: 6}}>
+              当前用默认配置：6 个 AI 角色（策略师 / 起草团 ×3 / 审稿团 ×2 / 改稿师 / 融合师 / 计划师）。
+              想换便宜/最强阵容点上面「▾ 自定义」。
+            </div>
+          ) : (
+            <AgentConfigPanel selection={agentConfig} onChange={setAgentConfig} />
+          )}
 
-          <Field label="Strategist" value={strategist} onChange={setStrategist} skip={skipStrategist} setSkip={setSkipStrategist} />
-          <Field label="Drafter 池" value={drafters} onChange={setDrafters} />
-          <Field label="Critic 池" value={critics} onChange={setCritics} skip={skipCritics} setSkip={setSkipCritics} />
-          <Field label="Refiner" value={refiner} onChange={setRefiner} skip={skipRefiner} setSkip={setSkipRefiner} />
-          <Field label="Synthesizer (融合各家)" value={synthesizer} onChange={setSynthesizer} skip={skipSynthesizer} setSkip={setSkipSynthesizer} />
-          <Field label="Planner (出执行计划)" value={planner} onChange={setPlanner} skip={skipPlanner} setSkip={setSkipPlanner} />
-
-          <button onClick={run} disabled={running || !topic.trim()} style={{marginTop: 14, width: "100%"}}>
-            {running ? "Agent 运转中…(可能 30s-2min)" : "🚀 启动多 Agent 流水线"}
+          <button onClick={run} disabled={running || !topic.trim() || noBackend} style={{marginTop: 16, width: "100%", fontSize: 15, padding: "10px 0"}}>
+            {running ? "🤖 AI 们正在协作出稿中…(60-180s)" : "🚀 启动 AI 团队"}
           </button>
           {err && <div className="banner danger" style={{marginTop: 10}}>{err}</div>}
         </div>
@@ -148,31 +143,15 @@ export default function Composer() {
         <div>
           {!bundle && !running && (
             <div className="card muted" style={{textAlign: "center", padding: 40}}>
-              填好 brief 点上面那个按钮。生成后这里会显示完整的 agent 时间线 + 所有 LLM 候选 + critic 评分 + refiner 改写 + 最终选择。
+              <div style={{fontSize: 36, marginBottom: 10}}>👈</div>
+              填好左边的主题，点「🚀 启动 AI 团队」。
+              <br />
+              <span style={{fontSize: 12}}>结果会在这里展示：6 步 agent 时间线 + N 份候选 + 评审分数 + 改稿 + 融合最终稿 + 发布执行计划</span>
             </div>
           )}
           {bundle && <ComposeResult bundle={bundle} />}
         </div>
       </div>
-    </div>
-  );
-}
-
-function Field({label, value, onChange, skip, setSkip}: {
-  label: string; value: string; onChange: (v: string) => void;
-  skip?: boolean; setSkip?: (v: boolean) => void;
-}) {
-  return (
-    <div style={{marginBottom: 8}}>
-      <div className="spread">
-        <label style={{marginBottom: 0}}>{label}</label>
-        {setSkip && (
-          <label style={{fontSize: 11, color: "var(--muted)"}}>
-            <input type="checkbox" checked={!!skip} onChange={e => setSkip(e.target.checked)} /> 跳过
-          </label>
-        )}
-      </div>
-      <input value={value} onChange={e => onChange(e.target.value)} disabled={skip} />
     </div>
   );
 }
@@ -183,38 +162,46 @@ function ComposeResult({bundle}: {bundle: ComposeBundle}) {
       <div className="card">
         <div className="spread">
           <div>
-            <strong>Draft {bundle.draft_id}</strong>
+            <strong>本次出稿 #{bundle.draft_id.slice(0, 8)}</strong>
             <p className="muted">
-              elapsed {bundle.totals.elapsed_s}s · cost est ${bundle.totals.cost_usd.toFixed(4)} · {bundle.drafts.length} 候选
+              耗时 {bundle.totals.elapsed_s}s · 成本 ≈ ${bundle.totals.cost_usd.toFixed(4)} · {bundle.drafts.length} 份候选
             </p>
           </div>
-          <Link to={`/drafts/${bundle.draft_id}`}><button className="secondary">查看持久化详情</button></Link>
+          <Link to={`/drafts/${bundle.draft_id}`}><button className="secondary">详情</button></Link>
         </div>
       </div>
 
       {bundle.strategy && Object.keys(bundle.strategy).length > 0 && (
         <div className="card">
-          <h2>Strategist 策略</h2>
+          <h2>📋 策略 (Strategist)</h2>
           <div className="cards-grid">
-            <SBox label="推荐 hook" value={bundle.strategy.recommended_hook} />
+            <SBox label="hook 类型" value={bundle.strategy.recommended_hook} />
             <SBox label="开头钩子" value={bundle.strategy.opening_hook} />
             <SBox label="结尾 CTA" value={bundle.strategy.cta_phrase} />
-            <SBox label="语气" value={bundle.strategy.tone} />
+            <SBox label="语气方向" value={bundle.strategy.tone} />
           </div>
-          <h3>结构</h3>
-          <ol>{(bundle.strategy.structure ?? []).map((s, i) => <li key={i}>{s}</li>)}</ol>
-          <h3>避坑</h3>
-          <ul>{(bundle.strategy.avoid ?? []).map((s, i) => <li key={i}>{s}</li>)}</ul>
+          {(bundle.strategy.structure ?? []).length > 0 && (
+            <>
+              <h3>结构</h3>
+              <ol>{bundle.strategy.structure!.map((s, i) => <li key={i}>{s}</li>)}</ol>
+            </>
+          )}
+          {(bundle.strategy.avoid ?? []).length > 0 && (
+            <>
+              <h3>避坑</h3>
+              <ul>{bundle.strategy.avoid!.map((s, i) => <li key={i}>{s}</li>)}</ul>
+            </>
+          )}
         </div>
       )}
 
       <div className="card">
-        <h2>Agent 时间线</h2>
+        <h2>⏱ AI 时间线</h2>
         <div className="trace-list">
           {bundle.trace.map((s, i) => (
             <div key={i} className={`step ${s.error ? "err" : ""}`}>
               <span>#{s.step_index}</span>
-              <span className="agent">{s.agent_name}</span>
+              <span className="agent">{roleName(s.agent_name)}</span>
               <span>{s.error || s.output_summary}</span>
               <span style={{textAlign: "right"}}>{s.latency_ms}ms</span>
             </div>
@@ -223,17 +210,17 @@ function ComposeResult({bundle}: {bundle: ComposeBundle}) {
       </div>
 
       <div className="card">
-        <h2>RAG 参考</h2>
+        <h2>📚 参考爆款 ({bundle.rag.refs.length})</h2>
         <ol>
-          {bundle.rag.refs.map(r => (
+          {bundle.rag.refs.slice(0, 5).map(r => (
             <li key={r.note_id}>[{fmtLikes(r.likes)} likes] {r.title}</li>
           ))}
         </ol>
-        <p className="muted">+ {bundle.rag.comments_count} 条评论 + hooks: {bundle.rag.hooks.join(", ")}</p>
+        <p className="muted" style={{fontSize: 12}}>+ {bundle.rag.comments_count} 条用户原话评论 + {bundle.rag.hooks.length} 个 hook 模板</p>
       </div>
 
       <div className="card">
-        <h2>Drafter 候选 ({bundle.drafts.length})</h2>
+        <h2>📝 N 份候选 (起草团 + 审稿团)</h2>
         <div className="candidate-grid">
           {bundle.drafts.map(c => <Candidate key={c.candidate_id} c={c} />)}
         </div>
@@ -241,7 +228,7 @@ function ComposeResult({bundle}: {bundle: ComposeBundle}) {
 
       {bundle.refined && (
         <div className="card">
-          <h2>Refiner 改写</h2>
+          <h2>✏️ 改稿 (Refiner)</h2>
           <div className="candidate-grid">
             <Candidate c={bundle.refined} />
           </div>
@@ -250,7 +237,7 @@ function ComposeResult({bundle}: {bundle: ComposeBundle}) {
 
       {bundle.final && (
         <div className="card">
-          <h2>★ Final</h2>
+          <h2>★ 最终稿 (Synthesizer 融合)</h2>
           <div className="candidate-grid">
             <Candidate c={bundle.final} highlighted />
           </div>
@@ -262,14 +249,36 @@ function ComposeResult({bundle}: {bundle: ComposeBundle}) {
   );
 }
 
+const ROLE_LABELS: Record<string, string> = {
+  strategist: "策略师",
+  researcher: "调研员",
+  drafter: "起草",
+  critic: "审稿",
+  refiner: "改稿师",
+  synthesizer: "融合师",
+  planner: "计划师",
+};
+function roleName(agentName: string): string {
+  const [base, llm] = agentName.split(":");
+  const label = ROLE_LABELS[base] ?? base;
+  return llm ? `${label}·${llm}` : label;
+}
+
+function SBox({label, value}: {label: string; value?: string}) {
+  return (
+    <div className="stat-card">
+      <div className="label">{label}</div>
+      <div style={{fontSize: 13, marginTop: 4, lineHeight: 1.5}}>{value || <em className="muted">—</em>}</div>
+    </div>
+  );
+}
+
 function PlanCard({plan}: {plan: any}) {
   return (
     <div className="card">
       <h2>📋 执行计划 (Planner)</h2>
       {plan.series_thesis && (
-        <p style={{fontStyle: "italic", color: "var(--muted)", marginBottom: 14}}>
-          主线：{plan.series_thesis}
-        </p>
+        <p style={{fontStyle: "italic", color: "var(--muted)", marginBottom: 14}}>主线：{plan.series_thesis}</p>
       )}
       {plan.publish_schedule?.length > 0 && (
         <>
@@ -290,7 +299,7 @@ function PlanCard({plan}: {plan: any}) {
       )}
       {plan.follow_up_angles?.length > 0 && (
         <>
-          <h3 style={{marginTop: 16}}>🔁 后续选题 ({plan.follow_up_angles.length})</h3>
+          <h3 style={{marginTop: 14}}>🔁 后续选题 ({plan.follow_up_angles.length})</h3>
           {plan.follow_up_angles.map((a: any, i: number) => (
             <div key={i} style={{padding: "10px 12px", background: "#fafafa", borderRadius: 6, marginBottom: 8}}>
               <div style={{fontWeight: 600}}>{a.title}</div>
@@ -305,21 +314,14 @@ function PlanCard({plan}: {plan: any}) {
       )}
       {plan.engagement_tactics?.length > 0 && (
         <>
-          <h3 style={{marginTop: 16}}>💬 互动运营建议</h3>
+          <h3 style={{marginTop: 14}}>💬 互动运营建议</h3>
           <ol style={{marginLeft: 20, lineHeight: 1.7}}>
-            {plan.engagement_tactics.map((t: string, i: number) => <li key={i}>{t}</li>)}
+            {plan.engagement_tactics.map((t: any, i: number) =>
+              <li key={i}>{typeof t === "string" ? t : (t?.tactic ?? JSON.stringify(t))}</li>
+            )}
           </ol>
         </>
       )}
-    </div>
-  );
-}
-
-function SBox({label, value}: {label: string; value?: string}) {
-  return (
-    <div className="stat-card">
-      <div className="label">{label}</div>
-      <div style={{fontSize: 13, marginTop: 4, lineHeight: 1.5}}>{value || <em className="muted">—</em>}</div>
     </div>
   );
 }
@@ -341,20 +343,23 @@ function Candidate({c, highlighted}: {c: DraftCandidate; highlighted?: boolean})
     <div className={`cand ${highlighted ? "final" : ""}`}>
       <div className="llm">{c.llm}</div>
       <div className="muted" style={{fontSize: 11}}>
-        {c.latency_ms}ms · tok {tok.input ?? 0}/{tok.output ?? 0} · ${c.cost_estimate_usd?.toFixed(4) ?? "0"} ·
-        self {p.self_score?.toFixed(1)} {c.critique_avg != null && <>· avg <b>{c.critique_avg.toFixed(1)}</b></>}
+        {c.latency_ms}ms · {tok.input ?? 0}↑/{tok.output ?? 0}↓ · ${c.cost_estimate_usd?.toFixed(4) ?? "0"} ·
+        自评 {p.self_score?.toFixed(1)} {c.critique_avg != null && <>· 审稿 <b>{c.critique_avg.toFixed(1)}</b></>}
       </div>
       <div className="title">{p.title}</div>
       <div className="body">{p.body}</div>
       <div style={{marginTop: 8}}>
         {p.tags?.map(t => <span key={t} className="tag-pill">#{t}</span>)}
       </div>
-      {p.cover_prompt && <div className="cover"><b>cover：</b>{p.cover_prompt}</div>}
+      {p.cover_prompt && <div className="cover"><b>封面图描述：</b>{p.cover_prompt}</div>}
       {Object.keys(scores).length > 0 && (
         <div className="scores">
           {(["hook","language_fit","shareability","brand_safety","structural_clarity"] as const).map(k => (
             <div key={k} className="s">
-              <div className="lbl">{k.split("_")[0]}</div>
+              <div className="lbl">{({
+                hook: "钩子", language_fit: "口语", shareability: "转发",
+                brand_safety: "安全", structural_clarity: "结构",
+              } as any)[k]}</div>
               <div className="val">{(scores as any)[k]?.toFixed(1) ?? "—"}</div>
             </div>
           ))}
@@ -364,7 +369,7 @@ function Candidate({c, highlighted}: {c: DraftCandidate; highlighted?: boolean})
         <div style={{marginTop: 8, fontSize: 11.5, color: "#555"}}>
           {c.critiques.map((cr, i) => (
             <div key={i} style={{padding: "4px 6px", borderTop: "1px solid #f0f0f0"}}>
-              <b style={{color: "var(--primary)"}}>{cr.critic_llm}</b> overall {cr.overall.toFixed(1)} ·
+              <b style={{color: "var(--primary)"}}>{cr.critic_llm}</b> 综合 {cr.overall.toFixed(1)} ·
               {cr.risk_flags?.length > 0 && cr.risk_flags.map((f, j) =>
                 <span key={j} style={{display: "inline-block", padding: "1px 6px", background: "var(--warn-soft)", color: "var(--warn)", borderRadius: 8, fontSize: 10.5, margin: "0 4px"}}>{f}</span>
               )}
