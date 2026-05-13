@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { fmtLikes } from "../format";
 import AgentConfigPanel, {
@@ -7,7 +7,7 @@ import AgentConfigPanel, {
 } from "../components/AgentConfigPanel";
 import ProgressTimeline, { Stage as TimelineStage } from "../components/ProgressTimeline";
 import NextStepCard from "../components/NextStepCard";
-import { humaniseError } from "../errors";
+import { humaniseError, humaniseErrorAsync } from "../errors";
 import type { ComposeBundle, DraftCandidate, Library, Platform } from "../types";
 
 const COMPOSE_STAGES: TimelineStage[] = [
@@ -44,6 +44,35 @@ export default function Composer() {
     api.libraries().then(ls => setActiveLib(ls.find(l => l.active) ?? null)).catch(() => {});
   }, []);
 
+  // ---- Pre-fill from Strategy "出这一篇 →" navigation ---------------------
+  const location = useLocation();
+  const navigate = useNavigate();
+  const prefilled = useRef(false);
+  const [prefillNote, setPrefillNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (prefilled.current) return;
+    const st: any = location.state || {};
+    const bf = st.briefPrefill;
+    if (!bf) return;
+    prefilled.current = true;
+    if (bf.topic) setTopic(bf.topic);
+    if (bf.angle) setAngle(bf.angle);
+    if (typeof bf.target_length === "number") setLength(bf.target_length);
+    if (bf.cta_strength) setCta(bf.cta_strength);
+    if (bf.niche) setNiche(bf.niche);
+    if (bf.extra_constraints) setExtra(bf.extra_constraints);
+    if (bf.platform) setPlatform(bf.platform);
+    setPrefillNote(`已从「起号策略」一键带入：「${bf.topic || "（无标题）"}」`);
+    // Strip state so a refresh doesn't re-prefill / re-run.
+    navigate(location.pathname, { replace: true, state: {} });
+    if (st.runImmediately) {
+      // Small delay so the state updates take effect first.
+      setTimeout(() => { run(); }, 50);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state]);
+
   async function run() {
     setRunning(true); setErr(null); setBundle(null);
     try {
@@ -55,7 +84,7 @@ export default function Composer() {
       });
       setBundle(res);
     } catch (e: any) {
-      setErr(humaniseError(e));
+      setErr(await humaniseErrorAsync(e));
     } finally { setRunning(false); }
   }
 
@@ -76,6 +105,11 @@ export default function Composer() {
       {!noBackend && !activeLib && (
         <div className="banner info">
           <b>还没有数据库。</b> 去 <Link to="/libraries">📥 资源库</Link> 拖一个 .db 进来（10 秒就好），再回这里出稿。
+        </div>
+      )}
+      {prefillNote && (
+        <div className="banner info" style={{background: "var(--primary-soft)", borderColor: "var(--primary)"}}>
+          ✨ {prefillNote} · 你可以再微调一下下面字段，或者直接 ▶️ 开始
         </div>
       )}
 

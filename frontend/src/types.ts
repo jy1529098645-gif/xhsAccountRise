@@ -196,6 +196,7 @@ export interface TopicSlotDTO {
   outline: string[];
   materials_needed: string[];
   intent: string;
+  body_draft?: string;
 }
 
 export interface WeekThemeDTO {

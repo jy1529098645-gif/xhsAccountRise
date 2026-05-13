@@ -55,6 +55,8 @@ class TopicSlot:
     outline: list[str] = field(default_factory=list)
     materials_needed: list[str] = field(default_factory=list)
     intent: str = ""                   # 拉新 / 互动 / 转化 / 沉淀
+    body_draft: str = ""               # 300-600-char first-pass body the
+                                       # user can tweak then hand to Composer.
 
 
 @dataclass

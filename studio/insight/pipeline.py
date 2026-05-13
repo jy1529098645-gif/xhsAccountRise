@@ -599,8 +599,10 @@ def consensus_summary_for_prompt(consensus: dict[str, Any] | None) -> str:
 
 def full_reference_block_for_prompt() -> str:
     """Combined reference block: the tool's own consensus *and* any integrated
-    report (gpt-4o-fused external uploads). Used by Strategy / Composer prompts
-    so downstream agents see everything the user has assembled.
+    report (gpt-4o-fused external uploads), *and* — if no integration done
+    yet — the raw text of any externally uploaded reports (each trimmed).
+    Used by Strategy / Composer prompts so downstream agents see everything
+    the user has assembled, even if they haven't pressed 「整合」 yet.
     """
     parts: list[str] = []
     own = latest_completed_for_current_library()
@@ -608,13 +610,38 @@ def full_reference_block_for_prompt() -> str:
     if own_summary:
         parts.append(own_summary)
     try:
-        from .external import latest_integrated_for_current_library
+        from .external import latest_integrated_for_current_library, list_external_reports
         integ = latest_integrated_for_current_library()
     except Exception:
         integ = None
+        list_external_reports = None  # type: ignore[assignment]
     integ_summary = consensus_summary_for_prompt(integ)
     if integ_summary:
         parts.append("【用户上传 / 整合的报告 · GPT-4o 融合】\n" + integ_summary)
+    elif list_external_reports is not None:
+        # No integration done yet — splice in raw external reports (capped).
+        try:
+            rows = list_external_reports()  # type: ignore[misc]
+        except Exception:
+            rows = []
+        if rows:
+            from .external import get_external_report
+            blocks: list[str] = []
+            CHAR_CAP = 3000  # per report
+            for r in rows[:5]:  # first 5 by upload time
+                full = get_external_report(r["report_id"]) or {}
+                body = (full.get("content") or "").strip()
+                if not body:
+                    continue
+                clipped = body if len(body) <= CHAR_CAP else (
+                    body[:CHAR_CAP] + f"\n\n…[已截断，原文 {len(body)} 字]"
+                )
+                blocks.append(f"━ 用户上传报告《{r['name']}》━\n{clipped}")
+            if blocks:
+                parts.append(
+                    "【用户上传的外部报告 · 原文，尚未做整合，先直接当参考】\n\n"
+                    + "\n\n".join(blocks)
+                )
     return "\n\n".join(parts)
 
 

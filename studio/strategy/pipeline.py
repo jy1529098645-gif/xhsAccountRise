@@ -166,6 +166,7 @@ _TOPICS_SCHEMA = {
                     "outline": {"type": "array", "items": {"type": "string"}},
                     "materials_needed": {"type": "array", "items": {"type": "string"}},
                     "intent": {"type": "string"},
+                    "body_draft": {"type": "string"},
                 },
             },
         },
@@ -301,9 +302,11 @@ async def expand(
     )
     scheduler_gen = registry.build(scheduler_spec)[0]
     try:
+        # Bumped to 16k because we now ask for body_draft per slot (300-600
+        # chars × N slots can easily push past 8k).
         sched_parsed = await _call_json(
             scheduler_gen, prompts.SCHEDULER_SYSTEM, sched_user,
-            max_tokens=8192, tool_name="submit_schedule", schema=_SCHEDULE_SCHEMA,
+            max_tokens=16000, tool_name="submit_schedule", schema=_SCHEDULE_SCHEMA,
         )
     except Exception as e:
         sched_parsed = {"_error": str(e)}
@@ -332,6 +335,7 @@ async def expand(
             outline=[str(x) for x in (s.get("outline") or [])],
             materials_needed=[str(x) for x in (s.get("materials_needed") or [])],
             intent=str(s.get("intent", "")),
+            body_draft=str(s.get("body_draft", "")),
         )
         for s in schedule_raw
     ]

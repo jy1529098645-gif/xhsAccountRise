@@ -5,7 +5,7 @@ import { fmtRelative, platformLabel } from "../format";
 import PlatformPill from "../components/PlatformPill";
 import ProgressTimeline, { Stage as TimelineStage } from "../components/ProgressTimeline";
 import NextStepCard from "../components/NextStepCard";
-import { humaniseError } from "../errors";
+import { humaniseError, humaniseErrorAsync } from "../errors";
 import { LLM_CATALOG } from "../catalog";
 import type {
   AccountInputDTO, Library, Platform, StrategicDirectionDTO, StrategyPackDTO,
@@ -180,7 +180,7 @@ export default function Strategy() {
       setLastFailedAction(null);
       setPhase("input");
     } catch (e: any) {
-      setAutofillErr(humaniseError(e));
+      setAutofillErr(await humaniseErrorAsync(e));
       setLastFailedAction({ kind: "autofill" });
       setPhase("input");
     }
@@ -208,7 +208,7 @@ export default function Strategy() {
       navigate(`/strategy/${res.pack_id}`, { replace: true });
       api.listStrategies().then(setHistory).catch(() => {});
     } catch (e: any) {
-      setErr(humaniseError(e)); setInfo(null);
+      setErr(await humaniseErrorAsync(e)); setInfo(null);
       setLastFailedAction({ kind: "propose" });
       setPhase("input");
     }
@@ -236,7 +236,7 @@ export default function Strategy() {
       // Refresh history list
       api.listStrategies().then(setHistory).catch(() => {});
     } catch (e: any) {
-      setErr(humaniseError(e)); setInfo(null);
+      setErr(await humaniseErrorAsync(e)); setInfo(null);
       setLastFailedAction({ kind: "expand", idx });
       setPhase("directions");
     }
@@ -732,6 +732,29 @@ function DirectionsList({directions, chosenIdx, onPick, onReset}: {
 
 function PackView({pack, onReset}: {pack: StrategyPackDTO; onReset: () => void}) {
   const totalSlots = pack.schedule.length;
+  const navigate = useNavigate();
+
+  function goCompose(slot: any, runImmediately: boolean) {
+    // Build a Brief from the slot + the chosen direction. Composer will
+    // read this from location.state and pre-fill the form.
+    const briefPrefill = {
+      topic: slot.title || "",
+      angle: slot.angle || "",
+      target_length: 600,
+      cta_strength: slot.intent || "soft",
+      niche: pack.chosen_direction?.positioning_statement || "",
+      extra_constraints: [
+        slot.hook_type ? `hook_type: ${slot.hook_type}` : "",
+        slot.outline?.length ? "大纲：" + slot.outline.join(" / ") : "",
+        slot.materials_needed?.length ? "需要材料：" + slot.materials_needed.join("、") : "",
+        slot.body_draft ? `已有初稿：\n${slot.body_draft}` : "",
+        pack.chosen_direction?.target_audience ? `目标受众：${pack.chosen_direction.target_audience}` : "",
+      ].filter(Boolean).join("\n\n"),
+      platform: pack.platform,
+    };
+    navigate("/composer", { state: { briefPrefill, runImmediately } });
+  }
+
   return (
     <div>
       <div className="spread" style={{marginBottom: 12}}>
@@ -775,41 +798,19 @@ function PackView({pack, onReset}: {pack: StrategyPackDTO; onReset: () => void})
       )}
 
       <div className="card">
-        <h2>📝 全部 {totalSlots} 篇排期</h2>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>周</th><th>时段</th><th>标题</th><th>角度</th><th>意图</th><th>材料</th>
-            </tr>
-          </thead>
-          <tbody>
-            {pack.schedule.map((s, i) => (
-              <tr key={i}>
-                <td className="num">W{s.week}<br/><span className="muted" style={{fontSize: 11}}>{DOW_LABELS[s.day_of_week] ?? `D${s.day_of_week}`}</span></td>
-                <td><b>{s.publish_slot || "—"}</b></td>
-                <td>
-                  <div style={{fontWeight: 600}}>{s.title}</div>
-                  {s.title_variants?.length > 0 && (
-                    <div className="muted" style={{fontSize: 11}}>变体：{s.title_variants.slice(0, 2).join(" / ")}</div>
-                  )}
-                  {s.outline?.length > 0 && (
-                    <details style={{marginTop: 4}}>
-                      <summary style={{cursor: "pointer", fontSize: 11.5, color: "var(--muted)"}}>▾ 内容大纲</summary>
-                      <ul style={{margin: "4px 0 0 18px", fontSize: 12, lineHeight: 1.6}}>
-                        {s.outline.map((o, j) => <li key={j}>{o}</li>)}
-                      </ul>
-                    </details>
-                  )}
-                </td>
-                <td><span className="tag-pill">{s.angle}</span><br/><span className="tag-pill">{s.hook_type}</span></td>
-                <td><span className="tag-pill" style={{background: INTENT_COLORS[s.intent] ?? "#f4f4f4"}}>{s.intent}</span></td>
-                <td className="muted" style={{fontSize: 11.5}}>
-                  {s.materials_needed?.map((m, j) => <div key={j}>· {m}</div>)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="spread" style={{alignItems: "flex-start", marginBottom: 8}}>
+          <div>
+            <h2 style={{margin: 0}}>📝 全部 {totalSlots} 篇 · 含初稿正文</h2>
+            <p className="muted" style={{fontSize: 12, margin: "4px 0 0"}}>
+              AI 已经给每一篇写好可发布的 300-600 字初稿。点「出这一篇 →」会把它丢进 Composer，多 Agent 协作出最终发布稿。
+            </p>
+          </div>
+        </div>
+        <div style={{display: "grid", gap: 12}}>
+          {pack.schedule.map((s, i) => (
+            <SlotCard key={i} slot={s} idx={i} onCompose={goCompose} />
+          ))}
+        </div>
       </div>
 
       {pack.materials_checklist.length > 0 && (
@@ -844,6 +845,76 @@ function PackView({pack, onReset}: {pack: StrategyPackDTO; onReset: () => void})
         hint="基于这份策略 + 报告，Composer 会用多 Agent 协作出完整稿件 + 发布计划。"
         to="/composer"
       />
+    </div>
+  );
+}
+
+function SlotCard({slot, idx, onCompose}: {
+  slot: any; idx: number;
+  onCompose: (s: any, runImmediately: boolean) => void;
+}) {
+  return (
+    <div style={{padding: 14, borderRadius: 10, border: "1px solid var(--border)",
+                 background: "#fff"}}>
+      <div className="row" style={{justifyContent: "space-between", alignItems: "flex-start", gap: 12}}>
+        <div style={{flex: 1, minWidth: 0}}>
+          <div className="row" style={{gap: 8, marginBottom: 4, flexWrap: "wrap"}}>
+            <span className="tag-pill" style={{background: "var(--primary-soft)", color: "var(--primary)"}}>
+              W{slot.week} · {DOW_LABELS[slot.day_of_week] ?? `D${slot.day_of_week}`}
+            </span>
+            {slot.publish_slot && <span className="tag-pill">{slot.publish_slot}</span>}
+            <span className="tag-pill" style={{background: INTENT_COLORS[slot.intent] ?? "#f4f4f4"}}>{slot.intent}</span>
+            {slot.angle && <span className="tag-pill">{slot.angle}</span>}
+            {slot.hook_type && <span className="tag-pill">{slot.hook_type}</span>}
+            <span className="muted" style={{fontSize: 11}}>#{idx + 1}</span>
+          </div>
+          <div style={{fontSize: 15.5, fontWeight: 700, lineHeight: 1.4}}>{slot.title || "（无标题）"}</div>
+          {slot.title_variants?.length > 0 && (
+            <div className="muted" style={{fontSize: 11.5, marginTop: 3}}>
+              变体 ：{slot.title_variants.slice(0, 3).join(" / ")}
+            </div>
+          )}
+        </div>
+        <button onClick={() => onCompose(slot, false)} style={{whiteSpace: "nowrap"}}>
+          ✍️ 出这一篇 →
+        </button>
+      </div>
+
+      {slot.body_draft && (
+        <details open style={{marginTop: 10}}>
+          <summary style={{cursor: "pointer", fontSize: 12.5, fontWeight: 600, color: "var(--primary)"}}>
+            📝 AI 初稿正文（{slot.body_draft.length} 字） · 用户改完直接发或交 Composer 润色
+          </summary>
+          <div style={{
+            marginTop: 8, padding: "10px 12px",
+            background: "#fafafa", borderRadius: 6,
+            fontSize: 13.5, lineHeight: 1.75, whiteSpace: "pre-wrap",
+            borderLeft: "3px solid var(--primary)",
+          }}>{slot.body_draft}</div>
+        </details>
+      )}
+
+      {(slot.outline?.length > 0 || slot.materials_needed?.length > 0) && (
+        <div style={{marginTop: 10, display: "grid",
+                     gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 12}}>
+          {slot.outline?.length > 0 && (
+            <div style={{padding: 8, background: "#fafafa", borderRadius: 6}}>
+              <b style={{fontSize: 11.5, color: "#555"}}>内容大纲</b>
+              <ul style={{margin: "4px 0 0 16px", lineHeight: 1.65}}>
+                {slot.outline.map((o: string, j: number) => <li key={j}>{o}</li>)}
+              </ul>
+            </div>
+          )}
+          {slot.materials_needed?.length > 0 && (
+            <div style={{padding: 8, background: "#fafafa", borderRadius: 6}}>
+              <b style={{fontSize: 11.5, color: "#555"}}>需要的素材</b>
+              <ul style={{margin: "4px 0 0 16px", lineHeight: 1.65}}>
+                {slot.materials_needed.map((m: string, j: number) => <li key={j}>{m}</li>)}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
