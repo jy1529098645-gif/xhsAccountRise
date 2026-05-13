@@ -41,6 +41,7 @@ from ..rag import build_index, retrieve
 from ..strategy import pipeline as strategy_pipeline
 from ..strategy.models import AccountInput
 from ..insight import pipeline as insight_pipeline
+from ..insight import external as external_reports
 
 load_dotenv(dotenv_path=config.REPO_ROOT / ".env", override=True)
 
@@ -663,6 +664,86 @@ def get_insight(report_id: str) -> dict[str, Any]:
     rep_pid = r.get("project_id")
     if rep_pid and rep_pid != pid:
         raise HTTPException(404, "report not found in current project")
+    return r
+
+
+# ---------------- external (user-uploaded) reports + integration ----------
+
+class ExternalReportUpload(BaseModel):
+    name: str
+    content: str
+    library_id: str | None = None
+    source: str = "粘贴文本"
+    format: str = "text"
+
+
+@app.post("/api/external_reports")
+def upload_external_report(req: ExternalReportUpload) -> dict[str, Any]:
+    if not req.name.strip():
+        raise HTTPException(400, "name is required")
+    if not req.content.strip():
+        raise HTTPException(400, "content is required")
+    return external_reports.save_external_report(
+        name=req.name.strip(), content=req.content,
+        library_id=req.library_id, source=req.source, format=req.format,
+    )
+
+
+@app.get("/api/external_reports")
+def list_external_reports_api(library_id: str | None = None) -> list[dict[str, Any]]:
+    return external_reports.list_external_reports(library_id=library_id)
+
+
+@app.get("/api/external_reports/{report_id}")
+def get_external_report_api(report_id: str) -> dict[str, Any]:
+    r = external_reports.get_external_report(report_id)
+    if not r:
+        raise HTTPException(404, "external report not found")
+    return r
+
+
+@app.delete("/api/external_reports/{report_id}")
+def delete_external_report_api(report_id: str) -> dict[str, bool]:
+    ok = external_reports.delete_external_report(report_id)
+    if not ok:
+        raise HTTPException(404, "external report not found")
+    return {"deleted": True}
+
+
+class IntegrationRequest(BaseModel):
+    source_ids: list[str]
+    library_id: str | None = None
+    include_consensus_report_id: str | None = None
+    model_spec: str = "openai:gpt-4o"
+
+
+@app.post("/api/external_reports/integrate")
+async def integrate_external_reports_api(req: IntegrationRequest) -> dict[str, Any]:
+    if not req.source_ids:
+        raise HTTPException(400, "source_ids is required (at least one external report)")
+    try:
+        return await external_reports.integrate(
+            req.source_ids,
+            library_id=req.library_id,
+            include_consensus_report_id=req.include_consensus_report_id,
+            model_spec=req.model_spec,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+
+
+@app.get("/api/integrated_reports")
+def list_integrated_api(library_id: str | None = None) -> list[dict[str, Any]]:
+    return external_reports.list_integrated_reports(library_id=library_id)
+
+
+@app.get("/api/integrated_reports/{integrated_id}")
+def get_integrated_api(integrated_id: str) -> dict[str, Any]:
+    r = external_reports.get_integrated_report(integrated_id)
+    if not r:
+        raise HTTPException(404, "integrated report not found")
     return r
 
 

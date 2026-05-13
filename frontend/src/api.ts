@@ -247,6 +247,48 @@ export const api = {
     ).catch(() => []),
   getInsight: (reportId: string) => getJson<InsightReportDTO>(`/api/insight/${reportId}`),
 
+  // External reports (user-uploaded) -------------------
+  uploadExternalReport: (req: {
+    name: string; content: string;
+    library_id?: string | null; source?: string; format?: string;
+  }) => postJson<{
+    report_id: string; name: string; source: string; format: string;
+    library_id: string | null; uploaded_at: number; content_chars: number;
+  }>("/api/external_reports", req),
+  listExternalReports: (libraryId?: string) =>
+    getJson<{
+      report_id: string; library_id: string | null; name: string;
+      source: string; format: string; content_chars: number; uploaded_at: number;
+    }[]>(`/api/external_reports${libraryId ? `?library_id=${libraryId}` : ""}`).catch(() => []),
+  getExternalReport: (id: string) =>
+    getJson<{ report_id: string; name: string; content: string; format: string; source: string; library_id: string | null; uploaded_at: number }>(`/api/external_reports/${id}`),
+  deleteExternalReport: async (id: string) => {
+    const backend = backendUrl();
+    if (!backend) throw new HttpError(0, "需要本地后端");
+    const res = await fetch(`${backend}/api/external_reports/${id}`, { method: "DELETE" });
+    if (!res.ok) throw new HttpError(res.status, await res.text());
+    return res.json();
+  },
+  integrateExternalReports: (req: {
+    source_ids: string[]; library_id?: string | null;
+    include_consensus_report_id?: string | null;
+    model_spec?: string;
+  }) => postJson<{
+    integrated_id: string; status: string; elapsed_s: number;
+    source_ids: string[]; source_names: string[];
+    consensus: any;  // same shape as insight consensus
+  }>("/api/external_reports/integrate", req),
+  listIntegratedReports: (libraryId?: string) =>
+    getJson<{
+      integrated_id: string; library_id: string | null; created_at: number;
+      status: string; source_ids: string[]; elapsed_s: number | null; error: string | null;
+    }[]>(`/api/integrated_reports${libraryId ? `?library_id=${libraryId}` : ""}`).catch(() => []),
+  getIntegratedReport: (id: string) =>
+    getJson<{
+      integrated_id: string; library_id: string | null; created_at: number;
+      status: string; source_ids: string[]; elapsed_s: number; consensus: any;
+    }>(`/api/integrated_reports/${id}`),
+
   // Strategy -----------------
   autofillStrategy: (opts?: { personal_hint?: string; constraints_hint?: string;
                               claude_spec?: string; openai_spec?: string;

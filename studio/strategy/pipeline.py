@@ -88,8 +88,8 @@ async def propose(inp: AccountInput, positioner_spec: str = "claude:opus") -> di
     lib_id = library.active_lib_id()
     dna = _latest_dna_payload()
 
-    from ..insight.pipeline import latest_completed_for_current_library, consensus_summary_for_prompt
-    report_ctx = consensus_summary_for_prompt(latest_completed_for_current_library())
+    from ..insight.pipeline import full_reference_block_for_prompt
+    report_ctx = full_reference_block_for_prompt()
     report_block = f"\n\n{report_ctx}\n" if report_ctx else ""
 
     user_text = (
@@ -97,7 +97,7 @@ async def propose(inp: AccountInput, positioner_spec: str = "claude:opus") -> di
         f"{report_block}\n"
         f"【该平台爆款 DNA】\n{prompts.dna_blurb(dna)}\n\n"
         f"输出 3-5 个差异化的账号定位方向。"
-        + ("\n**优先采纳「共识分析报告」中提到的方向和机会作为候选**。"
+        + ("\n**优先采纳上面所有「分析 / 整合报告」中提到的方向和机会作为候选**（包括用户自己上传的外部报告整合稿，如有）。"
            if report_ctx else "")
     )
     gen = registry.build(positioner_spec)[0]
@@ -242,8 +242,8 @@ async def expand(
     dna = _latest_dna_payload()
     topic_count = inp.cycle_weeks * inp.posts_per_week
 
-    from ..insight.pipeline import latest_completed_for_current_library, consensus_summary_for_prompt
-    report_ctx = consensus_summary_for_prompt(latest_completed_for_current_library())
+    from ..insight.pipeline import full_reference_block_for_prompt
+    report_ctx = full_reference_block_for_prompt()
     report_block = f"\n\n{report_ctx}\n" if report_ctx else ""
 
     # --- Topic-gen pool (parallel) ---
@@ -258,7 +258,7 @@ async def expand(
         f"【用户运营约束】\n{prompts.input_blurb(inp)}\n\n"
         f"【该平台 DNA】\n{prompts.dna_blurb(dna)}\n\n"
         f"请输出 {max(topic_count, 12)} 个候选选题。"
-        + ("\n**报告里提到的内容机会必须覆盖到选题里。**"
+        + ("\n**所有上面分析 / 整合报告里提到的内容机会都必须覆盖到选题里。**"
            if report_ctx else "")
     )
     topicgens = registry.build(topicgen_spec)

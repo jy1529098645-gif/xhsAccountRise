@@ -13,6 +13,7 @@ import Libraries from "./pages/Libraries";
 import Settings from "./pages/Settings";
 import Strategy from "./pages/Strategy";
 import InsightReport from "./pages/InsightReport";
+import IntegratedReport from "./pages/IntegratedReport";
 import Reports from "./pages/Reports";
 
 export default function App() {
@@ -95,6 +96,7 @@ export default function App() {
           <Route path="/drafts/:id" element={<DraftDetail />} />
           <Route path="/libraries" element={<Libraries />} />
           <Route path="/insight/:id" element={<InsightReport />} />
+          <Route path="/integrated/:id" element={<IntegratedReport />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<div className="card">404 · 页面不存在</div>} />
         </Routes>

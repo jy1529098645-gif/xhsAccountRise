@@ -185,9 +185,10 @@ async def autofill(
     t0 = time.time()
     dna_context = strat_prompts.dna_blurb(dna)
 
-    # Include latest insight report (Claude × OpenAI consensus) as 强参考
-    from ..insight.pipeline import latest_completed_for_current_library, consensus_summary_for_prompt
-    report_ctx = consensus_summary_for_prompt(latest_completed_for_current_library())
+    # Include the tool's own consensus AND any integrated (user-uploaded) report
+    # as 强参考 — both must be threaded so the user's outside intel matters.
+    from ..insight.pipeline import full_reference_block_for_prompt
+    report_ctx = full_reference_block_for_prompt()
 
     report_block = f"\n\n{report_ctx}\n" if report_ctx else ""
 
@@ -200,7 +201,7 @@ async def autofill(
         f"  - 个人优势 (用户可能填这个): {personal_hint or '未填'}\n"
         f"  - 偏好约束 (用户可能填这个): {constraints_hint or '未填'}\n\n"
         "请按 system 给的 schema 拟一版起号初稿。"
-        + (" **务必结合上面的「共识分析报告」内容**——它是上一步双 AI 协作的产物，权重很高。"
+        + (" **务必结合上面所有的分析报告内容**（包括工具自动出的共识 + 用户上传整合的外部报告，如有），它们权重很高。"
            if report_ctx else "")
     )
 

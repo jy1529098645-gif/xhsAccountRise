@@ -95,6 +95,11 @@ export default function InsightReport() {
         </div>
       )}
 
+      {/* Launch-mode verdict — the #1 thing the user needs to know */}
+      {c.launch_mode && c.launch_mode.recommendation && (
+        <LaunchModeCard mode={c.launch_mode} />
+      )}
+
       {/* Consensus findings */}
       {c.consensus_findings?.length > 0 && (
         <div className="card">
@@ -227,8 +232,24 @@ function AIReportBlock({report, accentColor}: {report: any; accentColor: string}
   if (!report || typeof report !== "object") {
     return <p className="muted">（未返回内容）</p>;
   }
+  if (report._error) {
+    return (
+      <div className="banner danger" style={{margin: 0}}>
+        <b>这家 AI 这一轮没出报告。</b>
+        <div style={{fontSize: 12, marginTop: 6, fontFamily: "monospace", whiteSpace: "pre-wrap"}}>
+          {String(report._error).slice(0, 600)}
+        </div>
+        <div style={{fontSize: 12, marginTop: 8}}>
+          → 回 <Link to="/reports">分析报告页</Link> 重新跑一次试试；如果还是失败，看顶部黄条确认本地后端 / API key 是否正常。
+        </div>
+      </div>
+    );
+  }
   return (
     <div>
+      {report.launch_mode?.recommendation && (
+        <MiniLaunchModeBadge mode={report.launch_mode} accentColor={accentColor} />
+      )}
       {report.executive_summary && (
         <div style={{borderLeft: `3px solid ${accentColor}`, padding: "8px 12px",
                      background: "#fafafa", borderRadius: 4, marginBottom: 12}}>
@@ -396,15 +417,49 @@ function TagsList({data}: {data: any[]}) {
 }
 
 function BodyLengthChart({data}: {data: any}) {
-  const order = ["<100", "100-300", "300-600", "600-1000", "1000-2000", "2000+"];
+  const order: { key: string; label: string }[] = [
+    { key: "<100",      label: "100 字以内（一句话型）" },
+    { key: "100-300",   label: "100–300 字（口语短文）" },
+    { key: "300-600",   label: "300–600 字（标准短文）" },
+    { key: "600-1000",  label: "600–1000 字（中长文）" },
+    { key: "1000-2000", label: "1000–2000 字（干货长文）" },
+    { key: "2000+",     label: "2000 字以上（深度长文）" },
+  ];
+  // Sum totals so we can render an "占比" column the user actually grasps.
+  const totalN = order.reduce((s, o) => s + (data[o.key]?.count ?? 0), 0) || 1;
   return (
-    <table className="table"><thead><tr><th>字数</th><th className="num">n</th><th className="num">median</th><th className="num">p90</th></tr></thead>
-      <tbody>{order.map(k => {
-        const d = data[k] ?? {};
-        return <tr key={k}><td>{k}</td><td className="num">{d.count ?? 0}</td>
-          <td className="num">{fmtLikes(Math.round(d.likes?.median ?? 0))}</td>
-          <td className="num">{fmtLikes(Math.round(d.likes?.p90 ?? 0))}</td></tr>;
-      })}</tbody></table>
+    <>
+      <p className="muted" style={{fontSize: 12, marginTop: 0, marginBottom: 8}}>
+        把库里所有笔记按正文字数分桶，看哪种长度的笔记更吃量。「中位互动」= 这一档里位于中间的那篇拿到的点赞数；「头部 10% 互动」= 这一档前 10% 爆款的点赞水位。
+      </p>
+      <table className="table">
+        <thead>
+          <tr>
+            <th>正文字数段</th>
+            <th className="num">这档有几篇</th>
+            <th className="num">占总量</th>
+            <th className="num" title="该字数段里所有笔记点赞数的中位值 — 代表这种长度的「日常表现」">中位互动</th>
+            <th className="num" title="该字数段里前 10% 爆款的点赞水位 — 代表这种长度的「天花板」">头部 10% 互动</th>
+          </tr>
+        </thead>
+        <tbody>
+          {order.map(({key, label}) => {
+            const d = data[key] ?? {};
+            const n = d.count ?? 0;
+            const pct = totalN ? (n / totalN * 100) : 0;
+            return (
+              <tr key={key}>
+                <td>{label}</td>
+                <td className="num">{n}</td>
+                <td className="num">{n ? `${pct.toFixed(1)}%` : "—"}</td>
+                <td className="num">{n ? fmtLikes(Math.round(d.likes?.median ?? 0)) : "—"}</td>
+                <td className="num">{n ? fmtLikes(Math.round(d.likes?.p90 ?? 0)) : "—"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </>
   );
 }
 
@@ -414,6 +469,99 @@ function TopTitlesList({data}: {data: any[]}) {
       <tbody>{data.slice(0, 15).map((t, i) => (
         <tr key={t.note_id}><td className="num">{i + 1}</td><td>{t.title}</td><td className="num">{fmtLikes(t.liked)}</td></tr>
       ))}</tbody></table>
+  );
+}
+
+const LAUNCH_MODES: Record<string, { label: string; emoji: string; color: string; soft: string; tagline: string }> = {
+  cold_start: {
+    label: "建议冷启动",
+    emoji: "🧊",
+    color: "#0284c7",
+    soft: "#e0f2fe",
+    tagline: "先用 3-7 篇低门槛、纯垂直、不强转化的内容养号子，让平台先打上正确标签再发主线内容。",
+  },
+  hot_start: {
+    label: "建议硬启动（热启动）",
+    emoji: "🔥",
+    color: "#dc2626",
+    soft: "#fee2e2",
+    tagline: "第一篇就直接发最有把握的爆款角度，不养号，靠内容力直接撕开流量。",
+  },
+  hybrid: {
+    label: "建议混合启动",
+    emoji: "🌗",
+    color: "#a855f7",
+    soft: "#f3e8ff",
+    tagline: "前 2 篇冷启动建立标签，第 3 篇起直接打爆款角度。",
+  },
+};
+
+export function LaunchModeCard({mode}: {mode: any}) {
+  const key = String(mode.recommendation || "").toLowerCase();
+  const m = LAUNCH_MODES[key] || {
+    label: `建议方式：${mode.recommendation || "—"}`,
+    emoji: "🚀", color: "#444", soft: "#f3f4f6",
+    tagline: "",
+  };
+  const lvl = mode.agreement_level;
+  const lvlBadge = lvl === "both_agree" ? { txt: "双 AI 一致", color: "#10a37f" }
+                : lvl === "leaned"      ? { txt: "倾向判断（一边偏向）", color: "#a855f7" }
+                : lvl === "split"       ? { txt: "双方有分歧 · 折中建议", color: "#d97706" }
+                : null;
+  return (
+    <div className="card" style={{borderLeft: `4px solid ${m.color}`, background: m.soft}}>
+      <div className="row" style={{justifyContent: "space-between", alignItems: "flex-start", gap: 12}}>
+        <div style={{flex: 1}}>
+          <h2 style={{margin: "0 0 4px", color: m.color}}>
+            {m.emoji} {m.label}
+          </h2>
+          {m.tagline && (
+            <p className="muted" style={{margin: "0 0 8px", fontSize: 12.5}}>{m.tagline}</p>
+          )}
+        </div>
+        {lvlBadge && (
+          <span style={{
+            background: "#fff", color: lvlBadge.color, fontSize: 11.5, fontWeight: 600,
+            padding: "3px 9px", borderRadius: 10, border: `1px solid ${lvlBadge.color}30`,
+            whiteSpace: "nowrap",
+          }}>{lvlBadge.txt}</span>
+        )}
+      </div>
+      {mode.rationale && (
+        <div style={{padding: "8px 12px", background: "#fff", borderRadius: 6,
+                     fontSize: 13, lineHeight: 1.7, marginTop: 4}}>
+          <b>为什么这么选 ：</b>{mode.rationale}
+        </div>
+      )}
+      {mode.first_week_plan && (
+        <div style={{padding: "8px 12px", background: "#fff", borderRadius: 6,
+                     fontSize: 13, lineHeight: 1.7, marginTop: 8}}>
+          <b>第一周怎么执行 ：</b>{mode.first_week_plan}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MiniLaunchModeBadge({mode, accentColor}: {mode: any; accentColor: string}) {
+  const key = String(mode.recommendation || "").toLowerCase();
+  const m = LAUNCH_MODES[key];
+  if (!m) return null;
+  return (
+    <div style={{
+      display: "inline-flex", alignItems: "center", gap: 6,
+      background: m.soft, color: m.color, padding: "4px 10px",
+      borderRadius: 12, fontSize: 12, fontWeight: 600, marginBottom: 10,
+      border: `1px solid ${accentColor}30`,
+    }}>
+      <span>{m.emoji}</span>
+      <span>{m.label.replace("建议", "")}</span>
+      {mode.rationale && (
+        <span className="muted" style={{fontWeight: 400, marginLeft: 4, color: "#555"}}>
+          · {String(mode.rationale).slice(0, 56)}{String(mode.rationale).length > 56 ? "…" : ""}
+        </span>
+      )}
+    </div>
   );
 }
 

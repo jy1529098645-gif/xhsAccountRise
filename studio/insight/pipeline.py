@@ -184,6 +184,11 @@ INDEPENDENT_SYSTEM = """\
 
 {
   "executive_summary": "<3-5 句话起号判断：这是什么赛道、起号机会有多大、怎么切入>",
+  "launch_mode": {
+    "recommendation": "cold_start" | "hot_start" | "hybrid",
+    "rationale": "<为什么这么建议，引用数据>",
+    "first_week_plan": "<第一周该做什么>"
+  },
   "key_findings": [
     {"title": "<发现名（针对起号有意义的）>", "evidence": "<具体引用样本行/数字>", "implication": "<对起号的意味>"}
   ],
@@ -198,6 +203,12 @@ INDEPENDENT_SYSTEM = """\
     "<起号执行下一步>"
   ]
 }
+
+【launch_mode 怎么判断】
+- "cold_start"（冷启动）= 先用 3-7 篇低门槛、纯垂直、不强转化的内容养号子，让平台知道账号是什么标签的，再发主线内容。**当库里数据显示赛道竞争激烈 / 同质化严重 / 算法对新号严苛 / 用户口味难捉摸时选这个**。
+- "hot_start"（硬启动 / 热启动）= 第一篇直接发最有把握的爆款角度，不养号，靠内容力直接撕开流量。**当库里有清晰的蓝海词 / 用户问题密集 / 你手里有现成强差异化素材时选这个**。
+- "hybrid" = 前 2 篇冷启动建标签，第 3 篇起直接打爆款角度。**当信号矛盾 / 中等难度赛道时选这个**。
+你必须从数据里给出明确的判断 + 第一周的执行节奏。
 
 要求：
 - key_findings 至少 3 条，evidence 必须钉到具体样本行 / 数字
@@ -245,6 +256,12 @@ MODERATOR_SYSTEM = """\
 {
   "title": "<报告标题，简短>",
   "executive_summary": "<3-5 句双方都认同的核心结论>",
+  "launch_mode": {
+    "recommendation": "cold_start" | "hot_start" | "hybrid",
+    "rationale": "<为什么这么建议（综合双方意见）>",
+    "first_week_plan": "<第一周该做什么>",
+    "agreement_level": "both_agree" | "leaned" | "split"
+  },
   "consensus_findings": [
     {"title": "...", "evidence": "...", "implication": "..."}
   ],
@@ -262,6 +279,13 @@ MODERATOR_SYSTEM = """\
   ]
 }
 
+【launch_mode 的处理】
+- 看双方的 launch_mode.recommendation：
+  - 两边一致 → agreement_level = "both_agree"，直接用该建议
+  - 一边 hybrid / 一边 cold_start 或 hot_start → "leaned"，倾向那个明确的
+  - 一边 cold 一边 hot → "split"，给出 "hybrid" 作为折中
+- rationale 要融合双方理由，first_week_plan 要具体到「第 1 天发什么 / 第 4 天发什么」级别
+
 要求：
 - consensus_findings 至少 3 条，每条都得是双方都认同的
 - single_side_views 至少要标 2 条（保留分歧的价值）
@@ -273,6 +297,55 @@ MODERATOR_SYSTEM = """\
 
 # All LLM JSON calls now go through the shared utility with OpenAI fallback.
 from ..llm_call import call_for_json as _call_json  # noqa: E402
+
+
+# Permissive JSON schemas — we only force *shape*, not enumeration, because
+# strict enum on launch_mode.recommendation makes Claude refuse on edge cases.
+_ANALYSIS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "executive_summary": {"type": "string"},
+        "launch_mode": {
+            "type": "object",
+            "properties": {
+                "recommendation": {"type": "string"},
+                "rationale": {"type": "string"},
+                "first_week_plan": {"type": "string"},
+            },
+        },
+        "key_findings": {"type": "array", "items": {"type": "object"}},
+        "content_opportunities": {"type": "array", "items": {"type": "object"}},
+        "audience_insight": {"type": "string"},
+        "risks_and_blind_spots": {"type": "array", "items": {"type": "string"}},
+        "recommended_next_steps": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["executive_summary", "key_findings"],
+}
+
+_CRITIQUE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "agreements": {"type": "array", "items": {"type": "object"}},
+        "disagreements": {"type": "array", "items": {"type": "object"}},
+        "missing_points": {"type": "array", "items": {"type": "object"}},
+    },
+}
+
+_CONSENSUS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "executive_summary": {"type": "string"},
+        "launch_mode": {"type": "object"},
+        "consensus_findings": {"type": "array", "items": {"type": "object"}},
+        "consensus_opportunities": {"type": "array", "items": {"type": "object"}},
+        "consensus_risks": {"type": "array", "items": {"type": "string"}},
+        "consensus_next_steps": {"type": "array", "items": {"type": "string"}},
+        "single_side_views": {"type": "array", "items": {"type": "object"}},
+        "charts_to_show": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["consensus_findings"],
+}
 
 
 # ---- Pipeline orchestrator ---------------------------------------------
@@ -340,7 +413,12 @@ async def run(library_id: str, *,
 
         async def analyze(gen: Generator) -> dict[str, Any]:
             try:
-                return await _call_json(gen, INDEPENDENT_SYSTEM, analysis_user)
+                return await _call_json(
+                    gen, INDEPENDENT_SYSTEM, analysis_user,
+                    max_tokens=5000,
+                    tool_name="submit_launch_analysis",
+                    schema=_ANALYSIS_SCHEMA,
+                )
             except Exception as e:
                 return {"_error": f"{gen.model}: {e!r}"}
 
@@ -355,7 +433,12 @@ async def run(library_id: str, *,
                 "请按 system 给的 schema 输出你的赞成/反对/补充。"
             )
             try:
-                return await _call_json(gen, CRITIQUE_SYSTEM, user)
+                return await _call_json(
+                    gen, CRITIQUE_SYSTEM, user,
+                    max_tokens=3500,
+                    tool_name="submit_critique",
+                    schema=_CRITIQUE_SCHEMA,
+                )
             except Exception as e:
                 return {"_error": f"{gen.model}: {e!r}"}
 
@@ -379,7 +462,12 @@ async def run(library_id: str, *,
             "请按 system 给的 schema 输出共识报告。只把双方都认可的点放进 consensus_*，分歧放 single_side_views。"
         )
         try:
-            consensus = await _call_json(moderator_gen, MODERATOR_SYSTEM, moderator_user, max_tokens=6000)
+            consensus = await _call_json(
+                moderator_gen, MODERATOR_SYSTEM, moderator_user,
+                max_tokens=6500,
+                tool_name="submit_consensus",
+                schema=_CONSENSUS_SCHEMA,
+            )
         except Exception as e:
             consensus = {"_error": f"moderator failed: {e!r}"}
 
@@ -477,6 +565,18 @@ def consensus_summary_for_prompt(consensus: dict[str, Any] | None) -> str:
         parts.append(f"【上一份共识分析报告 · 起号洞察】《{consensus['title']}》")
     if consensus.get("executive_summary"):
         parts.append(f"总览：{consensus['executive_summary']}")
+    lm = consensus.get("launch_mode") or {}
+    if lm.get("recommendation"):
+        mode_label = {
+            "cold_start": "冷启动（先养号 3-7 篇低门槛内容）",
+            "hot_start": "硬启动 / 热启动（第一篇直接打爆款角度）",
+            "hybrid": "混合启动（前 2 篇养号 + 第 3 篇起直接打爆款）",
+        }.get(lm["recommendation"], lm["recommendation"])
+        parts.append(f"建议起号方式：{mode_label}")
+        if lm.get("rationale"):
+            parts.append(f"  理由：{lm['rationale']}")
+        if lm.get("first_week_plan"):
+            parts.append(f"  第一周执行：{lm['first_week_plan']}")
     cf = consensus.get("consensus_findings") or []
     if cf:
         parts.append("关键发现（双 AI 共识）：")
@@ -495,6 +595,27 @@ def consensus_summary_for_prompt(consensus: dict[str, Any] | None) -> str:
     if cr:
         parts.append("风险：" + "；".join(r for r in cr[:4]))
     return "\n".join(parts)
+
+
+def full_reference_block_for_prompt() -> str:
+    """Combined reference block: the tool's own consensus *and* any integrated
+    report (gpt-4o-fused external uploads). Used by Strategy / Composer prompts
+    so downstream agents see everything the user has assembled.
+    """
+    parts: list[str] = []
+    own = latest_completed_for_current_library()
+    own_summary = consensus_summary_for_prompt(own)
+    if own_summary:
+        parts.append(own_summary)
+    try:
+        from .external import latest_integrated_for_current_library
+        integ = latest_integrated_for_current_library()
+    except Exception:
+        integ = None
+    integ_summary = consensus_summary_for_prompt(integ)
+    if integ_summary:
+        parts.append("【用户上传 / 整合的报告 · GPT-4o 融合】\n" + integ_summary)
+    return "\n\n".join(parts)
 
 
 def list_reports(library_id: str | None = None, limit: int = 30) -> list[dict[str, Any]]:

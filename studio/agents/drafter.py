@@ -40,10 +40,10 @@ def _augmented_user(brief: Brief, ctx: AgentContext) -> str:
     )
     # Pull in the latest insight report's consensus so each drafter aligns
     # with what both AIs already agreed about the corpus.
-    from ..insight.pipeline import latest_completed_for_current_library, consensus_summary_for_prompt
-    report_ctx = consensus_summary_for_prompt(latest_completed_for_current_library())
+    from ..insight.pipeline import full_reference_block_for_prompt
+    report_ctx = full_reference_block_for_prompt()
     report_block = (
-        f"\n\n{report_ctx}\n（以上是这个语料库的双 AI 共识分析报告，是你创作的强参考。）\n"
+        f"\n\n{report_ctx}\n（以上是这个语料库的双 AI 共识 + 用户上传整合的报告，是你创作的强参考。）\n"
         if report_ctx else ""
     )
     return (

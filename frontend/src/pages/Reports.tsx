@@ -39,6 +39,16 @@ interface ReportSummary {
   elapsed_s: number | null;
 }
 
+interface ExternalRow {
+  report_id: string; name: string; source: string; format: string;
+  content_chars: number; uploaded_at: number; library_id: string | null;
+}
+
+interface IntegratedRow {
+  integrated_id: string; library_id: string | null; created_at: number;
+  status: string; source_ids: string[]; elapsed_s: number | null; error: string | null;
+}
+
 type Stage = "idle" | "uploading" | "analyzing-dna" | "running-insight" | "done";
 
 export default function Reports() {
@@ -55,10 +65,23 @@ export default function Reports() {
   const fileRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
 
+  // ---- External / integrated reports state ------------------------------
+  const [externals, setExternals] = useState<ExternalRow[]>([]);
+  const [integrated, setIntegrated] = useState<IntegratedRow[]>([]);
+  const [showUpload, setShowUpload] = useState(false);
+  const [uploadName, setUploadName] = useState("");
+  const [uploadContent, setUploadContent] = useState("");
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [selectedSourceIds, setSelectedSourceIds] = useState<Set<string>>(new Set());
+  const [integrating, setIntegrating] = useState(false);
+  const [includeOwnConsensus, setIncludeOwnConsensus] = useState(true);
+  const textFileRef = useRef<HTMLInputElement>(null);
+
   async function load() {
     try {
-      const [ls, rs, ps] = await Promise.all([
+      const [ls, rs, ps, exts, ints] = await Promise.all([
         api.libraries(), api.listInsights(), api.platforms(),
+        api.listExternalReports(), api.listIntegratedReports(),
       ]);
       setLibs(ls);
       const active = ls.find(l => l.active);
@@ -66,11 +89,101 @@ export default function Reports() {
       else if (ls[0]) setSelectedLibId(ls[0].lib_id);
       setReports(rs as any);
       setPlatforms(ps);
+      setExternals(exts as any);
+      setIntegrated(ints as any);
     } catch (e: any) {
       setErr(e.message);
     }
   }
   useEffect(() => { load(); }, []);
+
+  // ---- External report handlers -----------------------------------------
+  function toggleSource(id: string) {
+    setSelectedSourceIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  async function readFileAsText(f: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result || ""));
+      r.onerror = () => reject(r.error);
+      r.readAsText(f);
+    });
+  }
+
+  async function handleTextFile(f: File | null) {
+    if (!f) return;
+    if (!/\.(md|txt|markdown)$/i.test(f.name)) {
+      setErr(`只接受文本格式：.md / .txt / .markdown · 收到：${f.name}`);
+      return;
+    }
+    try {
+      const txt = await readFileAsText(f);
+      setUploadName(f.name.replace(/\.(md|txt|markdown)$/i, ""));
+      setUploadContent(txt);
+      setShowUpload(true);
+    } catch (e: any) {
+      setErr(`读文件失败：${e.message || e}`);
+    }
+  }
+
+  async function submitUpload() {
+    if (!uploadName.trim()) { setErr("给这份报告起个名字"); return; }
+    if (!uploadContent.trim()) { setErr("报告内容不能为空"); return; }
+    setErr(null); setUploadBusy(true);
+    try {
+      await api.uploadExternalReport({
+        name: uploadName.trim(), content: uploadContent,
+        library_id: selectedLibId || null,
+        format: /^#|\*\*|^\s*[-*]\s/m.test(uploadContent) ? "markdown" : "text",
+      });
+      setUploadName(""); setUploadContent(""); setShowUpload(false);
+      setInfo("✓ 上传完成。下面可以勾选这份 + 其它报告 → 让 GPT-4o 整合。");
+      await load();
+    } catch (e: any) {
+      setErr(humaniseError(e));
+    } finally {
+      setUploadBusy(false);
+    }
+  }
+
+  async function deleteExt(id: string) {
+    if (!confirm("删除这份外部报告？整合时不会再用它。")) return;
+    try {
+      await api.deleteExternalReport(id);
+      setSelectedSourceIds(prev => {
+        const next = new Set(prev); next.delete(id); return next;
+      });
+      await load();
+    } catch (e: any) { setErr(humaniseError(e)); }
+  }
+
+  async function runIntegrate() {
+    const ids = Array.from(selectedSourceIds);
+    if (ids.length === 0) { setErr("勾一份以上的外部报告再整合"); return; }
+    setErr(null); setInfo(null); setIntegrating(true);
+    try {
+      const ownLatest = includeOwnConsensus
+        ? reportsForSelected.find(r => r.status === "completed")?.report_id ?? null
+        : null;
+      const r = await api.integrateExternalReports({
+        source_ids: ids,
+        library_id: selectedLibId || null,
+        include_consensus_report_id: ownLatest,
+        model_spec: "openai:gpt-4o",
+      });
+      setInfo(`✓ GPT-4o 整合完成（${r.elapsed_s}s）· 整合报告已生成。`);
+      await load();
+    } catch (e: any) {
+      setErr(humaniseError(e));
+    } finally {
+      setIntegrating(false);
+    }
+  }
 
   // ---- Combined upload → DNA → insight flow ------------------------------
   async function handleFile(f: File | null) {
@@ -274,6 +387,160 @@ export default function Reports() {
           )}
         </div>
       )}
+
+      {/* ====== User-uploaded external reports ====== */}
+      <div className="card">
+        <div className="spread" style={{alignItems: "flex-start"}}>
+          <div>
+            <h2 style={{margin: 0}}>📥 你自己的报告（来自别处）</h2>
+            <p className="muted" style={{fontSize: 12, marginTop: 4, marginBottom: 0}}>
+              已经从咨询、ChatGPT、竞品拆解、行业报告里拿到了分析？粘贴 / 上传到这里，
+              下面「起号策略」、「Composer 出稿」都会引用。
+              多份上传后可以让 GPT-4o 整合成一份统一稿。
+            </p>
+          </div>
+          <button onClick={() => { setShowUpload(s => !s); setUploadName(""); setUploadContent(""); }}
+            disabled={offline}>
+            {showUpload ? "✕ 取消" : "＋ 上传 / 粘贴"}
+          </button>
+        </div>
+
+        {showUpload && (
+          <div style={{marginTop: 14, padding: 12, background: "#fafafa", borderRadius: 8}}>
+            <div style={{marginBottom: 8}}>
+              <label>报告名 *</label>
+              <input value={uploadName} onChange={e => setUploadName(e.target.value)}
+                placeholder="比如：竞品 A 起号拆解 / 咨询稿 v2 / ChatGPT 分析" />
+            </div>
+            <div style={{marginBottom: 8}}>
+              <div className="row" style={{justifyContent: "space-between", alignItems: "baseline"}}>
+                <label>报告内容 *（直接粘贴文本 / Markdown）</label>
+                <button className="ghost" type="button"
+                  onClick={() => textFileRef.current?.click()}
+                  style={{fontSize: 11, padding: "2px 8px"}}>
+                  📎 从 .md / .txt 文件读取
+                </button>
+                <input type="file" ref={textFileRef}
+                  accept=".md,.txt,.markdown" style={{display: "none"}}
+                  onChange={e => handleTextFile(e.target.files?.[0] ?? null)} />
+              </div>
+              <textarea value={uploadContent}
+                onChange={e => setUploadContent(e.target.value)}
+                placeholder="粘贴这份报告的全文。支持 Markdown 排版；图表请用文字描述（『hook 类型分布：好物推荐 38% / 干货 22%…』）。"
+                style={{minHeight: 240, fontFamily: "inherit", fontSize: 13, lineHeight: 1.7}} />
+              <div className="muted" style={{fontSize: 11, marginTop: 3}}>
+                字数 ：{uploadContent.length.toLocaleString()} · 越具体越好，AI 会按内容质量整合
+              </div>
+            </div>
+            <div className="row" style={{gap: 8}}>
+              <button onClick={submitUpload} disabled={uploadBusy}>
+                {uploadBusy ? "上传中…" : "💾 保存这份报告"}
+              </button>
+              <button className="ghost" onClick={() => setShowUpload(false)}>关闭</button>
+            </div>
+          </div>
+        )}
+
+        {externals.length === 0 && !showUpload && (
+          <p className="muted" style={{margin: "12px 0 0", fontSize: 12.5}}>
+            还没上传任何外部报告。点上方「＋ 上传 / 粘贴」开始。
+          </p>
+        )}
+
+        {externals.length > 0 && (
+          <>
+            <table className="table" style={{marginTop: 14}}>
+              <thead>
+                <tr>
+                  <th style={{width: 36}}>选</th>
+                  <th>报告名</th>
+                  <th className="num">字数</th>
+                  <th>来源</th>
+                  <th>时间</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {externals.map(e => (
+                  <tr key={e.report_id}>
+                    <td>
+                      <input type="checkbox" checked={selectedSourceIds.has(e.report_id)}
+                        onChange={() => toggleSource(e.report_id)} />
+                    </td>
+                    <td><b>{e.name}</b>
+                      {e.library_id && (
+                        <div className="muted" style={{fontSize: 11}}>
+                          归属库 ：{libs.find(l => l.lib_id === e.library_id)?.display_name ?? e.library_id}
+                        </div>
+                      )}
+                    </td>
+                    <td className="num">{e.content_chars.toLocaleString()}</td>
+                    <td className="muted" style={{fontSize: 12}}>{e.source} · {e.format}</td>
+                    <td className="muted" style={{fontSize: 12}}>{fmtRelative(e.uploaded_at)}</td>
+                    <td>
+                      <button className="ghost" style={{fontSize: 11, padding: "2px 6px", color: "var(--danger)"}}
+                        onClick={() => deleteExt(e.report_id)}>删除</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <div style={{marginTop: 12, padding: 12, background: "var(--primary-soft)",
+                         borderRadius: 8, border: "1px solid var(--primary)"}}>
+              <div className="spread" style={{alignItems: "flex-start", gap: 10}}>
+                <div style={{flex: 1}}>
+                  <b>🪄 让 GPT-4o 整合所选的 {selectedSourceIds.size} 份</b>
+                  <div className="muted" style={{fontSize: 12, marginTop: 4}}>
+                    生成一份统一的「起号共识」，下游 Strategy / Composer 自动引用最新的一份。
+                  </div>
+                  <label style={{display: "inline-flex", alignItems: "center", gap: 6,
+                                  fontSize: 12, marginTop: 8, cursor: "pointer"}}>
+                    <input type="checkbox" checked={includeOwnConsensus}
+                      onChange={e => setIncludeOwnConsensus(e.target.checked)} />
+                    一起融合本工具自动出的 Claude×OpenAI 共识报告（如有）
+                  </label>
+                </div>
+                <button onClick={runIntegrate}
+                  disabled={integrating || selectedSourceIds.size === 0 || offline}
+                  style={{minWidth: 160}}>
+                  {integrating ? "🤖 GPT-4o 整合中（约 30-60s）…" : "🚀 整合所选 → 一份共识"}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+
+        {integrated.length > 0 && (
+          <div style={{marginTop: 16}}>
+            <h3 style={{margin: "0 0 6px"}}>📚 整合稿历史</h3>
+            <table className="table">
+              <thead>
+                <tr><th>时间</th><th>整合了几份</th><th>状态</th><th>耗时</th><th></th></tr>
+              </thead>
+              <tbody>
+                {integrated.slice(0, 10).map(ig => (
+                  <tr key={ig.integrated_id}>
+                    <td>{fmtTime(ig.created_at)}</td>
+                    <td className="num">{ig.source_ids?.length ?? 0}</td>
+                    <td>
+                      {ig.status === "completed" ? <span style={{color: "var(--ok)"}}>✓ 完成</span>
+                      : ig.status === "failed" ? <span style={{color: "var(--danger)"}}>✗ {ig.error?.slice(0, 60) ?? "失败"}</span>
+                      : <span className="muted">{ig.status}</span>}
+                    </td>
+                    <td className="muted">{ig.elapsed_s ? `${ig.elapsed_s}s` : "—"}</td>
+                    <td>
+                      {ig.status === "completed" && (
+                        <Link to={`/integrated/${ig.integrated_id}`}>查看整合稿 →</Link>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {/* ====== Pipeline explainer ====== */}
       <details className="card" style={{background: "#fafafa"}}>
