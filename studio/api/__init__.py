@@ -119,9 +119,18 @@ def list_libraries() -> list[dict[str, Any]]:
             "notes_count": l.notes_count,
             "comments_count": l.comments_count,
             "size_bytes": l.size_bytes,
+            "platform": l.platform,
             "active": l.lib_id == active,
         }
         for l in library.list_libraries()
+    ]
+
+
+@app.get("/api/platforms")
+def list_platforms() -> list[dict[str, str]]:
+    return [
+        {"id": p, "label": library.PLATFORM_LABELS[p]}
+        for p in library.SUPPORTED_PLATFORMS
     ]
 
 
@@ -143,12 +152,13 @@ def active_library() -> dict[str, Any]:
 async def upload_library(
     file: UploadFile = File(...),
     display_name: str = Form(...),
+    platform: str = Form("xiaohongshu"),
 ) -> dict[str, Any]:
     blob = await file.read()
     if len(blob) < 4 or blob[:4] != b"SQLi":
         raise HTTPException(400, "uploaded file is not a SQLite database")
     try:
-        meta = library.adopt_bytes(blob, display_name=display_name)
+        meta = library.adopt_bytes(blob, display_name=display_name, platform=platform)
     except Exception as e:
         raise HTTPException(400, f"failed to adopt library: {e}")
     return {
@@ -156,7 +166,21 @@ async def upload_library(
         "display_name": meta.display_name,
         "notes_count": meta.notes_count,
         "size_bytes": meta.size_bytes,
+        "platform": meta.platform,
     }
+
+
+class PlatformRequest(BaseModel):
+    platform: str
+
+
+@app.post("/api/libraries/{lib_id}/platform")
+def set_library_platform(lib_id: str, req: PlatformRequest) -> dict[str, Any]:
+    try:
+        meta = library.set_platform(lib_id, req.platform)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return {"lib_id": meta.lib_id, "platform": meta.platform}
 
 
 @app.post("/api/libraries/{lib_id}/activate")
@@ -267,30 +291,38 @@ class ComposeRequest(BaseModel):
     cta_strength: str = Field(default="soft", pattern="^(none|soft|strong)$")
     niche: str = ""
     extra_constraints: str = ""
+    platform: str | None = None  # auto-inherit from active library if None
     strategist_spec: str = "claude:opus"
     drafter_spec: str = "claude:opus,deepseek,openai"
     critic_spec: str = "claude:sonnet,deepseek"
     refiner_spec: str = "claude:opus"
+    synthesizer_spec: str = "claude:opus"
     skip_strategist: bool = False
     skip_critics: bool = False
     skip_refiner: bool = False
+    skip_synthesizer: bool = False
 
 
 @app.post("/api/compose")
 async def compose(req: ComposeRequest) -> dict[str, Any]:
+    platform = req.platform or library.get_meta(library.active_lib_id()) and \
+        library.get_meta(library.active_lib_id()).platform or "xiaohongshu"
     brief = Brief(
         topic=req.topic, angle=req.angle, target_length=req.target_length,
         cta_strength=req.cta_strength, niche=req.niche,
         extra_constraints=req.extra_constraints,
+        platform=library.normalise_platform(platform),
     )
     cfg = agent_pipeline.PipelineConfig(
         strategist_spec=req.strategist_spec,
         drafter_spec=req.drafter_spec,
         critic_spec=req.critic_spec,
         refiner_spec=req.refiner_spec,
+        synthesizer_spec=req.synthesizer_spec,
         skip_strategist=req.skip_strategist,
         skip_critics=req.skip_critics,
         skip_refiner=req.skip_refiner,
+        skip_synthesizer=req.skip_synthesizer,
     )
     bundle = await agent_pipeline.run_pipeline(brief, cfg)
     return bundle

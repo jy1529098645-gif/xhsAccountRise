@@ -241,7 +241,13 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("path")
     sp.add_argument("--name", default=None)
     sp.add_argument("--id", dest="lib_id", default=None)
+    sp.add_argument("--platform", default="xiaohongshu",
+                    help="xiaohongshu|douyin|kuaishou|bilibili|youtube|reddit|x|other")
     sp.set_defaults(func=_cmd_lib_add)
+    sp = lib_sub.add_parser("set-platform", help="change a library's platform tag")
+    sp.add_argument("lib_id")
+    sp.add_argument("platform")
+    sp.set_defaults(func=_cmd_lib_set_platform)
     sp = lib_sub.add_parser("delete", help="delete a library")
     sp.add_argument("lib_id")
     sp.set_defaults(func=_cmd_lib_delete)
@@ -315,6 +321,7 @@ def _cmd_lib_list(args: argparse.Namespace) -> int:
         {
             "lib_id": l.lib_id,
             "display_name": l.display_name,
+            "platform": l.platform,
             "notes": l.notes_count,
             "comments": l.comments_count,
             "size_mb": round(l.size_bytes / 1_048_576, 2),
@@ -347,9 +354,17 @@ def _cmd_lib_activate(args: argparse.Namespace) -> int:
 def _cmd_lib_add(args: argparse.Namespace) -> int:
     meta = library.register_existing(
         Path(args.path), display_name=args.name, lib_id=args.lib_id,
+        platform=getattr(args, "platform", "xiaohongshu"),
     )
     print(json.dumps({"lib_id": meta.lib_id, "display_name": meta.display_name,
-                      "notes": meta.notes_count}, ensure_ascii=False))
+                      "notes": meta.notes_count, "platform": meta.platform},
+                     ensure_ascii=False))
+    return 0
+
+
+def _cmd_lib_set_platform(args: argparse.Namespace) -> int:
+    meta = library.set_platform(args.lib_id, args.platform)
+    print(json.dumps({"lib_id": meta.lib_id, "platform": meta.platform}, ensure_ascii=False))
     return 0
 
 

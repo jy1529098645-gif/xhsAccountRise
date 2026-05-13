@@ -6,7 +6,13 @@ export interface Library {
   notes_count: number;
   comments_count: number;
   size_bytes: number;
+  platform: string;
   active: boolean;
+}
+
+export interface Platform {
+  id: string;
+  label: string;
 }
 
 export interface Status {
@@ -44,6 +50,7 @@ export interface Brief {
   niche?: string;
   reference_note_ids?: string[];
   extra_constraints?: string;
+  platform?: string;
 }
 
 export interface CandidatePayload {

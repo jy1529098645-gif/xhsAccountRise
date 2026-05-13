@@ -44,6 +44,40 @@ class LibraryMeta:
     comments_count: int = 0
     size_bytes: int = 0
     description: str = ""
+    platform: str = "xiaohongshu"  # xiaohongshu | douyin | kuaishou | bilibili
+                                   # | youtube | reddit | x | other
+
+
+SUPPORTED_PLATFORMS: tuple[str, ...] = (
+    "xiaohongshu", "douyin", "kuaishou", "bilibili",
+    "youtube", "reddit", "x", "other",
+)
+PLATFORM_LABELS: dict[str, str] = {
+    "xiaohongshu": "小红书",
+    "douyin": "抖音",
+    "kuaishou": "快手",
+    "bilibili": "B站",
+    "youtube": "YouTube",
+    "reddit": "Reddit",
+    "x": "X / Twitter",
+    "other": "其他",
+}
+
+
+def normalise_platform(p: str | None) -> str:
+    if not p:
+        return "xiaohongshu"
+    p = p.strip().lower()
+    aliases = {
+        "xhs": "xiaohongshu", "rednote": "xiaohongshu", "小红书": "xiaohongshu",
+        "tiktok": "douyin", "抖音": "douyin",
+        "快手": "kuaishou", "kwai": "kuaishou",
+        "b站": "bilibili", "哔哩哔哩": "bilibili", "bili": "bilibili",
+        "yt": "youtube", "油管": "youtube", "youtube": "youtube",
+        "reddit": "reddit", "r": "reddit",
+        "twitter": "x", "twt": "x",
+    }
+    return aliases.get(p, p if p in SUPPORTED_PLATFORMS else "other")
 
 
 def _slug(text: str) -> str:
@@ -63,10 +97,24 @@ def list_libraries() -> list[LibraryMeta]:
             continue
         try:
             data = json.loads(meta_path.read_text(encoding="utf-8"))
+            # Backwards-compat: older meta.json may lack `platform`.
+            data.setdefault("platform", "xiaohongshu")
             out.append(LibraryMeta(**data))
         except (json.JSONDecodeError, TypeError):
             continue
     return out
+
+
+def get_meta(lib_id: str) -> LibraryMeta | None:
+    p = LIBRARIES_DIR / lib_id / "meta.json"
+    if not p.exists():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        data.setdefault("platform", "xiaohongshu")
+        return LibraryMeta(**data)
+    except (json.JSONDecodeError, TypeError):
+        return None
 
 
 def active_lib_id(default: str = "default") -> str:
@@ -86,16 +134,6 @@ def set_active(lib_id: str) -> None:
 def current_db_path() -> Path:
     lib_id = active_lib_id()
     return LIBRARIES_DIR / lib_id / "xhs.db"
-
-
-def get_meta(lib_id: str) -> LibraryMeta | None:
-    p = LIBRARIES_DIR / lib_id / "meta.json"
-    if not p.exists():
-        return None
-    try:
-        return LibraryMeta(**json.loads(p.read_text(encoding="utf-8")))
-    except (json.JSONDecodeError, TypeError):
-        return None
 
 
 def _id_exists(lib_id: str) -> bool:
@@ -118,7 +156,8 @@ def _alloc_id(hint: str | None) -> str:
 
 def register_existing(db_path: Path, display_name: str | None = None,
                       lib_id: str | None = None,
-                      source: str = "local") -> LibraryMeta:
+                      source: str = "local",
+                      platform: str = "xiaohongshu") -> LibraryMeta:
     """Register a .db that's already on disk by copying it under
     data/libraries/{lib_id}/. Returns the canonical metadata."""
     src = Path(db_path)
@@ -140,6 +179,7 @@ def register_existing(db_path: Path, display_name: str | None = None,
             uploaded_at=int(time.time()),
             source=source,
             size_bytes=dest_db.stat().st_size,
+            platform=normalise_platform(platform),
         )
     )
     _write_meta(lib_id, meta)
@@ -147,7 +187,8 @@ def register_existing(db_path: Path, display_name: str | None = None,
 
 
 def adopt_bytes(blob: bytes, display_name: str,
-                lib_id: str | None = None) -> LibraryMeta:
+                lib_id: str | None = None,
+                platform: str = "xiaohongshu") -> LibraryMeta:
     """Accept a raw .db payload (e.g. uploaded from the frontend) and persist."""
     if lib_id is None:
         lib_id = _alloc_id(display_name)
@@ -164,8 +205,18 @@ def adopt_bytes(blob: bytes, display_name: str,
             uploaded_at=int(time.time()),
             source="upload",
             size_bytes=dest_db.stat().st_size,
+            platform=normalise_platform(platform),
         )
     )
+    _write_meta(lib_id, meta)
+    return meta
+
+
+def set_platform(lib_id: str, platform: str) -> LibraryMeta:
+    meta = get_meta(lib_id)
+    if meta is None:
+        raise ValueError(f"library not found: {lib_id}")
+    meta.platform = normalise_platform(platform)
     _write_meta(lib_id, meta)
     return meta
 

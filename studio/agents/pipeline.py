@@ -45,12 +45,14 @@ class PipelineConfig:
     drafter_spec: str = "claude:opus,deepseek,openai"
     critic_spec: str = "claude:sonnet,deepseek"
     refiner_spec: str = "claude:opus"
+    synthesizer_spec: str = "claude:opus"  # NEW: LLM that fuses all drafts
     k_refs: int = 8
     n_comments: int = 15
     top_hooks: int = 6
     skip_strategist: bool = False
     skip_critics: bool = False
     skip_refiner: bool = False
+    skip_synthesizer: bool = False
 
 
 def _first(gens: list[Generator]) -> Generator:
@@ -63,7 +65,13 @@ async def run_pipeline(brief: Brief, cfg: PipelineConfig | None = None) -> dict[
     cfg = cfg or PipelineConfig()
     db.apply_migrations(verbose=False)
 
-    ctx = AgentContext(brief=brief, library_id=library.active_lib_id())
+    lib_id = library.active_lib_id()
+    # If brief didn't override platform, inherit from active library.
+    lib_meta = library.get_meta(lib_id)
+    if lib_meta and brief.platform == "xiaohongshu" and lib_meta.platform != "xiaohongshu":
+        from dataclasses import replace
+        brief = replace(brief, platform=lib_meta.platform)
+    ctx = AgentContext(brief=brief, library_id=lib_id)
 
     # Build agents
     drafters = registry.build(cfg.drafter_spec)
@@ -84,7 +92,11 @@ async def run_pipeline(brief: Brief, cfg: PipelineConfig | None = None) -> dict[
         RefinerAgent(_first(registry.build(cfg.refiner_spec)))
         if not cfg.skip_refiner else None
     )
-    synthesizer = SynthesizerAgent()
+    synth_gen = (
+        _first(registry.build(cfg.synthesizer_spec))
+        if not cfg.skip_synthesizer else None
+    )
+    synthesizer = SynthesizerAgent(generator=synth_gen)
 
     # Run sequence: researcher must precede strategist (strategist sees refs).
     await researcher.run(ctx)

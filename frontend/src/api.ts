@@ -1,7 +1,18 @@
 import type {
   Brief, ComposeBundle, DnaArtifact, DraftDetail, DraftListItem,
-  Library, Status,
+  Library, Platform, Status,
 } from "./types";
+
+const STATIC_PLATFORMS: Platform[] = [
+  { id: "xiaohongshu", label: "小红书" },
+  { id: "douyin", label: "抖音" },
+  { id: "kuaishou", label: "快手" },
+  { id: "bilibili", label: "B站" },
+  { id: "youtube", label: "YouTube" },
+  { id: "reddit", label: "Reddit" },
+  { id: "x", label: "X / Twitter" },
+  { id: "other", label: "其他" },
+];
 
 const KEY = "studio.backendUrl";
 const STATIC_BASE = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/data`;
@@ -78,12 +89,22 @@ export const api = {
 
   // Libraries -----------------
   libraries: () => getJson<Library[]>("/api/libraries", "libraries.json"),
-  uploadLibrary: async (file: File, displayName: string): Promise<Library> => {
+  platforms: async (): Promise<Platform[]> => {
+    const backend = backendUrl();
+    if (!backend) return STATIC_PLATFORMS;
+    try {
+      const res = await fetch(`${backend}/api/platforms`);
+      if (!res.ok) return STATIC_PLATFORMS;
+      return res.json();
+    } catch { return STATIC_PLATFORMS; }
+  },
+  uploadLibrary: async (file: File, displayName: string, platform = "xiaohongshu"): Promise<Library> => {
     const backend = backendUrl();
     if (!backend) throw new HttpError(0, "上传库需要本地后端");
     const fd = new FormData();
     fd.append("file", file);
     fd.append("display_name", displayName);
+    fd.append("platform", platform);
     const res = await fetch(`${backend}/api/libraries/upload`, {
       method: "POST", body: fd,
     });
@@ -93,6 +114,8 @@ export const api = {
     }
     return res.json();
   },
+  setLibraryPlatform: (libId: string, platform: string) =>
+    postJson<{ lib_id: string; platform: string }>(`/api/libraries/${libId}/platform`, { platform }),
   activateLibrary: (libId: string) => postJson<{ active: string }>(`/api/libraries/${libId}/activate`, {}),
   deleteLibrary: async (libId: string) => {
     const backend = backendUrl();
@@ -122,10 +145,12 @@ export const api = {
     drafter_spec?: string;
     critic_spec?: string;
     refiner_spec?: string;
+    synthesizer_spec?: string;
     skip_strategist?: boolean;
     skip_critics?: boolean;
     skip_refiner?: boolean;
+    skip_synthesizer?: boolean;
   }) => postJson<ComposeBundle>("/api/compose", req),
 };
 
-export { HttpError };
+export { HttpError, STATIC_PLATFORMS };

@@ -30,6 +30,7 @@ def export_all(out_dir: Path) -> dict[str, str]:
             "notes_count": l.notes_count,
             "comments_count": l.comments_count,
             "size_bytes": l.size_bytes,
+            "platform": l.platform,
             "active": l.lib_id == active,
         }
         for l in libs

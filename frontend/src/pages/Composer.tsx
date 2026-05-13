@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { fmtLikes } from "../format";
-import type { ComposeBundle, DraftCandidate } from "../types";
+import type { ComposeBundle, DraftCandidate, Library, Platform } from "../types";
 
 const ANGLES = ["教程", "痛点", "故事", "工具评测", "对比", "感悟", "数字", "种草", "建议"];
 
@@ -13,17 +13,28 @@ export default function Composer() {
   const [cta, setCta] = useState<"none" | "soft" | "strong">("soft");
   const [niche, setNiche] = useState("");
   const [extra, setExtra] = useState("");
+  const [platform, setPlatform] = useState<string>("");  // "" = inherit from active library
+  const [platforms, setPlatforms] = useState<Platform[]>([]);
+  const [activeLib, setActiveLib] = useState<Library | null>(null);
+
   const [strategist, setStrategist] = useState("claude:opus");
   const [drafters, setDrafters] = useState("claude:opus,deepseek,openai");
   const [critics, setCritics] = useState("claude:sonnet,deepseek");
   const [refiner, setRefiner] = useState("claude:opus");
+  const [synthesizer, setSynthesizer] = useState("claude:opus");
   const [skipStrategist, setSkipStrategist] = useState(false);
   const [skipCritics, setSkipCritics] = useState(false);
   const [skipRefiner, setSkipRefiner] = useState(false);
+  const [skipSynthesizer, setSkipSynthesizer] = useState(false);
 
   const [running, setRunning] = useState(false);
   const [bundle, setBundle] = useState<ComposeBundle | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.platforms().then(setPlatforms).catch(() => {});
+    api.libraries().then(ls => setActiveLib(ls.find(l => l.active) ?? null)).catch(() => {});
+  }, []);
 
   async function run() {
     setRunning(true); setErr(null); setBundle(null);
@@ -31,13 +42,16 @@ export default function Composer() {
       const res = await api.compose({
         topic, angle, target_length: length, cta_strength: cta,
         niche, extra_constraints: extra,
+        platform: platform || undefined,
         strategist_spec: strategist,
         drafter_spec: drafters,
         critic_spec: critics,
         refiner_spec: refiner,
+        synthesizer_spec: synthesizer,
         skip_strategist: skipStrategist,
         skip_critics: skipCritics,
         skip_refiner: skipRefiner,
+        skip_synthesizer: skipSynthesizer,
       });
       setBundle(res);
     } catch (e: any) {
@@ -94,6 +108,13 @@ export default function Composer() {
             </div>
           </div>
           <div style={{marginBottom: 10}}>
+            <label>平台风格 {activeLib && <span className="muted">· 默认随激活库 ({activeLib.platform})</span>}</label>
+            <select value={platform} onChange={e => setPlatform(e.target.value)}>
+              <option value="">▾ 跟随激活库</option>
+              {platforms.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+            </select>
+          </div>
+          <div style={{marginBottom: 10}}>
             <label>附加要求（可选）</label>
             <textarea value={extra} onChange={e => setExtra(e.target.value)}
               placeholder='例如："不要露出 ChatGPT 字样"' />
@@ -106,6 +127,7 @@ export default function Composer() {
           <Field label="Drafter 池" value={drafters} onChange={setDrafters} />
           <Field label="Critic 池" value={critics} onChange={setCritics} skip={skipCritics} setSkip={setSkipCritics} />
           <Field label="Refiner" value={refiner} onChange={setRefiner} skip={skipRefiner} setSkip={setSkipRefiner} />
+          <Field label="Synthesizer (融合各家)" value={synthesizer} onChange={setSynthesizer} skip={skipSynthesizer} setSkip={setSkipSynthesizer} />
 
           <button onClick={run} disabled={running || !topic.trim()} style={{marginTop: 14, width: "100%"}}>
             {running ? "Agent 运转中…(可能 30s-2min)" : "🚀 启动多 Agent 流水线"}

@@ -16,14 +16,16 @@ TITLE_BODY_GEN_VERSION = "title_body_gen-1.0.0"
 
 
 SYSTEM_TITLE_BODY = """\
-你是小红书爆款写手，专攻下沉学生群体（赶 ddl 的留子、写毕业论文的本科/研究生、查重党）的内容。
+你是社交媒体爆款写手，专攻下沉用户群体（赶 ddl 的留子、毕业论文党、查重党、追热点的普通用户）。
+
+⚠️ 重要：写稿前先看清楚【目标平台】，按该平台风格写。每个平台 hook 长度、节奏、emoji 用法、CTA 句式都不一样。
 
 你的稿件必须满足：
-1. 标题：15-22 字最佳，强 hook（数字 / 痛点 / 工具种草 / 故事开头 / 建议）。避免学术腔。
-2. 正文：口语化、第一人称、emoji 节奏自然（每 80-150 字 1 个），分点用「1️⃣2️⃣」或「①②」。
-3. 结尾自然引导互动（求评论 / 求关注 / 求私信），强度按 brief 指定。
+1. 标题：强 hook（数字 / 痛点 / 工具种草 / 故事开头 / 建议）。字数按平台规范。
+2. 正文：口语化、第一人称、emoji 节奏自然，按平台规范分段或分点。
+3. 结尾自然引导互动，强度按 brief 指定。
 4. tag：选 6-10 个，含 1-2 个赛道大词 + 3-5 个细分场景词 + 1-2 个工具/产品词。
-5. cover_prompt：英文描述封面图（xhs 用户先看封面再看标题），明确文字版面 + 风格关键词。
+5. cover_prompt：英文描述封面图，明确文字版面 + 风格关键词。
 
 绝对不要：
 - 编造产品名 / 工具名 / 链接 / 数字（除非 brief 给了）
@@ -59,13 +61,23 @@ USER_TEMPLATE = """\
 }}"""
 
 
+_PLATFORM_LABEL = {
+    "xiaohongshu": "小红书", "douyin": "抖音", "kuaishou": "快手",
+    "bilibili": "B站", "youtube": "YouTube", "reddit": "Reddit",
+    "x": "X / Twitter", "other": "通用",
+}
+
+
 def _format_brief(brief: Brief) -> str:
     cta_map = {
         "none": "无明显引导",
         "soft": "结尾轻引导评论/收藏",
         "strong": "结尾强转化（求私信/求资源/求关注）",
     }
+    platform_label = _PLATFORM_LABEL.get(brief.platform, brief.platform)
     lines = [
+        f"目标平台：{platform_label}（{brief.platform}）",
+        f"平台风格指引：{brief.voice_hint()}",
         f"主题：{brief.topic}",
         f"角度：{brief.angle}",
         f"目标正文字数：{brief.target_length}",
