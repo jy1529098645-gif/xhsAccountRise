@@ -16,24 +16,30 @@ Brief ─▶ Strategist (Claude Opus) ─┐  hook 类型 / 开头钩子 / 结�
         Researcher (FTS5 RAG) ─────┤  top 爆款 + 用户原话 + hook 模板
                                    │
             ▼
-     Drafter Pool (并发)
-     ├─ Claude Opus      ─▶ 候选 A    每家产 {title,body,tags,cover,hook,
-     ├─ DeepSeek         ─▶ 候选 B     predicted_likes,self_score,critique}
-     └─ OpenAI GPT-5     ─▶ 候选 C
+     Drafter Pool (并发，跨家)
+     ├─ Claude Opus 4.7  ─▶ 候选 A    每家产 {title,body,tags,cover,hook,
+     ├─ DeepSeek V3      ─▶ 候选 B     predicted_likes,self_score,critique}
+     └─ OpenAI GPT-4o    ─▶ 候选 C
             ▼
-     Critic Pool (并发，刻意挑跟 drafter 不同的 LLM)
+     Critic Pool (跨家，与 drafter 不同)
      ├─ Claude Sonnet  ─┐  对每份候选打 5 维分：
      └─ DeepSeek       ─┘    hook / language_fit / shareability /
                               brand_safety / structural_clarity
             ▼
-        Refiner (Claude Opus) ─▶ 对评分 top 候选按 critic 建议改稿
+        Refiner (Claude Opus) ─▶ 拿评分 top 候选 → 按 critic 建议改稿
             ▼
-        Synthesizer ─▶ 最终选定 final
+   ★ Synthesizer (Claude Opus, LLM-driven) ★
+        - 看完 N 份 drafts + 所有 critique
+        - 取每家最强的元素（标题用 A 的 hook、骨架用 B 的、金句用 C 的）
+        - 主动修掉所有 critic 标出的 risk_flags
+        - 输出 `rationale`：title_from / body_from / addresses_risks
             ▼
     持久化：drafts / candidates / critiques / agent_traces
 ```
 
 每个 Agent 的 LLM 在 Composer 里可单独配置；时间线 + 成本估算 + 错误状态全程可见。
+
+实测一次「降AI率技巧」full-strength compose：3 drafter + 2 critic + refiner + synthesizer，99s / $0.19，Synthesizer 主动修掉 5 条 critic 标的风险（学术诚信立意、过度承诺数字、品牌背书、CTA 过强、缺免责说明）。
 
 ## Quick start (本地后端)
 
@@ -53,7 +59,8 @@ $env:PYTHONPATH = (Get-Location).Path
 .venv\Scripts\python -m studio analyze
 .venv\Scripts\python -m studio promote-hooks
 
-# 4. 启 FastAPI 后端
+# 4. 启 FastAPI 后端 (Windows 务必设 PYTHONUTF8=1 以正确处理中文)
+$env:PYTHONUTF8 = "1"
 .venv\Scripts\python -m studio serve --port 8765
 
 # 5. 启前端（另开终端）
@@ -81,9 +88,12 @@ studio serve --port 8765                       # 启 FastAPI
 studio export-public                           # 静态化导出到 frontend/public/data/
 ```
 
-## 多 Library
+## 多平台 + 多 Library
 
-每个 library 是一个独立 SQLite .db，放在 `data/libraries/<lib_id>/xhs.db`。
+每个 library 是一个独立 SQLite .db，放在 `data/libraries/<lib_id>/xhs.db`，可标记平台：
+**小红书** (default) / **抖音** / **快手** / **B站** / **YouTube** / **Reddit** / **X (Twitter)** / **其他**。
+
+Brief 默认继承激活库的平台；可在 Composer 中显式覆盖。平台 voice hint 注入 Strategist 和 Drafter 的 prompt，所以同一个 brief 在抖音库下出短视频脚本风、在 Reddit 库下出长文论证体。
 
 ```powershell
 # CLI
