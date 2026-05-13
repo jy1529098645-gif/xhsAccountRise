@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { api } from "../api";
 import { fmtLikes } from "../format";
 import AgentConfigPanel, {
@@ -45,33 +45,41 @@ export default function Composer() {
   }, []);
 
   // ---- Pre-fill from Strategy "出这一篇 →" navigation ---------------------
-  const location = useLocation();
-  const navigate = useNavigate();
-  const prefilled = useRef(false);
+  // Reads sessionStorage instead of location.state. The old location.state
+  // approach + navigate(replace) inside useEffect was somehow blanking the
+  // whole page tree for the user (and Libraries / Dashboard right after).
+  // sessionStorage is dead simple, survives one cross-page hop, and we
+  // delete it immediately on read so refreshes don't re-prefill.
   const [prefillNote, setPrefillNote] = useState<string | null>(null);
+  const prefilled = useRef(false);
 
   useEffect(() => {
     if (prefilled.current) return;
-    const st: any = location.state || {};
-    const bf = st.briefPrefill;
+    let bf: any = null;
+    try {
+      const raw = sessionStorage.getItem("composer.briefPrefill");
+      if (raw) {
+        bf = JSON.parse(raw);
+        sessionStorage.removeItem("composer.briefPrefill");
+      }
+    } catch { /* malformed storage — ignore */ }
     if (!bf) return;
     prefilled.current = true;
-    if (bf.topic) setTopic(bf.topic);
-    if (bf.angle) setAngle(bf.angle);
-    if (typeof bf.target_length === "number") setLength(bf.target_length);
-    if (bf.cta_strength) setCta(bf.cta_strength);
-    if (bf.niche) setNiche(bf.niche);
-    if (bf.extra_constraints) setExtra(bf.extra_constraints);
-    if (bf.platform) setPlatform(bf.platform);
-    setPrefillNote(`已从「起号策略」一键带入：「${bf.topic || "（无标题）"}」`);
-    // Strip state so a refresh doesn't re-prefill / re-run.
-    navigate(location.pathname, { replace: true, state: {} });
-    if (st.runImmediately) {
-      // Small delay so the state updates take effect first.
-      setTimeout(() => { run(); }, 50);
+    try {
+      if (bf.topic) setTopic(String(bf.topic));
+      if (bf.angle && ANGLES.includes(String(bf.angle))) setAngle(String(bf.angle));
+      if (typeof bf.target_length === "number") setLength(bf.target_length);
+      if (bf.cta_strength === "none" || bf.cta_strength === "soft" || bf.cta_strength === "strong") {
+        setCta(bf.cta_strength);
+      }
+      if (bf.niche) setNiche(String(bf.niche));
+      if (bf.extra_constraints) setExtra(String(bf.extra_constraints));
+      if (bf.platform) setPlatform(String(bf.platform));
+      setPrefillNote(`已从「起号策略」一键带入：「${String(bf.topic || "").slice(0, 40) || "无标题"}」`);
+    } catch (e) {
+      console.error("prefill failed", e);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.state]);
+  }, []);
 
   async function run() {
     setRunning(true); setErr(null); setBundle(null);

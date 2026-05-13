@@ -807,16 +807,25 @@ function PackView({pack, onReset}: {pack: StrategyPackDTO; onReset: () => void})
   const totalSlots = pack.schedule.length;
   const navigate = useNavigate();
 
-  function goCompose(slot: any, runImmediately: boolean) {
-    // Build a Brief from the slot + the chosen direction. Composer will
-    // read this from location.state and pre-fill the form.
+  function goCompose(slot: any, _runImmediately: boolean) {
+    // Build a Brief from the slot + the chosen direction. Stashed in
+    // sessionStorage rather than location.state — the latter combined with
+    // a navigate(replace) inside Composer's mount effect was wedging the
+    // app such that subsequent navigations to /libraries / /dashboard
+    // also rendered blank.
     const briefPrefill = {
       topic: slot.title || "",
+      // Composer's <select> only accepts these 9 angles — anything else gets
+      // dropped on the prefill side. Don't force a value the select can't show.
       angle: slot.angle || "",
       target_length: 600,
-      cta_strength: slot.intent || "soft",
+      // cta_strength expects "none"|"soft"|"strong"; slot.intent is "拉新"
+      // etc. Default to "soft" — the intent shows up in extra_constraints
+      // anyway, so the LLM still sees it.
+      cta_strength: "soft" as const,
       niche: pack.chosen_direction?.positioning_statement || "",
       extra_constraints: [
+        slot.intent ? `意图 ：${slot.intent}` : "",
         slot.hook_type ? `hook_type: ${slot.hook_type}` : "",
         slot.outline?.length ? "大纲：" + slot.outline.join(" / ") : "",
         slot.materials_needed?.length ? "需要材料：" + slot.materials_needed.join("、") : "",
@@ -825,7 +834,10 @@ function PackView({pack, onReset}: {pack: StrategyPackDTO; onReset: () => void})
       ].filter(Boolean).join("\n\n"),
       platform: pack.platform,
     };
-    navigate("/composer", { state: { briefPrefill, runImmediately } });
+    try {
+      sessionStorage.setItem("composer.briefPrefill", JSON.stringify(briefPrefill));
+    } catch { /* sessionStorage might be disabled — just navigate without prefill */ }
+    navigate("/composer");
   }
 
   return (

@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
-import { NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { ReactNode, useEffect, useState } from "react";
+import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { api } from "./api";
 import { applyTheme } from "./theme";
 import ConnectionBanner from "./components/ConnectionBanner";
+import ErrorBoundary from "./components/ErrorBoundary";
 import ProjectPicker from "./components/ProjectPicker";
 import Dashboard from "./pages/Dashboard";
 import Analysis from "./pages/Analysis";
@@ -15,6 +16,13 @@ import Strategy from "./pages/Strategy";
 import InsightReport from "./pages/InsightReport";
 import IntegratedReport from "./pages/IntegratedReport";
 import Reports from "./pages/Reports";
+
+// Re-keys the ErrorBoundary by pathname so a crashed page auto-resets
+// the boundary when the user navigates somewhere else.
+function RouteErrorBoundary({children}: {children: ReactNode}) {
+  const loc = useLocation();
+  return <ErrorBoundary key={loc.pathname}>{children}</ErrorBoundary>;
+}
 
 export default function App() {
   const [connected, setConnected] = useState<boolean>(api.isConnected());
@@ -83,23 +91,25 @@ export default function App() {
 
       <main className="main">
         <ConnectionBanner />
-        <Routes>
-          <Route path="/" element={<Navigate to="/reports" replace />} />
-          <Route path="/reports" element={<Reports />} />
-          <Route path="/reports/:id" element={<InsightReport />} />
-          <Route path="/strategy" element={<Strategy />} />
-          <Route path="/strategy/:packId" element={<Strategy />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/analysis" element={<Analysis />} />
-          <Route path="/composer" element={<Composer />} />
-          <Route path="/drafts" element={<Drafts />} />
-          <Route path="/drafts/:id" element={<DraftDetail />} />
-          <Route path="/libraries" element={<Libraries />} />
-          <Route path="/insight/:id" element={<InsightReport />} />
-          <Route path="/integrated/:id" element={<IntegratedReport />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="*" element={<div className="card">404 · 页面不存在</div>} />
-        </Routes>
+        <RouteErrorBoundary>
+          <Routes>
+            <Route path="/" element={<Navigate to="/reports" replace />} />
+            <Route path="/reports" element={<Reports />} />
+            <Route path="/reports/:id" element={<InsightReport />} />
+            <Route path="/strategy" element={<Strategy />} />
+            <Route path="/strategy/:packId" element={<Strategy />} />
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/analysis" element={<Analysis />} />
+            <Route path="/composer" element={<Composer />} />
+            <Route path="/drafts" element={<Drafts />} />
+            <Route path="/drafts/:id" element={<DraftDetail />} />
+            <Route path="/libraries" element={<Libraries />} />
+            <Route path="/insight/:id" element={<InsightReport />} />
+            <Route path="/integrated/:id" element={<IntegratedReport />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="*" element={<div className="card">404 · 页面不存在</div>} />
+          </Routes>
+        </RouteErrorBoundary>
       </main>
     </div>
   );
