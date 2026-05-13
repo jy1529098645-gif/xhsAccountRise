@@ -12,3 +12,8 @@ httpx>=0.27.0
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 python-multipart>=0.0.9  # for /libraries/upload (multipart form)
+
+# Optional text extractors for external-report upload. Pure-Python, no
+# system deps — they degrade to "couldn't parse, save anyway" if missing.
+pypdf>=4.0.0       # PDF text extraction
+python-docx>=1.0.0  # .docx text extraction

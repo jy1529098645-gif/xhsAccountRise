@@ -255,6 +255,26 @@ export const api = {
     report_id: string; name: string; source: string; format: string;
     library_id: string | null; uploaded_at: number; content_chars: number;
   }>("/api/external_reports", req),
+  uploadExternalReportFile: async (file: File, name?: string, libraryId?: string | null): Promise<{
+    report_id: string; name: string; source: string; format: string;
+    library_id: string | null; uploaded_at: number; content_chars: number;
+    extract_warning?: string;
+  }> => {
+    const backend = backendUrl();
+    if (!backend) throw new HttpError(0, "上传需要本地后端");
+    const fd = new FormData();
+    fd.append("file", file);
+    if (name) fd.append("name", name);
+    if (libraryId) fd.append("library_id", libraryId);
+    const res = await fetch(`${backend}/api/external_reports/upload_file`, {
+      method: "POST", body: fd,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new HttpError(res.status, `upload_file → ${res.status}: ${text.slice(0, 400)}`);
+    }
+    return res.json();
+  },
   listExternalReports: (libraryId?: string) =>
     getJson<{
       report_id: string; library_id: string | null; name: string;

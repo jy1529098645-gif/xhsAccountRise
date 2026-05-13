@@ -28,6 +28,74 @@ from ..llm_call import call_for_json
 
 # ---- Upload / list / delete ---------------------------------------------
 
+def extract_text_from_bytes(filename: str, data: bytes) -> tuple[str, str, str | None]:
+    """Best-effort text extraction from any uploaded file.
+
+    Returns: (extracted_text, detected_format, error_or_none)
+
+    Strategy by extension:
+      .pdf            → pypdf
+      .docx           → python-docx
+      .tex/.md/.txt/  → utf-8 decode (with errors='replace' fallback)
+      otherwise       → try utf-8 first, then latin-1, save whatever decodes
+    """
+    name = (filename or "").lower()
+    ext = name.rsplit(".", 1)[-1] if "." in name else ""
+
+    # PDF
+    if ext == "pdf":
+        try:
+            from pypdf import PdfReader
+            import io
+            reader = PdfReader(io.BytesIO(data))
+            pages: list[str] = []
+            for i, page in enumerate(reader.pages):
+                try:
+                    pages.append(page.extract_text() or "")
+                except Exception as pe:
+                    pages.append(f"[第 {i+1} 页解析失败：{pe}]")
+            text = "\n\n".join(pages).strip()
+            if not text:
+                return ("", "pdf",
+                        "PDF 里读不到文字（可能是扫描件 / 图片型 PDF）。"
+                        "建议导出成文字版后再上传，或者直接粘贴文本。")
+            return (text, "pdf", None)
+        except ImportError:
+            return ("", "pdf",
+                    "服务器还没装 pypdf — 后端 requirements 没更新到位。")
+        except Exception as e:
+            return ("", "pdf", f"PDF 解析失败：{e}")
+
+    # DOCX
+    if ext == "docx":
+        try:
+            from docx import Document
+            import io
+            doc = Document(io.BytesIO(data))
+            paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+            text = "\n\n".join(paragraphs).strip()
+            if not text:
+                return ("", "docx", "Word 文档里没读到段落文本。")
+            return (text, "docx", None)
+        except ImportError:
+            return ("", "docx", "服务器没装 python-docx。")
+        except Exception as e:
+            return ("", "docx", f"DOCX 解析失败：{e}")
+
+    # Everything else — try plain text decode. Includes .tex, .md, .markdown,
+    # .txt, .html, etc. The user said: 不设格式都行，给 AI 读。
+    fmt = ext or "text"
+    for enc in ("utf-8", "utf-8-sig", "gb18030", "latin-1"):
+        try:
+            text = data.decode(enc)
+            return (text, fmt, None)
+        except UnicodeDecodeError:
+            continue
+    # Last resort
+    return (data.decode("utf-8", errors="replace"), fmt,
+            "文件不是常见的文本编码，已尽量解码（可能有乱码）。")
+
+
 def save_external_report(
     *, name: str, content: str,
     library_id: str | None = None,

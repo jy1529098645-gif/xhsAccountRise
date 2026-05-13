@@ -689,6 +689,38 @@ def upload_external_report(req: ExternalReportUpload) -> dict[str, Any]:
     )
 
 
+@app.post("/api/external_reports/upload_file")
+async def upload_external_report_file(
+    file: UploadFile = File(...),
+    name: str | None = Form(None),
+    library_id: str | None = Form(None),
+) -> dict[str, Any]:
+    """Accept ANY file. Extract text best-effort (pypdf for .pdf, python-docx
+    for .docx, plain decode for .tex / .md / .txt / anything else) and save
+    whatever text we got. Returns the saved record plus an optional
+    `extract_warning` if the parser hit issues but we kept the content.
+    """
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "empty file")
+    fname = file.filename or "uploaded"
+    text, fmt, warn = external_reports.extract_text_from_bytes(fname, data)
+    if not text.strip():
+        # Even with parser failures we'd rather save a stub than 500.
+        # But truly empty content → error so the user knows to try another file.
+        raise HTTPException(400, warn or f"无法从 {fname} 提取出任何文字")
+    saved = external_reports.save_external_report(
+        name=(name or fname).strip() or fname,
+        content=text,
+        library_id=library_id or None,
+        source=f"上传文件 · {fname}",
+        format=fmt,
+    )
+    if warn:
+        saved["extract_warning"] = warn
+    return saved
+
+
 @app.get("/api/external_reports")
 def list_external_reports_api(library_id: str | None = None) -> list[dict[str, Any]]:
     return external_reports.list_external_reports(library_id=library_id)

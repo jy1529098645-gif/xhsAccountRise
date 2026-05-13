@@ -106,28 +106,22 @@ export default function Reports() {
     });
   }
 
-  async function readFileAsText(f: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const r = new FileReader();
-      r.onload = () => resolve(String(r.result || ""));
-      r.onerror = () => reject(r.error);
-      r.readAsText(f);
-    });
-  }
-
-  async function handleTextFile(f: File | null) {
+  async function handleAnyFile(f: File | null) {
     if (!f) return;
-    if (!/\.(md|txt|markdown)$/i.test(f.name)) {
-      setErr(`只接受文本格式：.md / .txt / .markdown · 收到：${f.name}`);
-      return;
-    }
+    setErr(null); setInfo(null); setUploadBusy(true);
     try {
-      const txt = await readFileAsText(f);
-      setUploadName(f.name.replace(/\.(md|txt|markdown)$/i, ""));
-      setUploadContent(txt);
-      setShowUpload(true);
+      const r = await api.uploadExternalReportFile(
+        f, f.name.replace(/\.[^.]+$/, ""), selectedLibId || null
+      );
+      let msg = `✓ 已上传《${r.name}》(${r.content_chars.toLocaleString()} 字 · ${r.format})。`;
+      if (r.extract_warning) msg += ` ⚠️ ${r.extract_warning}`;
+      else msg += " 勾选它 + 其它报告 → 让 GPT-4o 整合。";
+      setInfo(msg);
+      await load();
     } catch (e: any) {
-      setErr(`读文件失败：${e.message || e}`);
+      setErr(humaniseError(e));
+    } finally {
+      setUploadBusy(false);
     }
   }
 
@@ -390,19 +384,50 @@ export default function Reports() {
 
       {/* ====== User-uploaded external reports ====== */}
       <div className="card">
-        <div className="spread" style={{alignItems: "flex-start"}}>
-          <div>
-            <h2 style={{margin: 0}}>📥 你自己的报告（来自别处）</h2>
-            <p className="muted" style={{fontSize: 12, marginTop: 4, marginBottom: 0}}>
-              已经从咨询、ChatGPT、竞品拆解、行业报告里拿到了分析？粘贴 / 上传到这里，
-              下面「起号策略」、「Composer 出稿」都会引用。
-              多份上传后可以让 GPT-4o 整合成一份统一稿。
-            </p>
+        <div>
+          <h2 style={{margin: 0}}>📥 你自己的报告（来自别处）</h2>
+          <p className="muted" style={{fontSize: 12, marginTop: 4, marginBottom: 12}}>
+            已经从咨询、ChatGPT、竞品拆解、行业报告里拿到了分析？上传或粘贴到这里，
+            下面「起号策略」、「Composer 出稿」都会引用。
+            多份上传后可让 GPT-4o 整合成一份统一稿。
+          </p>
+        </div>
+
+        {/* Two upload modes side-by-side */}
+        <div className="cards-grid" style={{gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 8}}>
+          {/* File upload — accepts ANYTHING */}
+          <div style={{padding: 14, background: "#fafafa", borderRadius: 8,
+                       border: dragOver ? "2px dashed var(--primary)" : "2px dashed #ddd",
+                       textAlign: "center", cursor: uploadBusy ? "wait" : "pointer",
+                       opacity: uploadBusy ? 0.7 : 1}}
+               onClick={() => !uploadBusy && textFileRef.current?.click()}
+               onDragOver={e => { e.preventDefault(); if (!uploadBusy) setDragOver(true); }}
+               onDragLeave={() => setDragOver(false)}
+               onDrop={e => { e.preventDefault(); setDragOver(false);
+                              handleAnyFile(e.dataTransfer.files?.[0] ?? null); }}>
+            <div style={{fontSize: 32}}>📎</div>
+            <div style={{fontWeight: 600, marginTop: 4}}>
+              {uploadBusy ? "解析 + 上传中…" : "拖文件 / 点击选择"}
+            </div>
+            <div className="muted" style={{fontSize: 11.5, marginTop: 4}}>
+              <b>不限格式</b> · PDF / TeX / DOCX / MD / TXT / 任何文本 — 服务器自动提取文字给 AI
+            </div>
+            <input type="file" ref={textFileRef}
+              style={{display: "none"}}
+              onChange={e => handleAnyFile(e.target.files?.[0] ?? null)} />
           </div>
-          <button onClick={() => { setShowUpload(s => !s); setUploadName(""); setUploadContent(""); }}
-            disabled={offline}>
-            {showUpload ? "✕ 取消" : "＋ 上传 / 粘贴"}
-          </button>
+
+          {/* Paste text */}
+          <div style={{padding: 14, background: "#fafafa", borderRadius: 8, border: "1px solid #eee"}}>
+            <div style={{fontWeight: 600, marginBottom: 6}}>✍️ 或直接粘贴文本</div>
+            <button onClick={() => { setShowUpload(s => !s); setUploadName(""); setUploadContent(""); }}
+              disabled={offline} style={{width: "100%", fontSize: 13, padding: "8px 0"}}>
+              {showUpload ? "✕ 收起粘贴框" : "＋ 打开粘贴框"}
+            </button>
+            <div className="muted" style={{fontSize: 11.5, marginTop: 6}}>
+              短报告 / ChatGPT 对话直接复制过来更方便
+            </div>
+          </div>
         </div>
 
         {showUpload && (
@@ -413,17 +438,7 @@ export default function Reports() {
                 placeholder="比如：竞品 A 起号拆解 / 咨询稿 v2 / ChatGPT 分析" />
             </div>
             <div style={{marginBottom: 8}}>
-              <div className="row" style={{justifyContent: "space-between", alignItems: "baseline"}}>
-                <label>报告内容 *（直接粘贴文本 / Markdown）</label>
-                <button className="ghost" type="button"
-                  onClick={() => textFileRef.current?.click()}
-                  style={{fontSize: 11, padding: "2px 8px"}}>
-                  📎 从 .md / .txt 文件读取
-                </button>
-                <input type="file" ref={textFileRef}
-                  accept=".md,.txt,.markdown" style={{display: "none"}}
-                  onChange={e => handleTextFile(e.target.files?.[0] ?? null)} />
-              </div>
+              <label>报告内容 *（直接粘贴文本 / Markdown）</label>
               <textarea value={uploadContent}
                 onChange={e => setUploadContent(e.target.value)}
                 placeholder="粘贴这份报告的全文。支持 Markdown 排版；图表请用文字描述（『hook 类型分布：好物推荐 38% / 干货 22%…』）。"
