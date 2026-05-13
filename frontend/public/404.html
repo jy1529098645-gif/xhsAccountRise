@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>xhs Studio · 跳转中…</title>
+    <script>
+      // Backup safety net: if anyone bookmarked a deep HTML5-history URL
+      // from the BrowserRouter era, redirect them to the same path under
+      // the new HashRouter scheme.
+      (function () {
+        var path = location.pathname.replace(/^\/xhsAccountRise/, "") || "/";
+        var search = location.search || "";
+        location.replace("/xhsAccountRise/#" + path + search);
+      })();
+    </script>
+  </head>
+  <body>
+    <p>跳转中… <a href="/xhsAccountRise/">回到首页</a></p>
+  </body>
+</html>
