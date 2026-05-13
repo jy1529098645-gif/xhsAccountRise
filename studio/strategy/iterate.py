@@ -276,6 +276,15 @@ async def iterate_strategy(
         input=inp, chosen=chosen,
     )
     new_pack.series_thesis = str(parsed.get("series_thesis", ""))
+
+    # Defensive coercion — same reason as pipeline.expand's defense:
+    # Claude tool_use occasionally returns array items as raw strings.
+    def _theme_dict(item: Any, hint: int) -> dict[str, Any]:
+        return item if isinstance(item, dict) else {"week": hint, "theme": str(item)}
+
+    def _slot_dict(item: Any) -> dict[str, Any]:
+        return item if isinstance(item, dict) else {"title": str(item)}
+
     new_pack.weekly_themes = [
         WeekTheme(
             week=int(w.get("week", i + 1)),
@@ -283,7 +292,8 @@ async def iterate_strategy(
             intent=str(w.get("intent", "")),
             notes=str(w.get("notes", "")),
         )
-        for i, w in enumerate(parsed.get("weekly_themes") or [])
+        for i, _raw in enumerate(parsed.get("weekly_themes") or [])
+        for w in [_theme_dict(_raw, i + 1)]
     ]
     schedule_raw = parsed.get("schedule") or []
     new_pack.schedule = [
@@ -299,7 +309,8 @@ async def iterate_strategy(
             materials_needed=[str(x) for x in (s.get("materials_needed") or [])],
             intent=str(s.get("intent", "")),
         )
-        for s in schedule_raw
+        for _raw in schedule_raw
+        for s in [_slot_dict(_raw)]
     ]
 
     # Body-draft pool — parallel, same as expand().

@@ -357,6 +357,21 @@ async def _expand_inner(
     weekly_themes_raw = sched_parsed.get("weekly_themes") or []
     schedule_raw = sched_parsed.get("schedule") or []
 
+    # Defensive coercion. Claude's tool_use occasionally returns array items
+    # as bare strings (especially under truncation), which used to crash the
+    # whole expand pipeline with AttributeError. Now we either parse a dict
+    # or wrap a string into a minimal dict.
+    def _to_theme_dict(item: Any, week_hint: int) -> dict[str, Any]:
+        if isinstance(item, dict):
+            return item
+        return {"week": week_hint, "theme": str(item), "intent": "", "notes": ""}
+
+    def _to_slot_dict(item: Any) -> dict[str, Any]:
+        if isinstance(item, dict):
+            return item
+        # Bare-string fallback: parse "[自补]" or similar into the title field.
+        return {"title": str(item), "outline": [], "materials_needed": []}
+
     weekly_themes = [
         WeekTheme(
             week=int(w.get("week", i + 1)),
@@ -364,7 +379,8 @@ async def _expand_inner(
             intent=str(w.get("intent", "")),
             notes=str(w.get("notes", "")),
         )
-        for i, w in enumerate(weekly_themes_raw)
+        for i, _raw in enumerate(weekly_themes_raw)
+        for w in [_to_theme_dict(_raw, i + 1)]
     ]
     schedule = [
         TopicSlot(
@@ -379,7 +395,8 @@ async def _expand_inner(
             materials_needed=[str(x) for x in (s.get("materials_needed") or [])],
             intent=str(s.get("intent", "")),
         )
-        for s in schedule_raw
+        for _raw in schedule_raw
+        for s in [_to_slot_dict(_raw)]
     ]
 
     # --- Body-draft pool: parallel, one call per slot ---
