@@ -306,6 +306,54 @@ textarea { resize: vertical; min-height: 80px; }
 .picker-create { display: flex; gap: 4px; padding: 4px; align-items: center; }
 .picker-create input { font-size: 12px; padding: 4px 6px; }
 
+/* Progress timeline ---------------------------------------------------- */
+.progress-timeline { margin: 8px 0 16px; }
+.progress-bar-outer {
+  width: 100%; height: 8px; background: #f0f0f0;
+  border-radius: 4px; overflow: hidden;
+  position: relative;
+}
+.progress-bar-fill {
+  height: 100%; border-radius: 4px;
+  transition: width 0.6s ease, background 0.3s;
+  background: linear-gradient(90deg, var(--primary), #ff7a90);
+  position: relative;
+}
+.progress-bar-fill.running::after {
+  content: ""; position: absolute; inset: 0;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(255,255,255,0.18) 0 8px,
+    transparent 8px 16px
+  );
+  animation: progress-stripes 1s linear infinite;
+  border-radius: 4px;
+}
+.progress-bar-fill.done { background: var(--ok); }
+.progress-bar-fill.error { background: var(--danger); }
+@keyframes progress-stripes {
+  from { background-position: 0 0; }
+  to { background-position: 32px 0; }
+}
+.progress-stages {
+  list-style: none; padding: 10px 0 0; margin: 0;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.progress-stage {
+  display: grid; grid-template-columns: 22px 1fr 60px;
+  gap: 8px; align-items: center;
+  padding: 4px 6px; border-radius: 4px;
+  font-size: 12.5px;
+  transition: background 0.15s;
+}
+.progress-stage.pending { color: var(--muted); }
+.progress-stage.active { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+.progress-stage.done { color: var(--ok); }
+.progress-stage.error { background: var(--danger-soft); color: var(--danger); }
+.progress-stage-icon { text-align: center; font-size: 14px; }
+.progress-stage-sub { color: var(--muted); font-weight: 400; font-size: 11.5px; margin-left: 8px; }
+.progress-stage-time { font-family: ui-monospace, monospace; font-size: 10.5px; color: var(--muted); text-align: right; }
+
 .platform-pill {
   display: inline-block; padding: 1px 8px; border-radius: 10px;
   background: #eef5ff; color: #1d4ed8; font-size: 11px; margin-left: 6px;

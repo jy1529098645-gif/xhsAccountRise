@@ -5,7 +5,19 @@ import { fmtLikes } from "../format";
 import AgentConfigPanel, {
   AgentSelection, defaultSelection, selectionToSpecs,
 } from "../components/AgentConfigPanel";
+import ProgressTimeline, { Stage } from "../components/ProgressTimeline";
+import { humaniseError } from "../errors";
 import type { ComposeBundle, DraftCandidate, Library, Platform } from "../types";
+
+const COMPOSE_STAGES: Stage[] = [
+  { label: "🤖 策略师定方向", durationSec: 25, sub: "选 hook 类型 / 开头钩子 / 结构 / 避坑" },
+  { label: "🔍 调研员检索参考爆款 (无 LLM)", durationSec: 3 },
+  { label: "🤖🤖🤖 起草团并发起草 N 份候选", durationSec: 60 },
+  { label: "🤖🤖 审稿团跨家评分", durationSec: 35 },
+  { label: "🤖 改稿师按评审改稿", durationSec: 25 },
+  { label: "🤖 融合师综合所有候选 → 最终稿", durationSec: 25 },
+  { label: "🤖 计划师产发布计划", durationSec: 20 },
+];
 
 const ANGLES = ["教程", "痛点", "故事", "工具评测", "对比", "感悟", "数字", "种草", "建议"];
 
@@ -42,7 +54,7 @@ export default function Composer() {
       });
       setBundle(res);
     } catch (e: any) {
-      setErr(e.message);
+      setErr(humaniseError(e));
     } finally { setRunning(false); }
   }
 
@@ -141,6 +153,13 @@ export default function Composer() {
         </div>
 
         <div>
+          {running && (
+            <div className="card">
+              <h2 style={{margin: "0 0 4px"}}>🤖🤖🤖 AI 团队工作中</h2>
+              <p className="muted" style={{margin: 0}}>7 个角色协作出稿 + 发布计划</p>
+              <ProgressTimeline stages={COMPOSE_STAGES} currentIndex={-1} auto error={err} />
+            </div>
+          )}
           {!bundle && !running && (
             <div className="card muted" style={{textAlign: "center", padding: 40}}>
               <div style={{fontSize: 36, marginBottom: 10}}>👈</div>

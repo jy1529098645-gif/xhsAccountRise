@@ -3,8 +3,32 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { fmtBytes, fmtRelative, fmtTime, platformLabel } from "../format";
 import PlatformPill from "../components/PlatformPill";
+import ProgressTimeline, { Stage } from "../components/ProgressTimeline";
+import { humaniseError } from "../errors";
 import { GITHUB_REPO } from "../catalog";
 import type { Library, Platform } from "../types";
+
+const UPLOAD_STAGES: Stage[] = [
+  { label: "🤖 读取你的数据库", durationSec: 5,
+    sub: "AI 正在打开 SQLite 看里面有什么表 / 列" },
+  { label: "🤖 看懂数据格式（schema 适配）", durationSec: 15,
+    sub: "如果不是标准小红书格式，AI 会自动把你的字段映射过来" },
+  { label: "🤖 提取爆款 DNA（统计分析）", durationSec: 20,
+    sub: "标题 hook / 蓝海词 / 发布时段 / 评论需求 / 字数互动…" },
+  { label: "🤖 Claude 独立写一份报告", durationSec: 45,
+    sub: "Anthropic 的视角" },
+  { label: "🤖 OpenAI 独立写一份报告", durationSec: 45,
+    sub: "GPT-4o 的视角（并行进行中）" },
+  { label: "🤖 双方互相评审 + 主编整合共识", durationSec: 40,
+    sub: "只保留双方都认可的洞察，分歧单列" },
+];
+
+const REANALYZE_STAGES: Stage[] = [
+  { label: "🤖 Claude 独立写一份报告", durationSec: 45, sub: "Anthropic 的视角" },
+  { label: "🤖 OpenAI 独立写一份报告", durationSec: 45, sub: "GPT-4o 的视角" },
+  { label: "🤖 双方互相评审 + 主编整合共识", durationSec: 40,
+    sub: "只保留双方都认可的洞察" },
+];
 
 interface ReportSummary {
   report_id: string;
@@ -51,63 +75,40 @@ export default function Reports() {
   async function handleFile(f: File | null) {
     if (!f) return;
     if (!/\.(db|sqlite|sqlite3)$/i.test(f.name)) {
-      setErr(`只接受 SQLite (.db / .sqlite / .sqlite3)：${f.name}`);
+      setErr(`只接受 SQLite 数据库文件（.db / .sqlite / .sqlite3）：${f.name}`);
       return;
     }
     setErr(null); setInfo(null);
     const displayName = f.name.replace(/\.(db|sqlite|sqlite3)$/i, "");
     try {
-      // Step A: upload + detect + adapter + activate + DNA analyze
-      setStage("uploading");
-      setProgress("📤 上传 + 校验 + 嗅探平台…");
-      setStage("analyzing-dna");
-      setProgress("🔄 AI 嗅探 schema 并自动适配（若非 xhs 格式）→ 建索引 → 跑爆款 DNA…");
+      // Both backend calls (import + insight) are opaque, so we run an
+      // auto-pacing progress timeline + fast-forward to done at the end.
+      setStage("running-insight");  // single "we're working" state
+      setProgress("");
+
       const imp = await api.importLibrary(f, displayName, pendingPlatform);
 
-      // 注意：不再因为 analyze 报错就阻断 — Insight 流程也能 fallback 用 raw schema。
-      // 这里只是把工程信号汇报给用户，让他们知道发生了什么。
+      // Build friendly status summary (no scary 'error' text)
       const summaryBits: string[] = [];
       if (imp.adapter?.adapted) {
         const m = imp.adapter.mapping_summary?.notes;
-        const mapped = m?.source_table
-          ? `已把源表 \`${m.source_table}\` 自动映射到标准 schema`
-          : "已自动适配 schema";
-        summaryBits.push(`🔄 ${mapped}`);
-      }
-      if (imp.schema_suggestions?.length) {
-        summaryBits.push(...imp.schema_suggestions.map((s: string) => `💡 ${s}`));
+        if (m?.source_table) {
+          summaryBits.push(`🔄 AI 把你库里的「${m.source_table}」表自动映射到标准格式了`);
+        }
       }
       if (imp.section_errors && Object.keys(imp.section_errors).length > 0) {
-        summaryBits.push(`⚠️ 部分 DNA 子部分跳过：${Object.keys(imp.section_errors).join("、")}（AI 依然能基于原始 schema 分析）`);
-      }
-      if (imp.analyze_error) {
-        summaryBits.push(`⚠️ DNA 分析有报错：${imp.analyze_error.slice(0, 120)} — AI 会用 raw schema 兜底分析`);
+        summaryBits.push(`💡 这库不太像标准小红书数据，AI 用了原始 schema 兜底分析`);
       }
       if (summaryBits.length > 0) {
         setInfo(summaryBits.join("\n"));
       }
 
-      const platDetected = imp.detected_platform
-        ? `识别为 ${platformLabel(imp.detected_platform)}`
-        : `用户指定 ${platformLabel(imp.platform)}`;
-      setProgress(
-        `✓ 已导入 · ${imp.notes_count.toLocaleString()} 条 · ${platDetected} · ` +
-        `开始让 Claude × OpenAI 出共识报告…`
-      );
-
-      // Step B: run insight report
-      setStage("running-insight");
       const r = await api.runInsight(imp.lib_id);
-      setProgress("✓ 报告完成，跳转中…");
       setStage("done");
-      setTimeout(() => navigate(`/reports/${r.report_id}`), 500);
+      setProgress("✓ 报告完成");
+      setTimeout(() => navigate(`/reports/${r.report_id}`), 600);
     } catch (e: any) {
-      // Surface schema fatal errors cleanly
-      let msg: string = e.message || String(e);
-      if (msg.includes("422")) {
-        msg = "数据库 schema 不兼容：" + msg.replace(/^.+422[^:]*:\s*/, "");
-      }
-      setErr(msg);
+      setErr(humaniseError(e));
       setStage("idle");
       setProgress("");
     }
@@ -122,13 +123,12 @@ export default function Reports() {
         await api.activateLibrary(selectedLibId);
       }
       setStage("running-insight");
-      setProgress("📊 Claude × OpenAI 双 AI 协作分析中…（约 60-180s）");
+      setProgress("");
       const r = await api.runInsight(selectedLibId);
-      setProgress("✓ 报告完成，跳转中…");
       setStage("done");
-      setTimeout(() => navigate(`/reports/${r.report_id}`), 500);
+      setTimeout(() => navigate(`/reports/${r.report_id}`), 600);
     } catch (e: any) {
-      setErr(e.message);
+      setErr(humaniseError(e));
       setStage("idle");
       setProgress("");
     }
@@ -181,23 +181,35 @@ export default function Reports() {
             onChange={e => handleFile(e.target.files?.[0] ?? null)} />
           {busy ? (
             <>
-              <div className="big-icon">{stage === "running-insight" ? "🤖🤖" : "⏳"}</div>
-              <h2 style={{margin: 0}}>{progress || "处理中…"}</h2>
-              <div className="muted" style={{marginTop: 6}}>不要关闭页面</div>
+              <div className="big-icon">🤖🤖</div>
+              <h2 style={{margin: 0}}>{progress || "AI 团队正在分析你的数据库"}</h2>
+              <div className="muted" style={{marginTop: 6}}>
+                不要关闭页面 · 看下面进度，1-3 分钟自动跳到报告
+              </div>
             </>
           ) : (
             <>
               <div className="big-icon">📂</div>
-              <h2 style={{margin: 0}}>把数据库拖到这里 / 点击选择</h2>
+              <h2 style={{margin: 0}}>把数据库丢给 AI 分析</h2>
               <div className="muted" style={{marginTop: 6}}>
-                SQLite (.db / .sqlite / .sqlite3) · 自动嗅探平台 → 跑爆款 DNA → 直接出 AI 共识报告
+                拖一个 SQLite 数据库到这里 / 点击选择 · AI 自己读 + 出专业起号分析报告
               </div>
               <div className="muted" style={{marginTop: 4, fontSize: 11}}>
-                整个流程 1-3 分钟
+                支持 .db / .sqlite / .sqlite3 · 任何 schema 都吃 · 整个过程 1-3 分钟
               </div>
             </>
           )}
         </div>
+
+        {busy && (
+          <ProgressTimeline
+            stages={UPLOAD_STAGES}
+            currentIndex={-1}
+            auto
+            done={stage === "done"}
+            error={err}
+          />
+        )}
 
         {!busy && (
           <div className="row" style={{justifyContent: "space-between", alignItems: "center", marginTop: 12}}>
@@ -241,11 +253,20 @@ export default function Reports() {
                 </div>
               )}
             </div>
-            <button onClick={reAnalyze} disabled={offline || !selectedLibId}
+            <button onClick={reAnalyze} disabled={offline || !selectedLibId || busy}
               style={{minWidth: 160, fontSize: 14, padding: "10px 18px"}}>
-              🚀 重跑报告
+              {busy ? "AI 工作中…" : "🚀 重跑报告"}
             </button>
           </div>
+          {busy && stage === "running-insight" && (
+            <ProgressTimeline
+              stages={REANALYZE_STAGES}
+              currentIndex={-1}
+              auto
+              done={stage !== "running-insight"}
+              error={err}
+            />
+          )}
         </div>
       )}
 

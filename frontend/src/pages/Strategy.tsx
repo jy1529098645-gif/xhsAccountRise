@@ -3,11 +3,33 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import { fmtRelative, platformLabel } from "../format";
 import PlatformPill from "../components/PlatformPill";
+import ProgressTimeline, { Stage } from "../components/ProgressTimeline";
+import { humaniseError } from "../errors";
 import { LLM_CATALOG } from "../catalog";
 import type {
   AccountInputDTO, Library, Platform, StrategicDirectionDTO, StrategyPackDTO,
   StrategyListItem,
 } from "../types";
+
+const AUTOFILL_STAGES: Stage[] = [
+  { label: "🤖 Claude 看你的库出一版初稿", durationSec: 20,
+    sub: "拟方向 / 受众 / 周期 / 频率 等字段" },
+  { label: "🤖 OpenAI 独立出另一版", durationSec: 20,
+    sub: "并行进行" },
+  { label: "🤖 主编融合共识 → 给你一份合并稿", durationSec: 15 },
+];
+
+const PROPOSE_STAGES: Stage[] = [
+  { label: "🤖 读 DNA + 你的 brief", durationSec: 5 },
+  { label: "🤖 Claude 产 3-5 个差异化方向", durationSec: 25,
+    sub: "每个方向带 hook / 受众 / 风险 / 备选" },
+];
+
+const EXPAND_STAGES: Stage[] = [
+  { label: "🤖 3 家 LLM 并发起草选题候选（30+ 条）", durationSec: 50 },
+  { label: "🤖 排期师融合 + 排进周历", durationSec: 35 },
+  { label: "🤖 资源/风险师整理材料清单 + 指标", durationSec: 20 },
+];
 
 type Phase = "autofilling" | "input" | "loading-propose" | "directions" | "loading-expand" | "pack";
 
@@ -153,7 +175,7 @@ export default function Strategy() {
       });
       setPhase("input");
     } catch (e: any) {
-      setAutofillErr(e.message);
+      setAutofillErr(humaniseError(e));
       setPhase("input");
     }
   }
@@ -179,7 +201,7 @@ export default function Strategy() {
       navigate(`/strategy/${res.pack_id}`, { replace: true });
       api.listStrategies().then(setHistory).catch(() => {});
     } catch (e: any) {
-      setErr(e.message); setPhase("input");
+      setErr(humaniseError(e)); setPhase("input");
     }
   }
 
@@ -204,7 +226,7 @@ export default function Strategy() {
       // Refresh history list
       api.listStrategies().then(setHistory).catch(() => {});
     } catch (e: any) {
-      setErr(e.message); setPhase("directions");
+      setErr(humaniseError(e)); setPhase("directions");
     }
   }
 
@@ -282,10 +304,11 @@ export default function Strategy() {
       )}
 
       {phase === "autofilling" && (
-        <LoadingCard
-          title="AI 双方正在分析数据库为你拟初稿…"
-          subtitle="Claude + OpenAI 独立分析 → 互评 → 主编融合共识 (约 30-60s)"
-        />
+        <div className="card">
+          <h2 style={{margin: "0 0 4px"}}>🤖🤖 AI 双方正在为你拟起号初稿</h2>
+          <p className="muted" style={{margin: 0}}>Claude + OpenAI 独立分析 → 互评 → 主编融合共识</p>
+          <ProgressTimeline stages={AUTOFILL_STAGES} currentIndex={-1} auto />
+        </div>
       )}
 
       {phase === "input" && (
@@ -328,10 +351,11 @@ export default function Strategy() {
       )}
 
       {phase === "loading-propose" && (
-        <LoadingCard
-          title="AI 团队正在分析数据 + 拟方向…"
-          subtitle="读 brief → 解析爆款 DNA → 输出 3-5 个差异化定位方向（约 20-40s）"
-        />
+        <div className="card">
+          <h2 style={{margin: "0 0 4px"}}>🤖 AI 在为你拟候选方向</h2>
+          <p className="muted" style={{margin: 0}}>读 brief → 解析爆款 DNA → 输出 3-5 个差异化定位</p>
+          <ProgressTimeline stages={PROPOSE_STAGES} currentIndex={-1} auto />
+        </div>
       )}
 
       {phase === "directions" && (
@@ -342,10 +366,11 @@ export default function Strategy() {
       )}
 
       {phase === "loading-expand" && (
-        <LoadingCard
-          title="AI 团队正在排期 + 列材料…"
-          subtitle="3 家 LLM 并发起草选题 → 排期师融合排成周历 → 资源师整理材料/风险/指标"
-        />
+        <div className="card">
+          <h2 style={{margin: "0 0 4px"}}>🤖🤖🤖 AI 团队正在排期 + 列材料</h2>
+          <p className="muted" style={{margin: 0}}>多家 LLM 协作出完整周历 + 材料清单 + 风险评估</p>
+          <ProgressTimeline stages={EXPAND_STAGES} currentIndex={-1} auto />
+        </div>
       )}
 
       {phase === "pack" && pack && (
