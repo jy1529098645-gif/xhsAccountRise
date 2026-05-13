@@ -485,8 +485,32 @@ def build_dna(version: str | None = None) -> dict[str, Any]:
     return artifact
 
 
+def attach_raw_schema(artifact: dict[str, Any]) -> dict[str, Any]:
+    """Best-effort: include the library's raw table/column structure as a
+    fallback context for Insight when the canonical analysis is sparse.
+
+    This makes the system genuinely 'just accept any SQLite' — even if DNA
+    sections all fail, the Insight LLMs have *something* (raw schema +
+    sample rows) to reason over.
+    """
+    try:
+        from .. import adapt as _adapt, library as _library
+        db_path = _library.current_db_path()
+        if db_path.exists():
+            artifact["raw_schema"] = _adapt.inspect_source(db_path, sample_rows=2)
+    except Exception as e:
+        artifact["raw_schema_error"] = str(e)
+    return artifact
+
+
 def persist(artifact: dict[str, Any]) -> Path:
-    """Write the JSON artifact to disk *and* upsert into studio_dna_artifacts."""
+    """Write the JSON artifact to disk *and* upsert into studio_dna_artifacts.
+
+    Always persists — even if every section failed. The insight pipeline
+    needs *something* to work with, and an empty/sparse artifact is still
+    better than a missing one.
+    """
+    attach_raw_schema(artifact)
     version = artifact["version"]
     fp = config.ANALYSIS_DIR / f"v{version}.json"
     fp.write_text(json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8")

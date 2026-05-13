@@ -359,35 +359,61 @@ def _build_select(spec: dict[str, Any], canonical_cols: list[str]) -> tuple[str,
     return ",\n  ".join(parts), source_table, where
 
 
+def _empty_view_sql(view_name: str, canonical_cols: list[str]) -> str:
+    """0-row view with all canonical columns. Lets downstream SELECTs succeed."""
+    parts = [f"{_DEFAULT_EXPRS.get(c, 'NULL')} AS {c}" for c in canonical_cols]
+    return (
+        f"DROP VIEW IF EXISTS temp.{view_name};\n"
+        f"CREATE TEMP VIEW {view_name} AS\n"
+        f"SELECT\n  {', '.join(parts)}\n"
+        f"WHERE 0;"
+    )
+
+
 def build_view_sql(mapping: dict[str, Any]) -> list[str]:
-    """Generate a list of CREATE TEMP VIEW statements from the mapping JSON."""
+    """Always emits BOTH `notes` and `comments` views — real if the mapping
+    has a source_table, else a 0-row placeholder. Downstream SQL never
+    crashes from a missing view."""
     statements: list[str] = []
+
     notes_spec = mapping.get("notes")
-    if notes_spec:
-        sel, table, where = _build_select(
-            notes_spec, list(CANONICAL_NOTES_COLUMNS.keys()),
-        )
-        statements.append(
-            f"DROP VIEW IF EXISTS temp.notes;\n"
-            f"CREATE TEMP VIEW notes AS\n"
-            f"SELECT\n  {sel}\n"
-            f"FROM {_quote_ident(table)}"
-            + (f"\n{where}" if where else "")
-            + ";"
-        )
+    if notes_spec and notes_spec.get("source_table"):
+        try:
+            sel, table, where = _build_select(
+                notes_spec, list(CANONICAL_NOTES_COLUMNS.keys()),
+            )
+            statements.append(
+                f"DROP VIEW IF EXISTS temp.notes;\n"
+                f"CREATE TEMP VIEW notes AS\n"
+                f"SELECT\n  {sel}\n"
+                f"FROM {_quote_ident(table)}"
+                + (f"\n{where}" if where else "")
+                + ";"
+            )
+        except Exception:
+            statements.append(_empty_view_sql("notes", list(CANONICAL_NOTES_COLUMNS.keys())))
+    else:
+        statements.append(_empty_view_sql("notes", list(CANONICAL_NOTES_COLUMNS.keys())))
+
     comments_spec = mapping.get("comments")
-    if comments_spec:
-        sel, table, where = _build_select(
-            comments_spec, list(CANONICAL_COMMENTS_COLUMNS.keys()),
-        )
-        statements.append(
-            f"DROP VIEW IF EXISTS temp.comments;\n"
-            f"CREATE TEMP VIEW comments AS\n"
-            f"SELECT\n  {sel}\n"
-            f"FROM {_quote_ident(table)}"
-            + (f"\n{where}" if where else "")
-            + ";"
-        )
+    if comments_spec and comments_spec.get("source_table"):
+        try:
+            sel, table, where = _build_select(
+                comments_spec, list(CANONICAL_COMMENTS_COLUMNS.keys()),
+            )
+            statements.append(
+                f"DROP VIEW IF EXISTS temp.comments;\n"
+                f"CREATE TEMP VIEW comments AS\n"
+                f"SELECT\n  {sel}\n"
+                f"FROM {_quote_ident(table)}"
+                + (f"\n{where}" if where else "")
+                + ";"
+            )
+        except Exception:
+            statements.append(_empty_view_sql("comments", list(CANONICAL_COMMENTS_COLUMNS.keys())))
+    else:
+        statements.append(_empty_view_sql("comments", list(CANONICAL_COMMENTS_COLUMNS.keys())))
+
     return statements
 
 
@@ -406,8 +432,8 @@ def apply_views(con: sqlite3.Connection, mapping: dict[str, Any]) -> None:
 # ---- Orchestrator ------------------------------------------------------
 
 async def adapt_library(lib_id: str, *, llm_spec: str = "claude:opus") -> dict[str, Any]:
-    """End-to-end: inspect source → AI-propose map → save map. Caller is
-    responsible for triggering a re-analyze afterwards."""
+    """End-to-end: inspect → AI-propose map → save map. Even on total failure
+    we save an empty mapping so placeholder views exist."""
     from . import library
     meta = library.get_meta(lib_id)
     if meta is None:
@@ -415,24 +441,38 @@ async def adapt_library(lib_id: str, *, llm_spec: str = "claude:opus") -> dict[s
     db_path = library.LIBRARIES_DIR / lib_id / "xhs.db"
     source = inspect_source(db_path)
     if is_canonical(source):
-        # Already canonical — clear any stale map.
         p = schema_map_path(lib_id)
         if p.exists():
             p.unlink()
         return {"adapted": False, "reason": "canonical xhs schema, no map needed",
                 "source_tables": [t["name"] for t in source["tables"]]}
-    mapping = await propose_with_llm(source, llm_spec=llm_spec)
+
+    if not source.get("tables"):
+        save_map(lib_id, {"notes": None, "comments": None,
+                          "reasoning": "源数据库无表 — 仅创建占位 view"})
+        return {"adapted": True, "mapping": {}, "notes_rows": 0,
+                "source_tables": [], "view_error": None,
+                "reasoning": "源数据库无表"}
+
+    try:
+        mapping = await propose_with_llm(source, llm_spec=llm_spec)
+    except Exception as e:
+        save_map(lib_id, {"notes": None, "comments": None,
+                          "reasoning": f"AI 推断失败 ({e!r})，使用占位 view"})
+        return {"adapted": True, "mapping": {}, "notes_rows": 0,
+                "view_error": f"ai_failed: {e!r}",
+                "source_tables": [t["name"] for t in source["tables"]]}
+
     save_map(lib_id, mapping)
-    # Validate the produced map by trying to create the views.
     test_con = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
     apply_views(test_con, mapping)
-    # Smoke: try to read a row from `notes` view
     try:
         n = test_con.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
     except sqlite3.OperationalError as e:
         test_con.close()
         return {"adapted": True, "mapping": mapping, "view_error": str(e),
-                "notes_rows": 0}
+                "notes_rows": 0,
+                "source_tables": [t["name"] for t in source["tables"]]}
     test_con.close()
     return {"adapted": True, "mapping": mapping, "notes_rows": n,
             "source_tables": [t["name"] for t in source["tables"]]}

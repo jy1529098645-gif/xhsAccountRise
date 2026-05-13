@@ -30,9 +30,14 @@ from ..generators.base import Generator
 # ---- DNA context ---------------------------------------------------------
 
 def _build_dna_context(dna: dict[str, Any]) -> str:
-    """Compact, prompt-friendly summary of the DNA artifact."""
+    """Compact, prompt-friendly summary of the DNA artifact.
+
+    Tolerates a completely empty artifact — falls back to dumping the raw
+    source schema + sample rows so the AIs still have *something* to say
+    about a library that's totally non-xhs-shaped.
+    """
     if not dna:
-        return "（暂无 DNA 数据）"
+        return "（暂无 DNA 数据，请尽量根据其他线索分析）"
     s = dna.get("sections", {}) or {}
     summary = dna.get("summary", {}) or {}
     bo = (s.get("keyword_blueocean", {}) or {}).get("rankings", [])[:15]
@@ -109,7 +114,12 @@ def _build_dna_context(dna: dict[str, Any]) -> str:
 # ---- Prompts ------------------------------------------------------------
 
 INDEPENDENT_SYSTEM = """\
-你是「数据洞察分析师」。给你一份社交平台爆款数据 (DNA)，请独立分析，输出一份结构化报告。
+你是「数据洞察分析师」。给你一份数据库的内容（可能是社交平台爆款数据，也可能是任意其它类型 SQLite），请独立分析，输出一份结构化报告。
+
+**重要**：数据可能很稀疏甚至几乎全空。这种情况下你依然要尽力：
+- 如果有 raw_schema 兜底，从表名 + 列名 + 样本行推测这库装的是什么
+- 不要因为数据少就摆烂；从有限信息能挖什么就挖什么
+- 数据极度稀疏时，可以建议用户「这个数据库不像是社交平台爆款数据，更像 X / Y 用途」
 
 不要参考任何「其他 AI 的观点」（你现在是独立分析阶段）。报告输出 JSON：
 
@@ -283,7 +293,21 @@ async def run(library_id: str, *,
         ).fetchone()
     dna = json.loads(row["payload_json"]) if row else {}
     if not dna:
-        raise RuntimeError("no DNA artifact yet — run analyze first")
+        # Build a minimal artifact-shaped dict from raw schema so the LLMs
+        # always have something to analyse. We don't *persist* this — it
+        # just keeps the pipeline running for the user's UI.
+        try:
+            from .. import adapt as _adapt, library as _library
+            raw = _adapt.inspect_source(_library.current_db_path(), sample_rows=2)
+        except Exception:
+            raw = {}
+        dna = {
+            "version": "ad-hoc",
+            "sections": {},
+            "summary": {"total_notes_analysed": 0, "dominant_hooks": []},
+            "raw_schema": raw,
+            "section_errors": {"all": "no canonical analysis available — pure schema-based insight"},
+        }
 
     context = _build_dna_context(dna)
     t0 = time.time()

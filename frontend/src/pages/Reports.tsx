@@ -64,37 +64,27 @@ export default function Reports() {
       setProgress("🔄 AI 嗅探 schema 并自动适配（若非 xhs 格式）→ 建索引 → 跑爆款 DNA…");
       const imp = await api.importLibrary(f, displayName, pendingPlatform);
 
-      // ---- Validate the analyze step actually succeeded -------------
-      if (imp.analyzed === false || imp.analyze_error) {
-        setErr(
-          `数据库导入成功（${imp.notes_count.toLocaleString()} 条），但爆款 DNA 分析失败：\n` +
-          `${imp.analyze_error || "未知"}\n\n` +
-          `AI 适配 schema 也搞不定的话，可以去「📥 资源库」手动编辑 schema_map.json，` +
-          `或换一个比较标准的 .db 试试。`
-        );
-        setStage("idle");
-        setProgress("");
-        await load();
-        return;
-      }
-
-      // Build a friendly status summary that includes adapter info
+      // 注意：不再因为 analyze 报错就阻断 — Insight 流程也能 fallback 用 raw schema。
+      // 这里只是把工程信号汇报给用户，让他们知道发生了什么。
       const summaryBits: string[] = [];
       if (imp.adapter?.adapted) {
         const m = imp.adapter.mapping_summary?.notes;
         const mapped = m?.source_table
-          ? `已把源表 \`${m.source_table}\` 自动映射到 canonical schema`
+          ? `已把源表 \`${m.source_table}\` 自动映射到标准 schema`
           : "已自动适配 schema";
         summaryBits.push(`🔄 ${mapped}`);
       }
-      if (imp.schema_warnings?.length) {
-        summaryBits.push("⚠️ " + imp.schema_warnings.join(" · "));
+      if (imp.schema_suggestions?.length) {
+        summaryBits.push(...imp.schema_suggestions.map((s: string) => `💡 ${s}`));
       }
       if (imp.section_errors && Object.keys(imp.section_errors).length > 0) {
-        summaryBits.push(`⚠️ 跳过的 DNA 子部分：${Object.keys(imp.section_errors).join("、")}`);
+        summaryBits.push(`⚠️ 部分 DNA 子部分跳过：${Object.keys(imp.section_errors).join("、")}（AI 依然能基于原始 schema 分析）`);
+      }
+      if (imp.analyze_error) {
+        summaryBits.push(`⚠️ DNA 分析有报错：${imp.analyze_error.slice(0, 120)} — AI 会用 raw schema 兜底分析`);
       }
       if (summaryBits.length > 0) {
-        setInfo(summaryBits.join(" · "));
+        setInfo(summaryBits.join("\n"));
       }
 
       const platDetected = imp.detected_platform
