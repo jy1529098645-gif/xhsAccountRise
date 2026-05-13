@@ -77,7 +77,6 @@ export default function Libraries() {
   }
 
   async function del(libId: string) {
-    if (!confirm(`确认删除 ${libId}?`)) return;
     setWorking(libId); setErr(null);
     try { await api.deleteLibrary(libId); setInfo(`✓ 已删除 ${libId}`); await load(); }
     catch (e: any) { setErr(e.message); }
