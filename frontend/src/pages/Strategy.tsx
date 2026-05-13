@@ -130,19 +130,36 @@ export default function Strategy() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // If URL contains a packId, load that saved pack.
+  // If URL contains a packId, load that saved pack. Two important guards
+  // against the old race-condition that left users staring at a "🤖🤖🤖 排期
+  // 中…" screen forever after propose succeeded:
+  //
+  //   1. If we already have this pack's state in memory (because submitInput
+  //      / pickDirection just populated it before calling navigate), skip
+  //      the re-fetch entirely.
+  //   2. Don't blindly flip phase to "loading-expand" before we know whether
+  //      we're loading a directions-only pack or a fully-expanded one —
+  //      that's what made the post-propose flow look hung.
   useEffect(() => {
     if (!urlPackId) return;
+    // Already loaded this exact pack? Done — this is the post-propose case
+    // where submitInput populated state and then navigated; we must NOT
+    // overwrite phase or refetch, otherwise users get stuck on a
+    // "🤖🤖🤖 排期 + 列材料" timeline that points nowhere.
+    if (packId === urlPackId && (pack || directions.length > 0)) return;
+
     (async () => {
+      // Fresh load from a bookmark / history click — phase=input is the
+      // safest neutral state while we figure out what's stored.
+      setPhase("input");
       try {
-        setPhase("loading-expand");
         const d = await api.getStrategy(urlPackId);
         if (d.pack) {
           setPack(d.pack);
           setPackId(urlPackId);
+          setDirections(d.directions || []);
           setPhase("pack");
         } else if (d.directions?.length) {
-          // Pack expansion never finished — let user pick again.
           setPackId(urlPackId);
           setDirections(d.directions);
           setPhase("directions");
