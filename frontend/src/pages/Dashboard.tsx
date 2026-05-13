@@ -1,27 +1,32 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
-import { fmtLikes, fmtTime } from "../format";
+import { fmtLikes, fmtRelative, fmtTime } from "../format";
 import PlatformPill from "../components/PlatformPill";
-import type { DnaArtifact, DraftListItem, Library, Status } from "../types";
+import type { DnaArtifact, DraftListItem, Library, Status, StrategyListItem } from "../types";
 
 export default function Dashboard() {
   const [status, setStatus] = useState<Status | null>(null);
   const [dna, setDna] = useState<DnaArtifact | null>(null);
   const [drafts, setDrafts] = useState<DraftListItem[]>([]);
   const [libs, setLibs] = useState<Library[]>([]);
+  const [strategies, setStrategies] = useState<StrategyListItem[]>([]);
+  const [reports, setReports] = useState<{report_id: string; library_id: string; created_at: number; status: string}[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
-        const [s, d, ds, ls] = await Promise.allSettled([
+        const [s, d, ds, ls, st, ip] = await Promise.allSettled([
           api.status(), api.dnaLatest(), api.drafts(), api.libraries(),
+          api.listStrategies(), api.listInsights(),
         ]);
         if (s.status === "fulfilled") setStatus(s.value);
         if (d.status === "fulfilled") setDna(d.value);
         if (ds.status === "fulfilled") setDrafts(ds.value);
         if (ls.status === "fulfilled") setLibs(ls.value);
+        if (st.status === "fulfilled") setStrategies(st.value);
+        if (ip.status === "fulfilled") setReports(ip.value as any);
       } catch (e: any) { setErr(e.message); }
     })();
   }, []);
@@ -75,6 +80,44 @@ export default function Dashboard() {
             主导 hook：{dna.summary.dominant_hooks.map(h => h.category).join(" · ")}
           </p>
           <Link to="/analysis">查看完整 DNA →</Link>
+        </div>
+      )}
+
+      {(reports.length > 0 || strategies.length > 0 || drafts.length > 0) && (
+        <div className="card" style={{background: "linear-gradient(180deg, #fff7e6 0%, #fff 100%)", borderColor: "#fde2a3"}}>
+          <h2>🕒 最近的产出（都已保存，随时回来看）</h2>
+          <div className="cards-grid" style={{gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))"}}>
+            {reports.length > 0 && (
+              <div className="stat-card">
+                <div className="label">📊 分析报告</div>
+                <div className="value">{reports.length}</div>
+                <div style={{fontSize: 12, marginTop: 6, lineHeight: 1.6}}>
+                  最近：<Link to={`/reports/${reports[0].report_id}`}>{fmtRelative(reports[0].created_at)} ↗</Link>
+                </div>
+                <div style={{marginTop: 4}}><Link to="/reports" style={{fontSize: 11}}>全部 →</Link></div>
+              </div>
+            )}
+            {strategies.length > 0 && (
+              <div className="stat-card">
+                <div className="label">🚀 起号策略</div>
+                <div className="value">{strategies.length}</div>
+                <div style={{fontSize: 12, marginTop: 6, lineHeight: 1.6}}>
+                  最近：<Link to={`/strategy/${strategies[0].pack_id}`}>{(strategies[0].input?.positioning || "策略").slice(0, 20)} ↗</Link>
+                </div>
+                <div style={{marginTop: 4}}><Link to="/strategy" style={{fontSize: 11}}>全部 →</Link></div>
+              </div>
+            )}
+            {drafts.length > 0 && (
+              <div className="stat-card">
+                <div className="label">📝 出稿</div>
+                <div className="value">{drafts.length}</div>
+                <div style={{fontSize: 12, marginTop: 6, lineHeight: 1.6}}>
+                  最近：<Link to={`/drafts/${drafts[0].draft_id}`}>{(drafts[0].brief?.topic || "稿件").slice(0, 20)} ↗</Link>
+                </div>
+                <div style={{marginTop: 4}}><Link to="/drafts" style={{fontSize: 11}}>全部 →</Link></div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

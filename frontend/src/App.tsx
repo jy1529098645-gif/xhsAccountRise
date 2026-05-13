@@ -68,6 +68,7 @@ export default function App() {
           <Route path="/reports" element={<Reports />} />
           <Route path="/reports/:id" element={<InsightReport />} />
           <Route path="/strategy" element={<Strategy />} />
+          <Route path="/strategy/:packId" element={<Strategy />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/analysis" element={<Analysis />} />
           <Route path="/composer" element={<Composer />} />

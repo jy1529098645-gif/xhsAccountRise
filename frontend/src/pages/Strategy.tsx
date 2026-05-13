@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
-import { platformLabel } from "../format";
+import { fmtRelative, platformLabel } from "../format";
 import PlatformPill from "../components/PlatformPill";
 import { LLM_CATALOG } from "../catalog";
 import type {
   AccountInputDTO, Library, Platform, StrategicDirectionDTO, StrategyPackDTO,
+  StrategyListItem,
 } from "../types";
 
 type Phase = "autofilling" | "input" | "loading-propose" | "directions" | "loading-expand" | "pack";
@@ -28,16 +29,28 @@ const INTENT_COLORS: Record<string, string> = {
   "拉新": "#fff5f5", "互动": "#fff8e6", "转化": "#fdecea", "沉淀": "#f0fafe",
 };
 
+// localStorage key for in-progress brief draft (per project)
+const DRAFT_KEY = "studio.strategy.draftInput";
+function emptyInput(): AccountInputDTO {
+  return {
+    positioning: "", target_audience: "",
+    cycle_weeks: 4, posts_per_week: 3,
+    personal_strengths: "", constraints: "", platform: "",
+  };
+}
+
 export default function Strategy() {
-  const [phase, setPhase] = useState<Phase>("autofilling");
-  const [input, setInput] = useState<AccountInputDTO>({
-    positioning: "",
-    target_audience: "",
-    cycle_weeks: 4,
-    posts_per_week: 3,
-    personal_strengths: "",
-    constraints: "",
-    platform: "",
+  const { packId: urlPackId } = useParams<{ packId?: string }>();
+  const navigate = useNavigate();
+
+  const [phase, setPhase] = useState<Phase>("input");
+  const [input, setInput] = useState<AccountInputDTO>(() => {
+    // Resume in-progress draft from localStorage if present.
+    try {
+      const cached = localStorage.getItem(DRAFT_KEY);
+      if (cached) return { ...emptyInput(), ...JSON.parse(cached) };
+    } catch { /* ignore */ }
+    return emptyInput();
   });
   const [activeLib, setActiveLib] = useState<Library | null>(null);
   const [platforms, setPlatforms] = useState<Platform[]>([]);
@@ -45,6 +58,7 @@ export default function Strategy() {
   const [directions, setDirections] = useState<StrategicDirectionDTO[]>([]);
   const [chosenIdx, setChosenIdx] = useState<number | null>(null);
   const [pack, setPack] = useState<StrategyPackDTO | null>(null);
+  const [history, setHistory] = useState<StrategyListItem[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -55,18 +69,67 @@ export default function Strategy() {
   const [autofill, setAutofill] = useState<AutofillResult | null>(null);
   const [autofillErr, setAutofillErr] = useState<string | null>(null);
 
+  // Save in-progress input to localStorage as user types.
+  useEffect(() => {
+    if (phase !== "input") return;
+    try {
+      const trimmed = { ...input };
+      // Don't persist trivial empty state.
+      if (trimmed.positioning || trimmed.target_audience || trimmed.personal_strengths) {
+        localStorage.setItem(DRAFT_KEY, JSON.stringify(trimmed));
+      }
+    } catch { /* ignore quota etc. */ }
+  }, [input, phase]);
+
+  // Load library list + history on mount; trigger autofill only on first-time
+  // use (no existing history, no in-progress draft, no specific pack in URL).
   useEffect(() => {
     api.libraries().then(ls => setActiveLib(ls.find(l => l.active) ?? null)).catch(() => {});
     api.platforms().then(setPlatforms).catch(() => {});
-
-    // Auto-trigger autofill on mount if backend reachable.
-    if (api.isConnected()) {
-      runAutofill();
-    } else {
-      setPhase("input");
-    }
+    api.listStrategies().then(hs => {
+      setHistory(hs);
+      if (urlPackId) return;  // The other effect will load it
+      let hasDraft = false;
+      try {
+        const cached = localStorage.getItem(DRAFT_KEY);
+        if (cached) {
+          const d = JSON.parse(cached);
+          hasDraft = !!(d.positioning?.trim() || d.target_audience?.trim());
+        }
+      } catch { /* ignore */ }
+      if (api.isConnected() && !hasDraft && hs.length === 0) {
+        runAutofill();
+      }
+    }).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // If URL contains a packId, load that saved pack.
+  useEffect(() => {
+    if (!urlPackId) return;
+    (async () => {
+      try {
+        setPhase("loading-expand");
+        const d = await api.getStrategy(urlPackId);
+        if (d.pack) {
+          setPack(d.pack);
+          setPackId(urlPackId);
+          setPhase("pack");
+        } else if (d.directions?.length) {
+          // Pack expansion never finished — let user pick again.
+          setPackId(urlPackId);
+          setDirections(d.directions);
+          setPhase("directions");
+        } else {
+          setPhase("input");
+        }
+      } catch (e: any) {
+        setErr(`无法加载该策略 ${urlPackId}: ${e.message}`);
+        setPhase("input");
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlPackId]);
 
   async function runAutofill(extraHints?: { personal?: string; constraints?: string }) {
     setPhase("autofilling"); setAutofillErr(null);
@@ -112,6 +175,9 @@ export default function Strategy() {
       setPackId(res.pack_id);
       setDirections(res.directions);
       setPhase("directions");
+      // Persist URL so reload/bookmark works
+      navigate(`/strategy/${res.pack_id}`, { replace: true });
+      api.listStrategies().then(setHistory).catch(() => {});
     } catch (e: any) {
       setErr(e.message); setPhase("input");
     }
@@ -131,6 +197,12 @@ export default function Strategy() {
       setPack(res.pack);
       setInfo(null);
       setPhase("pack");
+      // Update URL so refresh / bookmark works
+      navigate(`/strategy/${packId}`, { replace: true });
+      // Once expanded successfully, clear in-progress input draft
+      try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+      // Refresh history list
+      api.listStrategies().then(setHistory).catch(() => {});
     } catch (e: any) {
       setErr(e.message); setPhase("directions");
     }
@@ -139,6 +211,19 @@ export default function Strategy() {
   function reset() {
     setPhase("input"); setPackId(null); setDirections([]);
     setChosenIdx(null); setPack(null); setErr(null); setInfo(null);
+    setAutofill(null);
+    try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+    setInput(emptyInput());
+    if (urlPackId) navigate("/strategy");
+  }
+
+  function startNew(useAi = true) {
+    setPhase("input"); setPackId(null); setDirections([]);
+    setChosenIdx(null); setPack(null); setErr(null); setInfo(null);
+    if (urlPackId) navigate("/strategy");
+    if (useAi && api.isConnected()) {
+      runAutofill();
+    }
   }
 
   return (
@@ -163,6 +248,38 @@ export default function Strategy() {
       )}
       {err && <div className="banner danger" onClick={() => setErr(null)}>{err}</div>}
       {info && <div className="banner info">{info}</div>}
+
+      {/* Strategy history — visible across all phases when not viewing a specific pack */}
+      {history.length > 0 && phase === "input" && !urlPackId && (
+        <div className="card" style={{background: "#fafafa"}}>
+          <div className="spread">
+            <h3 style={{margin: 0}}>📜 历史策略（{history.length}）· 之前的方案仍然保留</h3>
+            <button className="ghost" onClick={() => startNew(true)} style={{fontSize: 12}}>+ 新建（让 AI 重新拟）</button>
+          </div>
+          <table className="table" style={{marginTop: 8}}>
+            <thead>
+              <tr><th>定位</th><th>周期</th><th>状态</th><th>时间</th><th></th></tr>
+            </thead>
+            <tbody>
+              {history.slice(0, 10).map(h => (
+                <tr key={h.pack_id}>
+                  <td>{h.input?.positioning?.slice(0, 36) || <em className="muted">—</em>}</td>
+                  <td className="muted">{h.input?.cycle_weeks ?? "?"} 周 · {h.input?.posts_per_week ?? "?"} 篇/周</td>
+                  <td>
+                    {h.status === "expanded" ? (
+                      <span style={{color: "var(--ok)"}}>✓ 完整方案</span>
+                    ) : (
+                      <span className="muted">仅候选方向</span>
+                    )}
+                  </td>
+                  <td className="muted">{fmtRelative(h.created_at)}</td>
+                  <td><Link to={`/strategy/${h.pack_id}`}>打开 →</Link></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {phase === "autofilling" && (
         <LoadingCard

@@ -310,6 +310,7 @@ export default function Reports() {
           <h3 style={{margin: "0 0 6px"}}>📖 下一步</h3>
           <p style={{margin: 0, fontSize: 13}}>
             看完报告 → 进 <Link to="/strategy">🚀 起号策略</Link> 让 AI 基于报告 + 你的想法拟一版完整起号方案。
+            报告会一直留在这里，随时可以回来翻。
           </p>
         </div>
       )}
