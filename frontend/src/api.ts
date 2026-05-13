@@ -15,15 +15,29 @@ const STATIC_PLATFORMS: Platform[] = [
 ];
 
 const KEY = "studio.backendUrl";
+const DISABLED_KEY = "studio.backendDisabled";
 const STATIC_BASE = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/data`;
+const DEFAULT_BACKEND = "http://127.0.0.1:8765";
 
 export function backendUrl(): string {
-  return localStorage.getItem(KEY) || "";
+  if (localStorage.getItem(DISABLED_KEY) === "1") return "";
+  return (localStorage.getItem(KEY) || DEFAULT_BACKEND).replace(/\/$/, "");
 }
 export function setBackendUrl(url: string) {
-  if (url) localStorage.setItem(KEY, url.replace(/\/$/, ""));
-  else localStorage.removeItem(KEY);
+  if (url) {
+    localStorage.setItem(KEY, url.replace(/\/$/, ""));
+    localStorage.removeItem(DISABLED_KEY);
+  } else {
+    // explicit "clear" means: pretend offline (use static demo only)
+    localStorage.removeItem(KEY);
+    localStorage.setItem(DISABLED_KEY, "1");
+  }
 }
+export function resetBackendUrl() {
+  localStorage.removeItem(KEY);
+  localStorage.removeItem(DISABLED_KEY);
+}
+export const DEFAULT_BACKEND_URL = DEFAULT_BACKEND;
 
 class HttpError extends Error {
   status: number;
@@ -98,7 +112,7 @@ export const api = {
       return res.json();
     } catch { return STATIC_PLATFORMS; }
   },
-  uploadLibrary: async (file: File, displayName: string, platform = "xiaohongshu"): Promise<Library> => {
+  uploadLibrary: async (file: File, displayName: string, platform: string | "auto" = "auto"): Promise<Library> => {
     const backend = backendUrl();
     if (!backend) throw new HttpError(0, "上传库需要本地后端");
     const fd = new FormData();
@@ -111,6 +125,24 @@ export const api = {
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       throw new HttpError(res.status, `upload → ${res.status}: ${text.slice(0, 400)}`);
+    }
+    return res.json();
+  },
+  importLibrary: async (file: File, displayName: string, platform: string | "auto" = "auto"): Promise<{ lib_id: string; platform: string; notes_count: number; dna_version?: string }> => {
+    const backend = backendUrl();
+    if (!backend) throw new HttpError(0, "导入需要本地后端");
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("display_name", displayName);
+    fd.append("platform", platform);
+    fd.append("activate", "1");
+    fd.append("analyze", "1");
+    const res = await fetch(`${backend}/api/libraries/import`, {
+      method: "POST", body: fd,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new HttpError(res.status, `import → ${res.status}: ${text.slice(0, 400)}`);
     }
     return res.json();
   },

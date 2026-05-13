@@ -68,6 +68,8 @@ def normalise_platform(p: str | None) -> str:
     if not p:
         return "xiaohongshu"
     p = p.strip().lower()
+    if p == "auto":
+        return "auto"  # caller must detect later
     aliases = {
         "xhs": "xiaohongshu", "rednote": "xiaohongshu", "小红书": "xiaohongshu",
         "tiktok": "douyin", "抖音": "douyin",
@@ -78,6 +80,92 @@ def normalise_platform(p: str | None) -> str:
         "twitter": "x", "twt": "x",
     }
     return aliases.get(p, p if p in SUPPORTED_PLATFORMS else "other")
+
+
+# ---- Platform auto-detection from a SQLite blob -----------------------
+
+# Per-platform schema fingerprints. Each entry maps a platform id to a set of
+# distinguishing column or table substrings. Heuristic: count matches across
+# all tables/columns; whoever wins by margin gets picked. If nothing matches
+# strongly, return 'other'.
+_FINGERPRINTS: dict[str, tuple[str, ...]] = {
+    "xiaohongshu": (
+        "xsec_token", "interaction_count", "collected_count",
+        "discover_queue", "note_id", "liked_count",
+    ),
+    "douyin": (
+        "aweme_id", "video_play_addr", "douyin", "tiktok",
+        "share_url", "music_id",
+    ),
+    "kuaishou": (
+        "photo_id", "kuaishou", "ksuid", "play_url",
+    ),
+    "bilibili": (
+        "bvid", "aid", "cid", "bilibili", "danmaku", "up_mid",
+    ),
+    "youtube": (
+        "video_id", "channel_id", "view_count", "watch_url",
+        "youtube",
+    ),
+    "reddit": (
+        "subreddit", "permalink", "submission_id", "praw",
+    ),
+    "x": (
+        "tweet_id", "screen_name", "retweet_count", "favorite_count",
+        "twitter",
+    ),
+}
+
+
+def detect_platform_from_blob(blob: bytes) -> tuple[str, dict[str, int]]:
+    """Sniff platform from a SQLite payload. Returns (best_match, scores).
+    `best_match` is in SUPPORTED_PLATFORMS or 'other' if no clear winner.
+    """
+    if len(blob) < 100 or blob[:16] != b"SQLite format 3\x00":
+        return "other", {}
+    import sqlite3
+    import tempfile
+    scores = {p: 0 for p in _FINGERPRINTS}
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            tmp.write(blob)
+            tmp_path = tmp.name
+        try:
+            con = sqlite3.connect(f"file:{tmp_path}?mode=ro", uri=True)
+            cur = con.cursor()
+            tables = [r[0] for r in cur.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+                " AND name NOT LIKE 'sqlite_%'"
+            )]
+            cols: list[str] = []
+            for t in tables:
+                try:
+                    for col in cur.execute(f"PRAGMA table_info('{t}')"):
+                        cols.append(str(col[1]).lower())
+                except sqlite3.OperationalError:
+                    continue
+            haystack = " ".join(tables).lower() + " " + " ".join(cols)
+            for plat, fps in _FINGERPRINTS.items():
+                for fp in fps:
+                    if fp.lower() in haystack:
+                        scores[plat] += 1
+            con.close()
+        finally:
+            import os
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+    except sqlite3.Error:
+        return "other", scores
+    # Pick the platform with the highest score, requiring at least 2 hits and
+    # a clear margin over runner-up.
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    if not ranked or ranked[0][1] < 2:
+        return "other", scores
+    if len(ranked) > 1 and ranked[0][1] - ranked[1][1] < 1:
+        return "other", scores
+    return ranked[0][0], scores
 
 
 def _slug(text: str) -> str:
@@ -154,6 +242,17 @@ def _alloc_id(hint: str | None) -> str:
     return f"{base}-{uuid.uuid4().hex[:6]}"
 
 
+def _resolve_platform(platform: str, blob: bytes | None = None) -> str:
+    """Normalise + auto-detect. 'auto' triggers sniffing if blob provided."""
+    p = normalise_platform(platform)
+    if p == "auto":
+        if blob:
+            detected, _ = detect_platform_from_blob(blob)
+            return detected if detected != "other" else "xiaohongshu"
+        return "xiaohongshu"
+    return p
+
+
 def register_existing(db_path: Path, display_name: str | None = None,
                       lib_id: str | None = None,
                       source: str = "local",
@@ -172,6 +271,7 @@ def register_existing(db_path: Path, display_name: str | None = None,
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest_db = dest_dir / "xhs.db"
     shutil.copy2(src, dest_db)
+    blob = dest_db.read_bytes() if platform == "auto" else None
     meta = _ingest_stats(
         LibraryMeta(
             lib_id=lib_id,
@@ -179,7 +279,7 @@ def register_existing(db_path: Path, display_name: str | None = None,
             uploaded_at=int(time.time()),
             source=source,
             size_bytes=dest_db.stat().st_size,
-            platform=normalise_platform(platform),
+            platform=_resolve_platform(platform, blob),
         )
     )
     _write_meta(lib_id, meta)
@@ -194,6 +294,7 @@ def adopt_bytes(blob: bytes, display_name: str,
         lib_id = _alloc_id(display_name)
     elif not _ID_OK.match(lib_id):
         raise ValueError(f"invalid lib_id: {lib_id!r}")
+    resolved_platform = _resolve_platform(platform, blob)
     dest_dir = LIBRARIES_DIR / lib_id
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest_db = dest_dir / "xhs.db"
@@ -205,7 +306,7 @@ def adopt_bytes(blob: bytes, display_name: str,
             uploaded_at=int(time.time()),
             source="upload",
             size_bytes=dest_db.stat().st_size,
-            platform=normalise_platform(platform),
+            platform=resolved_platform,
         )
     )
     _write_meta(lib_id, meta)

@@ -72,7 +72,12 @@ export default function Composer() {
 
       {!api.isConnected() && (
         <div className="banner warn">
-          Composer 需要本地后端。请先在 <Link to="/settings">Settings</Link> 配置 backend URL（默认 http://127.0.0.1:8765）并启动 <code className="kbd">python -m studio serve</code>。
+          后端没连上。顶部已经显示了启动命令；先把后端起起来再回来。
+        </div>
+      )}
+      {api.isConnected() && !activeLib && (
+        <div className="banner info">
+          <b>还没有激活的库。</b> 去 <Link to="/libraries">📥 资源库</Link> 拖一个 .db 进来再回这里。
         </div>
       )}
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { api, backendUrl, setBackendUrl } from "../api";
+import { api, backendUrl, setBackendUrl, resetBackendUrl, DEFAULT_BACKEND_URL } from "../api";
 
-const DEFAULT = "http://127.0.0.1:8765";
+const DEFAULT = DEFAULT_BACKEND_URL;
 
 export default function Settings() {
   const [url, setUrl] = useState(backendUrl());
@@ -31,14 +31,17 @@ export default function Settings() {
       </div>
 
       <div className="card">
-        <h2>Backend URL</h2>
-        <p className="muted">连接本地 FastAPI 后端以启用完整功能（上传库 / 生成稿件 / 评分 / 选择 final）。留空则进入静态演示模式。</p>
+        <h2>Backend URL（高级）</h2>
+        <p className="muted">
+          默认已经指向 <code className="kbd">{DEFAULT}</code> —— 通常你不用改。
+          只在你把后端跑在别的端口或别的机器上时才需要改这里。
+        </p>
         <div className="row">
           <input style={{flex: 1}} value={url} onChange={e => setUrl(e.target.value)}
             placeholder={DEFAULT} />
-          <button className="secondary" onClick={() => save(DEFAULT)}>填默认</button>
+          <button className="secondary" onClick={() => { resetBackendUrl(); setUrl(""); check(); }}>恢复默认</button>
           <button onClick={() => save(url.trim())}>保存</button>
-          {url && <button className="ghost" onClick={() => save("")}>清除</button>}
+          {url && url !== DEFAULT && <button className="ghost" onClick={() => save("")}>关闭（用纯静态演示）</button>}
         </div>
         <div style={{marginTop: 10}}>
           {!url ? (

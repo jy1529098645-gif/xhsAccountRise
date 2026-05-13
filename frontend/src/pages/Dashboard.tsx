@@ -28,6 +28,8 @@ export default function Dashboard() {
 
   const active = libs.find(l => l.active);
 
+  const noLibs = libs.length === 0;
+
   return (
     <div>
       <div className="page-header">
@@ -36,11 +38,11 @@ export default function Dashboard() {
       </div>
 
       {err && <div className="banner danger">{err}</div>}
-      {!api.isConnected() && (
+
+      {noLibs && api.isConnected() && (
         <div className="banner info">
           <div>
-            <b>静态演示模式</b>。所有数据来自最近一次 <code className="kbd">studio export-public</code> 导出的快照；
-            要启用「上传库 / 生成稿件」请在 <Link to="/settings">Settings</Link> 配置本地后端 URL。
+            <b>👋 还没有数据库</b> · 去 <Link to="/libraries">📥 资源库</Link> 拖一个 .db 进来，全自动跑完检测+分析就能开始用了。
           </div>
         </div>
       )}

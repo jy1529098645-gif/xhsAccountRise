@@ -157,8 +157,16 @@ async def upload_library(
     blob = await file.read()
     if len(blob) < 4 or blob[:4] != b"SQLi":
         raise HTTPException(400, "uploaded file is not a SQLite database")
+
+    final_platform = platform
+    detected_scores: dict[str, int] = {}
+    if platform == "auto":
+        final_platform, detected_scores = library.detect_platform_from_blob(blob)
+
     try:
-        meta = library.adopt_bytes(blob, display_name=display_name, platform=platform)
+        meta = library.adopt_bytes(
+            blob, display_name=display_name, platform=final_platform,
+        )
     except Exception as e:
         raise HTTPException(400, f"failed to adopt library: {e}")
     return {
@@ -167,7 +175,90 @@ async def upload_library(
         "notes_count": meta.notes_count,
         "size_bytes": meta.size_bytes,
         "platform": meta.platform,
+        "detected_platform": final_platform if platform == "auto" else None,
+        "detection_scores": detected_scores,
     }
+
+
+@app.post("/api/libraries/import")
+async def import_library(
+    file: UploadFile = File(...),
+    display_name: str = Form(...),
+    platform: str = Form("auto"),
+    activate: str = Form("1"),
+    analyze: str = Form("1"),
+) -> dict[str, Any]:
+    """One-shot import: detect platform + adopt + activate + analyze.
+
+    This is the path the frontend hero dropzone calls — turns "drag a .db in"
+    into "fully ready to compose" with no extra clicks.
+    """
+    blob = await file.read()
+    if len(blob) < 4 or blob[:4] != b"SQLi":
+        raise HTTPException(400, "uploaded file is not a SQLite database")
+
+    final_platform = platform
+    detected_scores: dict[str, int] = {}
+    if platform == "auto":
+        final_platform, detected_scores = library.detect_platform_from_blob(blob)
+
+    try:
+        meta = library.adopt_bytes(
+            blob, display_name=display_name, platform=final_platform,
+        )
+    except Exception as e:
+        raise HTTPException(400, f"failed to adopt library: {e}")
+
+    result: dict[str, Any] = {
+        "lib_id": meta.lib_id,
+        "display_name": meta.display_name,
+        "platform": meta.platform,
+        "notes_count": meta.notes_count,
+        "size_bytes": meta.size_bytes,
+        "detected_platform": final_platform if platform == "auto" else None,
+        "detection_scores": detected_scores,
+    }
+
+    # Activate first so subsequent analyze() targets the new lib.
+    if activate in ("1", "true", "yes"):
+        try:
+            library.set_active(meta.lib_id)
+            result["activated"] = True
+        except Exception as e:
+            result["activate_error"] = str(e)
+
+    if analyze in ("1", "true", "yes"):
+        try:
+            db.apply_migrations(verbose=False)
+            from ..analysis import extract_dna, promote_hooks, render_report
+            from ..rag import build_index
+            fts_stats = build_index.rebuild_all()
+            artifact = extract_dna.build_dna()
+            extract_dna.persist(artifact)
+            render_report.render(artifact)
+            promo = promote_hooks.promote()
+            result["dna_version"] = artifact["version"]
+            result["fts"] = fts_stats
+            result["promoted_hooks"] = promo.get("promoted", [])
+            result["analyzed"] = True
+        except Exception as e:
+            result["analyze_error"] = str(e)
+            result["analyzed"] = False
+
+    return result
+
+
+@app.post("/api/libraries/detect-platform")
+async def detect_platform_endpoint(file: UploadFile = File(...)) -> dict[str, Any]:
+    """Sniff a .db without persisting it. For preview before commit.
+
+    SQLite truncates poorly — opening a partial blob errors out. So we read
+    the whole upload even for the preview (cost of one extra MB on a 100MB
+    DB is negligible vs. the UX value of correct detection).
+    """
+    blob = await file.read()
+    plat, scores = library.detect_platform_from_blob(blob)
+    return {"platform": plat, "scores": scores}
 
 
 class PlatformRequest(BaseModel):

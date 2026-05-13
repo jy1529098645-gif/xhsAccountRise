@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { api } from "./api";
+import ConnectionBanner from "./components/ConnectionBanner";
 import Dashboard from "./pages/Dashboard";
 import Analysis from "./pages/Analysis";
 import Composer from "./pages/Composer";
@@ -32,12 +33,12 @@ export default function App() {
           <div className="logo">A</div>
           <div>AcademiCats · Studio</div>
         </div>
+        <NavLink to="/libraries" className={({isActive}) => isActive ? "active" : ""}>📥 资源库 / 上传</NavLink>
+        <NavLink to="/composer" className={({isActive}) => isActive ? "active" : ""}>✍️ Composer 出稿</NavLink>
         <NavLink to="/dashboard" className={({isActive}) => isActive ? "active" : ""}>📊 Dashboard</NavLink>
         <NavLink to="/analysis" className={({isActive}) => isActive ? "active" : ""}>🧬 爆款 DNA</NavLink>
-        <NavLink to="/composer" className={({isActive}) => isActive ? "active" : ""}>✍️ Composer</NavLink>
-        <NavLink to="/drafts" className={({isActive}) => isActive ? "active" : ""}>📝 Drafts</NavLink>
-        <NavLink to="/libraries" className={({isActive}) => isActive ? "active" : ""}>📚 Libraries</NavLink>
-        <NavLink to="/settings" className={({isActive}) => isActive ? "active" : ""}>⚙️ Settings</NavLink>
+        <NavLink to="/drafts" className={({isActive}) => isActive ? "active" : ""}>📝 历史 Drafts</NavLink>
+        <NavLink to="/settings" className={({isActive}) => isActive ? "active" : ""}>⚙️ 设置 (高级)</NavLink>
 
         <div className={connected && healthOk ? "conn ok" : "conn off"}>
           <span className="dot"></span>
@@ -54,6 +55,7 @@ export default function App() {
       </aside>
 
       <main className="main">
+        <ConnectionBanner />
         <Routes>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<Dashboard />} />

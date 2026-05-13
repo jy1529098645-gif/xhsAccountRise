@@ -191,6 +191,36 @@ textarea { resize: vertical; min-height: 80px; }
 .dropzone.has-file { border-style: solid; border-color: var(--ok); background: var(--ok-soft); }
 .dropzone .muted { font-size: 11px; }
 
+.conn-banner {
+  background: var(--warn-soft); border: 1px solid #fcd9a6;
+  border-radius: 8px; padding: 12px 14px; margin-bottom: 16px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.conn-banner b { color: var(--warn); }
+.conn-banner-cmd {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.conn-banner-cmd .cmd {
+  background: #1f2937; color: #f9fafb; padding: 6px 10px;
+  border-radius: 6px; font-size: 11px; flex: 1; min-width: 200px;
+  overflow-x: auto; white-space: nowrap;
+}
+
+.hero-drop {
+  border: 3px dashed #d1d5db;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #fff 0%, #fafafa 100%);
+  padding: 56px 24px; text-align: center; cursor: pointer;
+  transition: all 0.18s ease;
+  margin: 8px 0 20px;
+}
+.hero-drop:hover { border-color: var(--primary); background: #fff7f8; transform: translateY(-1px); }
+.hero-drop.drag-over { border-color: var(--primary); background: var(--primary-soft); transform: scale(1.01); }
+.hero-drop.has-file { border-style: solid; border-color: var(--ok); background: var(--ok-soft); }
+.hero-drop .big-icon { font-size: 48px; line-height: 1; margin-bottom: 12px; }
+.hero-drop h2 { font-size: 18px; margin: 0 0 6px; }
+.hero-drop .muted { font-size: 13px; }
+
 .platform-pill {
   display: inline-block; padding: 1px 8px; border-radius: 10px;
   background: #eef5ff; color: #1d4ed8; font-size: 11px; margin-left: 6px;
