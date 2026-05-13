@@ -278,6 +278,34 @@ textarea { resize: vertical; min-height: 80px; }
 .hero-drop h2 { font-size: 18px; margin: 0 0 6px; }
 .hero-drop .muted { font-size: 13px; }
 
+.project-picker { position: relative; margin: 8px 0; }
+.picker-btn {
+  width: 100%; background: #fafafa; color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; display: flex; align-items: center; gap: 6px;
+  cursor: pointer; font-size: 12.5px; text-align: left;
+}
+.picker-btn:hover { background: #f0f0f0; }
+.picker-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.picker-arrow { color: var(--muted); font-size: 10px; }
+.picker-menu {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px);
+  background: #fff; border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 4px 18px rgba(0,0,0,0.08); padding: 6px; z-index: 50;
+  max-height: 360px; overflow: auto;
+}
+.picker-menu-header { font-size: 10.5px; color: var(--muted); padding: 4px 8px;
+  text-transform: uppercase; letter-spacing: 0.05em; }
+.picker-item {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+  border-radius: 5px; cursor: pointer; font-size: 12.5px;
+}
+.picker-item:hover { background: var(--primary-soft); }
+.picker-item.active { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+.picker-divider { height: 1px; background: var(--border); margin: 4px 0; }
+.picker-create-trigger { color: var(--primary); font-weight: 500; }
+.picker-create { display: flex; gap: 4px; padding: 4px; align-items: center; }
+.picker-create input { font-size: 12px; padding: 4px 6px; }
+
 .platform-pill {
   display: inline-block; padding: 1px 8px; border-radius: 10px;
   background: #eef5ff; color: #1d4ed8; font-size: 11px; margin-left: 6px;

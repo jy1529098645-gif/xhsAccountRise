@@ -33,13 +33,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from .. import config, db, library
+from .. import config, db, library, project
 from ..agents import pipeline as agent_pipeline
 from ..analysis import extract_dna, promote_hooks, render_report
 from ..brief import Brief
 from ..rag import build_index, retrieve
 from ..strategy import pipeline as strategy_pipeline
 from ..strategy.models import AccountInput
+from ..insight import pipeline as insight_pipeline
 
 load_dotenv(dotenv_path=config.REPO_ROOT / ".env", override=True)
 
@@ -107,11 +108,85 @@ def status() -> dict[str, Any]:
     }
 
 
+# ---------------- projects -----------------------
+
+class ProjectInput(BaseModel):
+    name: str
+    description: str = ""
+    emoji: str = "📁"
+
+
+@app.get("/api/projects")
+def list_projects_endpoint(include_archived: bool = False) -> dict[str, Any]:
+    project.ensure_bootstrap()
+    items = project.list_projects(include_archived=include_archived)
+    active = project.active_project_id()
+    return {
+        "projects": [
+            {
+                "project_id": p.project_id,
+                "name": p.name,
+                "description": p.description,
+                "emoji": p.emoji,
+                "is_default": p.is_default,
+                "archived": p.archived,
+                "created_at": p.created_at,
+                "active": p.project_id == active,
+            } for p in items
+        ],
+        "active": active,
+    }
+
+
+@app.post("/api/projects")
+def create_project(req: ProjectInput) -> dict[str, Any]:
+    try:
+        p = project.create(req.name, req.description, req.emoji)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {
+        "project_id": p.project_id, "name": p.name,
+        "emoji": p.emoji, "description": p.description,
+    }
+
+
+@app.post("/api/projects/{project_id}/activate")
+def activate_project(project_id: str) -> dict[str, str]:
+    try:
+        project.set_active(project_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return {"active": project_id}
+
+
+@app.patch("/api/projects/{project_id}")
+def patch_project(project_id: str, req: ProjectInput) -> dict[str, Any]:
+    try:
+        p = project.update_meta(project_id, name=req.name,
+                                description=req.description, emoji=req.emoji)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return {
+        "project_id": p.project_id, "name": p.name,
+        "emoji": p.emoji, "description": p.description,
+    }
+
+
+@app.delete("/api/projects/{project_id}")
+def archive_project(project_id: str) -> dict[str, str]:
+    try:
+        project.archive(project_id)
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(400, str(e))
+    return {"archived": project_id}
+
+
 # ---------------- library ------------------------
 
 @app.get("/api/libraries")
-def list_libraries() -> list[dict[str, Any]]:
+def list_libraries(all: bool = False) -> list[dict[str, Any]]:
     active = library.active_lib_id()
+    libs = library.list_all_libraries() if all else library.list_libraries()
     return [
         {
             "lib_id": l.lib_id,
@@ -122,9 +197,10 @@ def list_libraries() -> list[dict[str, Any]]:
             "comments_count": l.comments_count,
             "size_bytes": l.size_bytes,
             "platform": l.platform,
+            "project_id": l.project_id,
             "active": l.lib_id == active,
         }
-        for l in library.list_libraries()
+        for l in libs
     ]
 
 
@@ -425,36 +501,70 @@ async def compose(req: ComposeRequest) -> dict[str, Any]:
     return bundle
 
 
+# ---------------- insight report (Claude × OpenAI) ----------
+
+class InsightRequest(BaseModel):
+    library_id: str
+    claude_spec: str = "claude:opus"
+    openai_spec: str = "openai"
+    moderator_spec: str = "claude:opus"
+
+
+@app.post("/api/insight/run")
+async def insight_run(req: InsightRequest) -> dict[str, Any]:
+    try:
+        return await insight_pipeline.run(
+            req.library_id,
+            claude_spec=req.claude_spec,
+            openai_spec=req.openai_spec,
+            moderator_spec=req.moderator_spec,
+        )
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.get("/api/insight")
+def list_insights(library_id: str | None = None, limit: int = 30) -> list[dict[str, Any]]:
+    return insight_pipeline.list_reports(library_id=library_id, limit=limit)
+
+
+@app.get("/api/insight/{report_id}")
+def get_insight(report_id: str) -> dict[str, Any]:
+    r = insight_pipeline.get_report(report_id)
+    if not r:
+        raise HTTPException(404, "report not found")
+    return r
+
+
 # ---------------- drafts -------------------------
 
 @app.get("/api/drafts")
-def list_drafts(limit: int = 50, library_id: str | None = None) -> list[dict[str, Any]]:
+def list_drafts(limit: int = 50, library_id: str | None = None,
+                all_projects: bool = False) -> list[dict[str, Any]]:
+    project.ensure_bootstrap()
+    pid = project.active_project_id()
+    base_sql = (
+        "SELECT d.draft_id, d.generated_at, d.mode, d.library_id, d.project_id,"
+        " d.final_candidate_id, d.brief_json,"
+        " (SELECT title FROM studio_draft_candidates"
+        "  WHERE candidate_id = d.final_candidate_id) AS final_title,"
+        " (SELECT COUNT(*) FROM studio_draft_candidates"
+        "  WHERE draft_id = d.draft_id) AS candidate_count"
+        " FROM studio_drafts d WHERE 1=1"
+    )
+    args: list[Any] = []
+    if not all_projects:
+        base_sql += " AND (d.project_id = ? OR d.project_id IS NULL)"
+        args.append(pid)
+    if library_id:
+        base_sql += " AND d.library_id = ?"
+        args.append(library_id)
+    base_sql += " ORDER BY d.generated_at DESC LIMIT ?"
+    args.append(limit)
     with db.connect(read_only=True) as con:
-        if library_id:
-            cur = con.execute(
-                "SELECT d.draft_id, d.generated_at, d.mode, d.library_id,"
-                " d.final_candidate_id, d.brief_json,"
-                " (SELECT title FROM studio_draft_candidates"
-                "  WHERE candidate_id = d.final_candidate_id) AS final_title,"
-                " (SELECT COUNT(*) FROM studio_draft_candidates"
-                "  WHERE draft_id = d.draft_id) AS candidate_count"
-                " FROM studio_drafts d WHERE d.library_id = ?"
-                " ORDER BY d.generated_at DESC LIMIT ?",
-                (library_id, limit),
-            )
-        else:
-            cur = con.execute(
-                "SELECT d.draft_id, d.generated_at, d.mode, d.library_id,"
-                " d.final_candidate_id, d.brief_json,"
-                " (SELECT title FROM studio_draft_candidates"
-                "  WHERE candidate_id = d.final_candidate_id) AS final_title,"
-                " (SELECT COUNT(*) FROM studio_draft_candidates"
-                "  WHERE draft_id = d.draft_id) AS candidate_count"
-                " FROM studio_drafts d"
-                " ORDER BY d.generated_at DESC LIMIT ?",
-                (limit,),
-            )
-        rows = [dict(r) for r in cur]
+        rows = [dict(r) for r in con.execute(base_sql, args)]
     for r in rows:
         try:
             r["brief"] = json.loads(r.pop("brief_json"))
@@ -584,14 +694,19 @@ async def strategy_expand(pack_id: str, req: StrategyExpandRequest) -> dict[str,
 
 
 @app.get("/api/strategy")
-def list_strategies(limit: int = 30) -> list[dict[str, Any]]:
+def list_strategies(limit: int = 30, all_projects: bool = False) -> list[dict[str, Any]]:
+    project.ensure_bootstrap()
+    pid = project.active_project_id()
+    where = "" if all_projects else " WHERE (project_id = ? OR project_id IS NULL)"
+    args = [] if all_projects else [pid]
     with db.connect(read_only=True) as con:
         try:
             rows = list(con.execute(
                 "SELECT pack_id, library_id, platform, created_at, updated_at,"
-                " status, input_json, chosen_direction_idx, elapsed_s"
-                " FROM studio_strategies ORDER BY created_at DESC LIMIT ?",
-                (limit,),
+                " status, input_json, chosen_direction_idx, elapsed_s, project_id"
+                " FROM studio_strategies" + where +
+                " ORDER BY created_at DESC LIMIT ?",
+                (*args, limit),
             ))
         except Exception:
             return []

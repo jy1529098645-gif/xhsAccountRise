@@ -168,17 +168,19 @@ async def propose(inp: AccountInput, positioner_spec: str = "claude:opus") -> di
 
     elapsed = int(time.time() - t0)
     now = int(time.time())
+    from .. import project as _project
+    pid = _project.active_project_id()
     with db.connect() as con:
         con.execute(
             "INSERT INTO studio_strategies"
             " (pack_id, library_id, platform, created_at, updated_at, status,"
-            "  input_json, directions_json, elapsed_s)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "  input_json, directions_json, elapsed_s, project_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 pack_id, lib_id, inp.platform, now, now, "directions",
                 json.dumps(asdict(inp), ensure_ascii=False),
                 json.dumps([asdict(d) for d in directions], ensure_ascii=False),
-                elapsed,
+                elapsed, pid,
             ),
         )
 

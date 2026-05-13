@@ -2,6 +2,7 @@ import type {
   Brief, ComposeBundle, DnaArtifact, DraftDetail, DraftListItem,
   Library, Platform, Status,
   AccountInputDTO, StrategicDirectionDTO, StrategyDetail, StrategyListItem, StrategyPackDTO,
+  ProjectDTO, InsightReportDTO,
 } from "./types";
 
 const STATIC_PLATFORMS: Platform[] = [
@@ -187,6 +188,46 @@ export const api = {
     postJson(`/api/drafts/${draftId}/candidates/${candidateId}/score`, { score }),
   chooseCandidate: (draftId: string, candidateId: string) =>
     postJson(`/api/drafts/${draftId}/candidates/${candidateId}/choose`, {}),
+
+  // Projects ----------------
+  listProjects: (includeArchived = false) =>
+    getJson<{ projects: ProjectDTO[]; active: string }>(`/api/projects?include_archived=${includeArchived}`, "projects.json")
+      .catch(() => ({ projects: [] as ProjectDTO[], active: "default" })),
+  createProject: (name: string, description = "", emoji = "📁") =>
+    postJson<{ project_id: string; name: string; emoji: string; description: string }>(
+      "/api/projects", { name, description, emoji }
+    ),
+  activateProject: (projectId: string) =>
+    postJson<{ active: string }>(`/api/projects/${projectId}/activate`, {}),
+  archiveProject: async (projectId: string) => {
+    const backend = backendUrl();
+    if (!backend) throw new HttpError(0, "需要本地后端");
+    const res = await fetch(`${backend}/api/projects/${projectId}`, { method: "DELETE" });
+    if (!res.ok) throw new HttpError(res.status, await res.text());
+    return res.json();
+  },
+  patchProject: async (projectId: string, body: { name?: string; description?: string; emoji?: string }) => {
+    const backend = backendUrl();
+    if (!backend) throw new HttpError(0, "需要本地后端");
+    const res = await fetch(`${backend}/api/projects/${projectId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: body.name ?? "", description: body.description ?? "", emoji: body.emoji ?? "📁",
+      }),
+    });
+    if (!res.ok) throw new HttpError(res.status, await res.text());
+    return res.json();
+  },
+
+  // Insight (Claude × OpenAI report) -----------
+  runInsight: (libraryId: string, opts?: { claude_spec?: string; openai_spec?: string; moderator_spec?: string }) =>
+    postJson<InsightReportDTO>("/api/insight/run", { library_id: libraryId, ...opts }),
+  listInsights: (libraryId?: string) =>
+    getJson<{ report_id: string; library_id: string; created_at: number; status: string; elapsed_s: number | null }[]>(
+      `/api/insight${libraryId ? `?library_id=${libraryId}` : ""}`,
+      "insights.json"
+    ).catch(() => []),
+  getInsight: (reportId: string) => getJson<InsightReportDTO>(`/api/insight/${reportId}`),
 
   // Strategy -----------------
   proposeStrategy: (req: Partial<AccountInputDTO> & { positioning: string; target_audience: string; positioner_spec?: string }) =>

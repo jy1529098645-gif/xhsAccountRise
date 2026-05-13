@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { fmtBytes, fmtRelative, fmtTime, platformLabel } from "../format";
 import PlatformPill from "../components/PlatformPill";
@@ -18,6 +18,7 @@ export default function Libraries() {
   const [platform, setPlatform] = useState<string>("auto");
   const [expandedGuide, setExpandedGuide] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const navigate = useNavigate();
 
   async function load() {
     try { setLibs(await api.libraries()); }
@@ -80,6 +81,19 @@ export default function Libraries() {
     setWorking(libId); setErr(null);
     try { await api.deleteLibrary(libId); setInfo(`✓ 已删除 ${libId}`); await load(); }
     catch (e: any) { setErr(e.message); }
+    finally { setWorking(null); }
+  }
+
+  async function runInsight(libId: string) {
+    setWorking(libId); setErr(null);
+    setInfo("📊 双 AI (Claude + OpenAI) 协作分析中…(约 60-180s)");
+    try {
+      // Activate the library first so the latest DNA artifact is used.
+      await api.activateLibrary(libId);
+      const r = await api.runInsight(libId);
+      setInfo("✓ 分析完成，跳转到报告…");
+      setTimeout(() => navigate(`/insight/${r.report_id}`), 600);
+    } catch (e: any) { setErr(e.message); }
     finally { setWorking(null); }
   }
 
@@ -192,6 +206,12 @@ export default function Libraries() {
                         disabled={offline || working === l.lib_id}
                         onClick={() => analyze(l.lib_id)}>
                         {working === l.lib_id ? "..." : "重跑分析"}
+                      </button>
+                      <button style={{ padding: "4px 8px", fontSize: 12 }}
+                        disabled={offline || working === l.lib_id}
+                        title="Claude × OpenAI 双 AI 协作出一份共识分析报告"
+                        onClick={() => runInsight(l.lib_id)}>
+                        📊 双 AI 报告
                       </button>
                       {!l.active && (
                         <button className="ghost" style={{ padding: "4px 8px", fontSize: 12, color: "var(--danger)" }}

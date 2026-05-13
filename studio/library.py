@@ -46,6 +46,7 @@ class LibraryMeta:
     description: str = ""
     platform: str = "xiaohongshu"  # xiaohongshu | douyin | kuaishou | bilibili
                                    # | youtube | reddit | x | other
+    project_id: str = "default"    # which project this library belongs to
 
 
 SUPPORTED_PLATFORMS: tuple[str, ...] = (
@@ -173,10 +174,15 @@ def _slug(text: str) -> str:
     return s or "lib"
 
 
-def list_libraries() -> list[LibraryMeta]:
+def list_libraries(project_id: str | None = "__active__") -> list[LibraryMeta]:
+    """List libraries. Pass project_id=None to get all, or a specific id."""
     out: list[LibraryMeta] = []
     if not LIBRARIES_DIR.exists():
         return out
+    # Resolve "active" pointer lazily to avoid import cycle at module load.
+    if project_id == "__active__":
+        from . import project as _project
+        project_id = _project.active_project_id()
     for child in sorted(LIBRARIES_DIR.iterdir()):
         if not child.is_dir():
             continue
@@ -185,12 +191,20 @@ def list_libraries() -> list[LibraryMeta]:
             continue
         try:
             data = json.loads(meta_path.read_text(encoding="utf-8"))
-            # Backwards-compat: older meta.json may lack `platform`.
+            # Backwards-compat: older meta.json may lack `platform` / `project_id`.
             data.setdefault("platform", "xiaohongshu")
-            out.append(LibraryMeta(**data))
+            data.setdefault("project_id", "default")
+            meta = LibraryMeta(**data)
         except (json.JSONDecodeError, TypeError):
             continue
+        if project_id is not None and meta.project_id != project_id:
+            continue
+        out.append(meta)
     return out
+
+
+def list_all_libraries() -> list[LibraryMeta]:
+    return list_libraries(project_id=None)
 
 
 def get_meta(lib_id: str) -> LibraryMeta | None:
@@ -200,22 +214,62 @@ def get_meta(lib_id: str) -> LibraryMeta | None:
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
         data.setdefault("platform", "xiaohongshu")
+        data.setdefault("project_id", "default")
         return LibraryMeta(**data)
     except (json.JSONDecodeError, TypeError):
         return None
 
 
+def set_project(lib_id: str, project_id: str) -> LibraryMeta:
+    meta = get_meta(lib_id)
+    if meta is None:
+        raise ValueError(f"library not found: {lib_id}")
+    meta.project_id = project_id
+    _write_meta(lib_id, meta)
+    return meta
+
+
 def active_lib_id(default: str = "default") -> str:
+    """The active library *within the current project*.
+
+    Resolution order:
+      1. Per-project active pointer: data/projects/{pid}/active_library.txt
+      2. Global pointer: data/active_library.txt (legacy)
+      3. First library in current project
+      4. `default`
+    """
+    pid = _current_project_id()
+    proj_dir = config.DATA_DIR / "projects" / pid
+    proj_pointer = proj_dir / "active_library.txt"
+    if proj_pointer.exists():
+        text = proj_pointer.read_text(encoding="utf-8").strip()
+        if text and _id_exists(text):
+            return text
     if ACTIVE_POINTER.exists():
         text = ACTIVE_POINTER.read_text(encoding="utf-8").strip()
-        if text:
-            return text
+        if text and _id_exists(text):
+            # Migrate global pointer to per-project pointer if its library
+            # actually belongs to the current project; otherwise fall through.
+            meta = get_meta(text)
+            if meta and meta.project_id == pid:
+                proj_dir.mkdir(parents=True, exist_ok=True)
+                proj_pointer.write_text(text, encoding="utf-8")
+                return text
+    # Pick first library in this project (if any)
+    libs_in_project = list_libraries(project_id=pid)
+    if libs_in_project:
+        return libs_in_project[0].lib_id
     return default
 
 
 def set_active(lib_id: str) -> None:
     if not _id_exists(lib_id):
         raise ValueError(f"library not found: {lib_id}")
+    pid = _current_project_id()
+    proj_dir = config.DATA_DIR / "projects" / pid
+    proj_dir.mkdir(parents=True, exist_ok=True)
+    (proj_dir / "active_library.txt").write_text(lib_id, encoding="utf-8")
+    # Keep legacy global pointer in sync for backwards-compat.
     ACTIVE_POINTER.write_text(lib_id, encoding="utf-8")
 
 
@@ -253,10 +307,16 @@ def _resolve_platform(platform: str, blob: bytes | None = None) -> str:
     return p
 
 
+def _current_project_id() -> str:
+    from . import project as _project
+    return _project.active_project_id()
+
+
 def register_existing(db_path: Path, display_name: str | None = None,
                       lib_id: str | None = None,
                       source: str = "local",
-                      platform: str = "xiaohongshu") -> LibraryMeta:
+                      platform: str = "xiaohongshu",
+                      project_id: str | None = None) -> LibraryMeta:
     """Register a .db that's already on disk by copying it under
     data/libraries/{lib_id}/. Returns the canonical metadata."""
     src = Path(db_path)
@@ -280,6 +340,7 @@ def register_existing(db_path: Path, display_name: str | None = None,
             source=source,
             size_bytes=dest_db.stat().st_size,
             platform=_resolve_platform(platform, blob),
+            project_id=project_id or _current_project_id(),
         )
     )
     _write_meta(lib_id, meta)
@@ -288,7 +349,8 @@ def register_existing(db_path: Path, display_name: str | None = None,
 
 def adopt_bytes(blob: bytes, display_name: str,
                 lib_id: str | None = None,
-                platform: str = "xiaohongshu") -> LibraryMeta:
+                platform: str = "xiaohongshu",
+                project_id: str | None = None) -> LibraryMeta:
     """Accept a raw .db payload (e.g. uploaded from the frontend) and persist."""
     if lib_id is None:
         lib_id = _alloc_id(display_name)
@@ -307,6 +369,7 @@ def adopt_bytes(blob: bytes, display_name: str,
             source="upload",
             size_bytes=dest_db.stat().st_size,
             platform=resolved_platform,
+            project_id=project_id or _current_project_id(),
         )
     )
     _write_meta(lib_id, meta)
@@ -353,10 +416,10 @@ def delete(lib_id: str) -> None:
 def ensure_bootstrap() -> None:
     """Boot-time: if no libraries exist but legacy data/xhs.db is there, adopt
     it as 'default' so existing users don't need to re-import."""
-    if list_libraries():
+    if list_all_libraries():
         if not ACTIVE_POINTER.exists():
             ACTIVE_POINTER.write_text(
-                list_libraries()[0].lib_id, encoding="utf-8"
+                list_all_libraries()[0].lib_id, encoding="utf-8"
             )
         return
     legacy = config.DATA_DIR / "xhs.db"

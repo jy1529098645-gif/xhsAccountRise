@@ -132,12 +132,14 @@ def _persist(ctx: AgentContext, cfg: PipelineConfig) -> dict[str, Any]:
         "plan": ctx.plan,
         "strategy": ctx.strategy,
     }
+    from .. import project as _project
+    pid = _project.active_project_id()
     with db.connect() as con:
         con.execute(
             "INSERT INTO studio_drafts"
             " (draft_id, generated_at, prompt_version, brief_json, status,"
-            "  mode, library_id, final_candidate_id, notes)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "  mode, library_id, final_candidate_id, notes, project_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 draft_id, now,
                 g_prompts.TITLE_BODY_GEN_VERSION,
@@ -146,6 +148,7 @@ def _persist(ctx: AgentContext, cfg: PipelineConfig) -> dict[str, Any]:
                 lib_id,
                 (ctx.final.candidate_id if ctx.final else None),
                 json.dumps(notes_payload, ensure_ascii=False),
+                pid,
             ),
         )
 

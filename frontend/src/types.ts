@@ -245,3 +245,32 @@ export interface StrategyDetail {
   pack: StrategyPackDTO | null;
   elapsed_s: number | null;
 }
+
+// ---- Projects -----------------------------------------------------------
+
+export interface ProjectDTO {
+  project_id: string;
+  name: string;
+  description: string;
+  emoji: string;
+  is_default: boolean;
+  archived: boolean;
+  created_at: number;
+  active: boolean;
+}
+
+// ---- Insight (library report) ------------------------------------------
+
+export interface InsightReportDTO {
+  report_id: string;
+  library_id: string;
+  project_id: string | null;
+  created_at: number;
+  status: "pending" | "completed" | "failed";
+  elapsed_s: number | null;
+  error: string | null;
+  claude_analysis: any;
+  openai_analysis: any;
+  debate: any;
+  consensus: any;
+}

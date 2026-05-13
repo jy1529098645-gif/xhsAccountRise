@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { api } from "./api";
 import ConnectionBanner from "./components/ConnectionBanner";
+import ProjectPicker from "./components/ProjectPicker";
 import Dashboard from "./pages/Dashboard";
 import Analysis from "./pages/Analysis";
 import Composer from "./pages/Composer";
@@ -10,6 +11,7 @@ import DraftDetail from "./pages/DraftDetail";
 import Libraries from "./pages/Libraries";
 import Settings from "./pages/Settings";
 import Strategy from "./pages/Strategy";
+import InsightReport from "./pages/InsightReport";
 
 export default function App() {
   const [connected, setConnected] = useState<boolean>(api.isConnected());
@@ -31,9 +33,10 @@ export default function App() {
     <div className="app">
       <aside className="sidebar">
         <div className="brand">
-          <div className="logo">A</div>
-          <div>AcademiCats · Studio</div>
+          <div className="logo">EZ</div>
+          <div>EZAccountRise</div>
         </div>
+        <ProjectPicker />
         <NavLink to="/strategy" className={({isActive}) => isActive ? "active" : ""}>🚀 起号策略 <span style={{fontSize: 10, color: "var(--muted)"}}>第 1 步</span></NavLink>
         <NavLink to="/libraries" className={({isActive}) => isActive ? "active" : ""}>📥 资源库 · 上传</NavLink>
         <NavLink to="/composer" className={({isActive}) => isActive ? "active" : ""}>✍️ 出稿</NavLink>
@@ -67,6 +70,7 @@ export default function App() {
           <Route path="/drafts" element={<Drafts />} />
           <Route path="/drafts/:id" element={<DraftDetail />} />
           <Route path="/libraries" element={<Libraries />} />
+          <Route path="/insight/:id" element={<InsightReport />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<div className="card">404 · 页面不存在</div>} />
         </Routes>
