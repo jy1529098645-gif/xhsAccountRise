@@ -265,18 +265,20 @@ async def import_library(
     platform: str = Form("auto"),
     activate: str = Form("1"),
     analyze: str = Form("1"),
+    auto_adapt: str = Form("1"),
 ) -> dict[str, Any]:
     """One-shot import: schema-validate + detect platform + adopt + activate +
-    DNA analyze. Returns rich status so the frontend can decide whether to
-    proceed to the insight step.
+    optional AI schema-adapter + DNA analyze. Returns rich status so the
+    frontend can decide whether to proceed to the insight step.
     """
     blob = await file.read()
 
-    # Pre-flight: SQLite + required schema (must have notes with note_id/title/
-    # liked_count). Warnings for missing optional tables.
+    # Pre-flight: must be a valid SQLite. We *don't* fail-fast on schema
+    # mismatch anymore — the AI adapter can normalise non-xhs schemas after
+    # adoption. We only block if it's not even SQLite or is corrupt.
     validation = library.validate_schema_blob(blob)
-    if not validation["ok"]:
-        raise HTTPException(422, validation.get("fatal") or "schema validation failed")
+    if validation.get("fatal") and not validation["tables"]:
+        raise HTTPException(422, validation.get("fatal") or "not a valid SQLite file")
 
     final_platform = platform
     detected_scores: dict[str, int] = {}
@@ -309,6 +311,27 @@ async def import_library(
         except Exception as e:
             result["activate_error"] = str(e)
 
+    # Auto-adapter: if the source schema isn't canonical, ask Claude to propose
+    # column mappings → save schema_map.json → subsequent db.connect()s see
+    # canonical views automatically.
+    if auto_adapt in ("1", "true", "yes"):
+        try:
+            from .. import adapt as _adapt
+            source_info = _adapt.inspect_source(library.LIBRARIES_DIR / meta.lib_id / "xhs.db")
+            if not _adapt.is_canonical(source_info):
+                ad = await _adapt.adapt_library(meta.lib_id)
+                result["adapter"] = {
+                    "adapted": ad.get("adapted", False),
+                    "notes_rows": ad.get("notes_rows"),
+                    "source_tables": ad.get("source_tables", []),
+                    "mapping_summary": _summarise_mapping(ad.get("mapping")),
+                    "view_error": ad.get("view_error"),
+                }
+            else:
+                result["adapter"] = {"adapted": False, "reason": "canonical schema"}
+        except Exception as e:
+            result["adapter_error"] = str(e)
+
     if analyze in ("1", "true", "yes"):
         try:
             db.apply_migrations(verbose=False)
@@ -334,6 +357,57 @@ async def import_library(
             result["analyzed"] = False
 
     return result
+
+
+def _summarise_mapping(mapping: dict[str, Any] | None) -> dict[str, Any]:
+    """Render a small client-friendly summary of the adapter's column map."""
+    if not mapping:
+        return {}
+    out: dict[str, Any] = {}
+    for table in ("notes", "comments"):
+        spec = mapping.get(table)
+        if not spec:
+            continue
+        cols = spec.get("columns") or {}
+        out[table] = {
+            "source_table": spec.get("source_table"),
+            "field_map": {
+                k: (v.get("source") if isinstance(v, dict) else None)
+                for k, v in cols.items()
+            },
+            "extra_filters": spec.get("extra_filters"),
+        }
+    if mapping.get("reasoning"):
+        out["reasoning"] = mapping["reasoning"]
+    return out
+
+
+@app.post("/api/libraries/{lib_id}/adapt")
+async def run_adapter(lib_id: str) -> dict[str, Any]:
+    """Manually (re-)run the AI schema adapter on an existing library."""
+    from .. import adapt as _adapt
+    try:
+        return await _adapt.adapt_library(lib_id)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.get("/api/libraries/{lib_id}/schema-map")
+def get_schema_map(lib_id: str) -> dict[str, Any]:
+    from .. import adapt as _adapt
+    m = _adapt.load_map(lib_id)
+    if m is None:
+        return {"mapping": None, "summary": {}, "applied": False}
+    return {"mapping": m, "summary": _summarise_mapping(m), "applied": True}
+
+
+@app.delete("/api/libraries/{lib_id}/schema-map")
+def clear_schema_map(lib_id: str) -> dict[str, str]:
+    from .. import adapt as _adapt
+    p = _adapt.schema_map_path(lib_id)
+    if p.exists():
+        p.unlink()
+    return {"cleared": lib_id}
 
 
 @app.post("/api/libraries/detect-platform")

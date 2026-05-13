@@ -27,6 +27,21 @@ def _connect(read_only: bool = False) -> sqlite3.Connection:
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA foreign_keys=ON")
     con.row_factory = sqlite3.Row
+
+    # Schema adapter: if this library has a schema_map.json, apply CREATE TEMP
+    # VIEW statements so the rest of the studio can query the canonical
+    # `notes` / `comments` tables regardless of what the source schema looks
+    # like. TEMP views are scoped to this connection, so re-applied each time.
+    try:
+        from . import adapt
+        active_lib_id = library.active_lib_id()
+        mapping = adapt.load_map(active_lib_id)
+        if mapping:
+            adapt.apply_views(con, mapping)
+    except Exception:
+        # Never let adapter logic break the connection itself.
+        pass
+
     return con
 
 

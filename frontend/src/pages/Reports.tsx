@@ -57,11 +57,11 @@ export default function Reports() {
     setErr(null); setInfo(null);
     const displayName = f.name.replace(/\.(db|sqlite|sqlite3)$/i, "");
     try {
-      // Step A: upload + detect + activate + DNA analyze
+      // Step A: upload + detect + adapter + activate + DNA analyze
       setStage("uploading");
-      setProgress("📤 上传 + 校验 schema + 嗅探平台…");
+      setProgress("📤 上传 + 校验 + 嗅探平台…");
       setStage("analyzing-dna");
-      setProgress("📦 建索引 + 跑爆款 DNA…（10-30s）");
+      setProgress("🔄 AI 嗅探 schema 并自动适配（若非 xhs 格式）→ 建索引 → 跑爆款 DNA…");
       const imp = await api.importLibrary(f, displayName, pendingPlatform);
 
       // ---- Validate the analyze step actually succeeded -------------
@@ -69,25 +69,32 @@ export default function Reports() {
         setErr(
           `数据库导入成功（${imp.notes_count.toLocaleString()} 条），但爆款 DNA 分析失败：\n` +
           `${imp.analyze_error || "未知"}\n\n` +
-          `常见原因：数据库 schema 不完整（缺关键列）。请检查 notes 表 + 必要字段，` +
-          `或换一个标准 xhs 爬取的 .db 重试。也可以去「📥 资源库」页面手动重跑分析看更详细的报错。`
+          `AI 适配 schema 也搞不定的话，可以去「📥 资源库」手动编辑 schema_map.json，` +
+          `或换一个比较标准的 .db 试试。`
         );
         setStage("idle");
         setProgress("");
-        await load();  // refresh lib list so user sees the imported (but unanalyzed) one
+        await load();
         return;
       }
 
-      // Surface non-fatal warnings inline so user knows what was skipped
-      if (imp.schema_warnings && imp.schema_warnings.length > 0) {
-        setInfo(`✓ 已导入，但有些非致命警告（不影响主流程）：${imp.schema_warnings.join(" · ")}`);
+      // Build a friendly status summary that includes adapter info
+      const summaryBits: string[] = [];
+      if (imp.adapter?.adapted) {
+        const m = imp.adapter.mapping_summary?.notes;
+        const mapped = m?.source_table
+          ? `已把源表 \`${m.source_table}\` 自动映射到 canonical schema`
+          : "已自动适配 schema";
+        summaryBits.push(`🔄 ${mapped}`);
+      }
+      if (imp.schema_warnings?.length) {
+        summaryBits.push("⚠️ " + imp.schema_warnings.join(" · "));
       }
       if (imp.section_errors && Object.keys(imp.section_errors).length > 0) {
-        const skipped = Object.keys(imp.section_errors).join("、");
-        setInfo((prev) =>
-          (prev ?? "") +
-          `\n⚠️ 以下 DNA 子部分跳过了（其他分析正常）：${skipped}`
-        );
+        summaryBits.push(`⚠️ 跳过的 DNA 子部分：${Object.keys(imp.section_errors).join("、")}`);
+      }
+      if (summaryBits.length > 0) {
+        setInfo(summaryBits.join(" · "));
       }
 
       const platDetected = imp.detected_platform

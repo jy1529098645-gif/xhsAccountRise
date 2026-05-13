@@ -155,6 +155,15 @@ export const api = {
     analyze_error?: string;
     section_errors?: Record<string, string>;
     promote_warning?: string;
+    adapter?: {
+      adapted: boolean;
+      reason?: string;
+      notes_rows?: number;
+      source_tables?: string[];
+      mapping_summary?: any;
+      view_error?: string;
+    };
+    adapter_error?: string;
   }> => {
     const backend = backendUrl();
     if (!backend) throw new HttpError(0, "导入需要本地后端");
