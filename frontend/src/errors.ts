@@ -78,6 +78,25 @@ export function humaniseError(e: unknown): string {
   if (httpMatch) {
     const status = httpMatch[1];
     const body = httpMatch[2];
+
+    // Special-case: 404 on a *newly-added* endpoint usually means the
+    // local backend hasn't been restarted since the frontend updated.
+    // Generic "Not found" was confusing the user, so spell it out.
+    if (status === "404") {
+      const NEW_ENDPOINT_HINTS = [
+        "external_reports", "integrated_reports", "upload_file",
+        "/api/projects",     // v0.18+
+      ];
+      if (NEW_ENDPOINT_HINTS.some(h => raw.includes(h))) {
+        return (
+          "本地后端是旧版本，还没这个新接口。\n" +
+          "→ 去后端那个终端 Ctrl-C，然后重跑：\n" +
+          "    python -m studio serve --port 8765\n" +
+          "（如果上次更新过 requirements，先 pip install -r requirements.txt）"
+        );
+      }
+    }
+
     // Try to pull "detail" from FastAPI JSON
     try {
       const j = JSON.parse(body);
