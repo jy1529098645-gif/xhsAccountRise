@@ -336,6 +336,23 @@ export const api = {
     return res.json();
   },
 
+  // Iteration loop — feed performance back, iterate next cycle ------------
+  saveStrategyPerformance: (packId: string, body: {
+    raw_notes?: string;
+    per_slot?: { slot_idx: number; [k: string]: any }[];
+    overall?: Record<string, any>;
+  }) => postJson<{ feedback_id: string; created_at: number; per_slot: any[]; overall: any; raw_notes: string }>(
+    `/api/strategy/${packId}/performance`, body),
+  listStrategyPerformance: (packId: string) =>
+    getJson<{ feedback_id: string; created_at: number; raw_notes: string; per_slot: any[]; overall: any }[]>(
+      `/api/strategy/${packId}/performance`).catch(() => []),
+  iterateStrategy: (packId: string, body: { feedback_id: string; iterator_spec?: string }) =>
+    postJson<{
+      pack_id: string; parent_pack_id: string; iteration_n: number;
+      iteration_summary: string; wins_to_double_down: any[]; losses_to_drop: any[];
+      pack: StrategyPackDTO;
+    }>(`/api/strategy/${packId}/iterate`, body),
+
   // Compose -----------------
   compose: (req: Brief & {
     strategist_spec?: string;

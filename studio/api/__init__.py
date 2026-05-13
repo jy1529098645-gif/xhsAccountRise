@@ -1036,6 +1036,50 @@ def delete_strategy(pack_id: str) -> dict[str, str]:
     return {"deleted": pack_id}
 
 
+# ---------------- strategy iteration loop -------------------------------
+
+from ..strategy import iterate as _iterate  # noqa: E402
+
+
+class StrategyPerformancePayload(BaseModel):
+    raw_notes: str = ""
+    per_slot: list[dict[str, Any]] = Field(default_factory=list)
+    overall: dict[str, Any] = Field(default_factory=dict)
+
+
+@app.post("/api/strategy/{pack_id}/performance")
+def save_strategy_performance(pack_id: str, req: StrategyPerformancePayload) -> dict[str, Any]:
+    return _iterate.save_performance(
+        pack_id=pack_id,
+        raw_notes=req.raw_notes,
+        per_slot=req.per_slot,
+        overall=req.overall,
+    )
+
+
+@app.get("/api/strategy/{pack_id}/performance")
+def list_strategy_performance(pack_id: str) -> list[dict[str, Any]]:
+    return _iterate.list_performance(pack_id)
+
+
+class StrategyIterateRequest(BaseModel):
+    feedback_id: str
+    iterator_spec: str = "claude:opus"
+
+
+@app.post("/api/strategy/{pack_id}/iterate")
+async def iterate_strategy_api(pack_id: str, req: StrategyIterateRequest) -> dict[str, Any]:
+    try:
+        return await _iterate.iterate_strategy(
+            pack_id, req.feedback_id,
+            iterator_spec=req.iterator_spec,
+        )
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.post("/api/drafts/{draft_id}/candidates/{candidate_id}/choose")
 def choose_candidate(draft_id: str, candidate_id: str) -> dict[str, Any]:
     with db.connect() as con:

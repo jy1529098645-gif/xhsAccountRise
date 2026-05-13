@@ -166,11 +166,16 @@ _TOPICS_SCHEMA = {
                     "outline": {"type": "array", "items": {"type": "string"}},
                     "materials_needed": {"type": "array", "items": {"type": "string"}},
                     "intent": {"type": "string"},
-                    "body_draft": {"type": "string"},
                 },
             },
         },
     },
+}
+
+_BODY_DRAFT_SCHEMA = {
+    "type": "object",
+    "required": ["body_draft"],
+    "properties": {"body_draft": {"type": "string"}},
 }
 
 _SCHEDULE_SCHEMA = {
@@ -302,11 +307,13 @@ async def expand(
     )
     scheduler_gen = registry.build(scheduler_spec)[0]
     try:
-        # Bumped to 16k because we now ask for body_draft per slot (300-600
-        # chars × N slots can easily push past 8k).
+        # Scheduler only outputs structure (titles/outlines/materials/timing).
+        # Body drafts are written by a separate parallel pool below — asking
+        # one LLM call to do N body drafts ballooned past 16k tokens and
+        # silently returned empty schedules (see v0.29 bug report).
         sched_parsed = await _call_json(
             scheduler_gen, prompts.SCHEDULER_SYSTEM, sched_user,
-            max_tokens=16000, tool_name="submit_schedule", schema=_SCHEDULE_SCHEMA,
+            max_tokens=6000, tool_name="submit_schedule", schema=_SCHEDULE_SCHEMA,
         )
     except Exception as e:
         sched_parsed = {"_error": str(e)}
@@ -335,10 +342,58 @@ async def expand(
             outline=[str(x) for x in (s.get("outline") or [])],
             materials_needed=[str(x) for x in (s.get("materials_needed") or [])],
             intent=str(s.get("intent", "")),
-            body_draft=str(s.get("body_draft", "")),
         )
         for s in schedule_raw
     ]
+
+    # --- Body-draft pool: parallel, one call per slot ---
+    # Splitting body-drafting out of the scheduler was forced by the
+    # observation that a single 12-slot body-draft call would silently
+    # return an empty schedule once total tokens crossed ~10k. Each call
+    # here is small + focused, and failures isolate per slot.
+    drafter_chosen = registry.build(scheduler_spec)[0]
+    direction_block = (
+        f"【账号方向】{chosen.name}\n"
+        f"【一句话定位】{chosen.positioning_statement}\n"
+        f"【目标受众】{chosen.target_audience}\n"
+        f"【平台】{platform}\n"
+        f"【可参考的爆款 hook 角度】{', '.join(chosen.hook_angles or [])}\n"
+        f"{report_block}"
+    )
+
+    async def _draft_one(slot_idx: int, slot: TopicSlot) -> tuple[int, str, str | None]:
+        slot_prompt = (
+            f"{direction_block}\n\n"
+            f"【这一篇的 slot】\n"
+            f"- 标题：{slot.title}\n"
+            f"- 备选标题：{', '.join(slot.title_variants[:3])}\n"
+            f"- 角度：{slot.angle} · hook 类型：{slot.hook_type} · 意图：{slot.intent}\n"
+            f"- 大纲：\n" + "\n".join(f"  · {o}" for o in slot.outline) + "\n"
+            + (f"- 需要的素材：{', '.join(slot.materials_needed)}\n" if slot.materials_needed else "")
+            + "\n请按 system 给的 schema 输出这一篇的 body_draft。"
+        )
+        try:
+            r = await asyncio.wait_for(
+                _call_json(
+                    drafter_chosen, prompts.BODY_DRAFTER_SYSTEM, slot_prompt,
+                    max_tokens=1200,
+                    tool_name="submit_body_draft", schema=_BODY_DRAFT_SCHEMA,
+                ),
+                timeout=120,
+            )
+            return slot_idx, str(r.get("body_draft", "")).strip(), None
+        except Exception as e:
+            return slot_idx, "", str(e)
+
+    drafter_errors: list[str] = []
+    if schedule:
+        draft_results = await asyncio.gather(
+            *[_draft_one(i, s) for i, s in enumerate(schedule)]
+        )
+        for idx, draft, err in draft_results:
+            schedule[idx].body_draft = draft
+            if err:
+                drafter_errors.append(f"slot #{idx + 1} ({schedule[idx].title[:40]}): {err}")
 
     # --- Resourcer: consolidate ---
     schedule_summary = "\n".join(
@@ -386,6 +441,7 @@ async def expand(
         "topicgen_errors": topicgen_errors,
         "scheduler_error": sched_parsed.get("_error"),
         "resourcer_error": res_parsed.get("_error"),
+        "drafter_errors": drafter_errors,
         "topic_candidate_count": len(all_topics),
         "elapsed_s": elapsed_total,
     }

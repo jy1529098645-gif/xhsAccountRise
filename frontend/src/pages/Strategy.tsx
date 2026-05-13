@@ -862,6 +862,134 @@ function PackView({pack, onReset}: {pack: StrategyPackDTO; onReset: () => void})
         hint="基于这份策略 + 报告，Composer 会用多 Agent 协作出完整稿件 + 发布计划。"
         to="/composer"
       />
+
+      <IterateCard pack={pack} />
+    </div>
+  );
+}
+
+function IterateCard({pack}: {pack: StrategyPackDTO}) {
+  const navigate = useNavigate();
+  const [showForm, setShowForm] = useState(false);
+  const [rawNotes, setRawNotes] = useState("");
+  const [perSlot, setPerSlot] = useState<{[idx: number]: {likes?: string; comments?: string; saves?: string}}>({});
+  const [busy, setBusy] = useState(false);
+  const [iterating, setIterating] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+  const [history, setHistory] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (!pack?.pack_id) return;
+    api.listStrategyPerformance(pack.pack_id).then(setHistory).catch(() => {});
+  }, [pack?.pack_id]);
+
+  async function submit() {
+    setBusy(true); setErr(null); setInfo(null);
+    try {
+      const per_slot = Object.entries(perSlot)
+        .filter(([, v]) => v && (v.likes || v.comments || v.saves))
+        .map(([idx, v]) => ({
+          slot_idx: Number(idx),
+          likes: v.likes ? Number(v.likes) : undefined,
+          comments: v.comments ? Number(v.comments) : undefined,
+          saves: v.saves ? Number(v.saves) : undefined,
+        }));
+      const r = await api.saveStrategyPerformance(pack.pack_id, {
+        raw_notes: rawNotes, per_slot, overall: {},
+      });
+      setInfo(`✓ 数据已保存（${per_slot.length} 篇有数 / ${rawNotes ? "含" : "无"}文字复盘）`);
+      setHistory(prev => [r, ...prev]);
+      setIterating(true);
+      const out = await api.iterateStrategy(pack.pack_id, {
+        feedback_id: r.feedback_id, iterator_spec: "claude:opus",
+      });
+      setInfo(`✓ 下一轮策略已生成（迭代 #${out.iteration_n}）。即将跳转…`);
+      setTimeout(() => navigate(`/strategy/${out.pack_id}`), 800);
+    } catch (e: any) {
+      setErr(humaniseError(e));
+      setIterating(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card" style={{borderTop: "3px solid var(--primary)"}}>
+      <div className="spread" style={{alignItems: "flex-start"}}>
+        <div>
+          <h2 style={{margin: 0}}>🔄 跑完这一轮？让 AI 看效果 + 出下一轮</h2>
+          <p className="muted" style={{fontSize: 12, margin: "4px 0 0"}}>
+            发完这 {pack.schedule.length} 篇后回来填真实表现 → AI 会分析哪些 hook / 角度真的爆了，下一轮加大投入、砍掉翻车点。
+          </p>
+        </div>
+        {!showForm && (
+          <button onClick={() => setShowForm(true)}>📊 我跑完了 / 上传表现</button>
+        )}
+      </div>
+
+      {history.length > 0 && (
+        <div className="muted" style={{fontSize: 12, marginTop: 6}}>
+          上次反馈 ：{new Date(history[0].created_at * 1000).toLocaleString()} ·
+          逐篇 {history[0].per_slot?.length ?? 0} 篇有数
+        </div>
+      )}
+
+      {showForm && (
+        <div style={{marginTop: 14, padding: 12, background: "#fafafa", borderRadius: 8}}>
+          <label style={{marginBottom: 4}}>📝 文字复盘（什么爆了 / 什么翻了 / 评论里看到什么 — 越具体越好）</label>
+          <textarea value={rawNotes} onChange={e => setRawNotes(e.target.value)}
+            placeholder="比如：第 2 篇 hook '4小时跑通'爆了, 2800 赞；第 5 篇标题太长没人点；评论里反复问'文科版的prompt模板'，下一轮要专门做。"
+            style={{minHeight: 100, width: "100%", fontFamily: "inherit", fontSize: 13, lineHeight: 1.7,
+                    marginBottom: 12}} />
+
+          <label style={{marginBottom: 4}}>📊 逐篇数据（可只填几篇代表性的，不需要全填）</label>
+          <div style={{display: "grid", gap: 6, fontSize: 12}}>
+            <div style={{display: "grid", gridTemplateColumns: "1fr 90px 90px 90px",
+                         gap: 6, fontWeight: 600, color: "#555", padding: "2px 4px"}}>
+              <div>标题</div>
+              <div className="num">👍 点赞</div>
+              <div className="num">💬 评论</div>
+              <div className="num">⭐ 收藏</div>
+            </div>
+            {pack.schedule.slice(0, 30).map((s, i) => {
+              const v = perSlot[i] || {};
+              const set = (k: "likes"|"comments"|"saves", val: string) =>
+                setPerSlot(prev => ({...prev, [i]: {...prev[i], [k]: val}}));
+              return (
+                <div key={i} style={{display: "grid", gridTemplateColumns: "1fr 90px 90px 90px",
+                                      gap: 6, alignItems: "center", padding: "2px 4px"}}>
+                  <div className="muted" style={{fontSize: 11.5, whiteSpace: "nowrap",
+                                                  overflow: "hidden", textOverflow: "ellipsis"}}>
+                    W{s.week}·#{i+1} {s.title}
+                  </div>
+                  <input type="number" min="0" value={v.likes ?? ""}
+                    onChange={e => set("likes", e.target.value)}
+                    style={{padding: "3px 6px", fontSize: 12}} />
+                  <input type="number" min="0" value={v.comments ?? ""}
+                    onChange={e => set("comments", e.target.value)}
+                    style={{padding: "3px 6px", fontSize: 12}} />
+                  <input type="number" min="0" value={v.saves ?? ""}
+                    onChange={e => set("saves", e.target.value)}
+                    style={{padding: "3px 6px", fontSize: 12}} />
+                </div>
+              );
+            })}
+          </div>
+
+          {err && <div className="banner danger" style={{marginTop: 10}}>{err}</div>}
+          {info && <div className="banner info" style={{marginTop: 10}}>{info}</div>}
+
+          <div className="row" style={{gap: 8, marginTop: 12}}>
+            <button onClick={submit} disabled={busy || (!rawNotes.trim() && Object.keys(perSlot).length === 0)}>
+              {iterating ? "🤖 Claude 在分析上轮 + 出下轮策略（60-90s）…"
+              : busy ? "上传中…"
+              : "🚀 保存表现 + 一键出下一轮策略"}
+            </button>
+            <button className="ghost" onClick={() => setShowForm(false)} disabled={busy}>关闭</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
