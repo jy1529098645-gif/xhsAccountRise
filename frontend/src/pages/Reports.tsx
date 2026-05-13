@@ -146,8 +146,18 @@ export default function Reports() {
         </p>
       </div>
 
-      {err && <div className="banner danger" onClick={() => setErr(null)}>{err}</div>}
-      {info && <div className="banner info" onClick={() => setInfo(null)}>{info}</div>}
+      {err && (
+        <div className="banner danger" style={{display: "flex",
+                                                 justifyContent: "space-between",
+                                                 alignItems: "flex-start", gap: 12}}>
+          <div style={{whiteSpace: "pre-wrap", flex: 1}}>{err}</div>
+          <button className="ghost" style={{padding: "4px 8px", fontSize: 12, flexShrink: 0}}
+            onClick={() => setErr(null)}>关闭</button>
+        </div>
+      )}
+      {info && !err && (
+        <div className="banner info" onClick={() => setInfo(null)}>{info}</div>
+      )}
       {offline && (
         <div className="banner warn">
           本地后端没起来。顶部黄条有启动命令；起来后回这里。

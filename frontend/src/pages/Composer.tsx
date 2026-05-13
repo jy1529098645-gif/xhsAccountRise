@@ -150,7 +150,19 @@ export default function Composer() {
           <button onClick={run} disabled={running || !topic.trim() || noBackend} style={{marginTop: 16, width: "100%", fontSize: 15, padding: "10px 0"}}>
             {running ? "🤖 AI 们正在协作出稿中…(60-180s)" : "🚀 启动 AI 团队"}
           </button>
-          {err && <div className="banner danger" style={{marginTop: 10}}>{err}</div>}
+          {err && (
+            <div className="banner danger" style={{marginTop: 10, display: "flex",
+                                                   justifyContent: "space-between",
+                                                   alignItems: "flex-start", gap: 12}}>
+              <div style={{whiteSpace: "pre-wrap", flex: 1}}>{err}</div>
+              <div className="row" style={{gap: 6, flexShrink: 0}}>
+                <button className="secondary" style={{padding: "4px 10px", fontSize: 12}}
+                  onClick={() => { setErr(null); run(); }}>↻ 重试</button>
+                <button className="ghost" style={{padding: "4px 8px", fontSize: 12}}
+                  onClick={() => setErr(null)}>关闭</button>
+              </div>
+            </div>
+          )}
         </div>
 
         <div>

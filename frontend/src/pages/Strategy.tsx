@@ -91,6 +91,9 @@ export default function Strategy() {
   const [resourcerSpec, setResourcerSpec] = useState("claude:opus");
   const [autofill, setAutofill] = useState<AutofillResult | null>(null);
   const [autofillErr, setAutofillErr] = useState<string | null>(null);
+  const [lastFailedAction, setLastFailedAction] = useState<
+    { kind: "autofill" } | { kind: "propose" } | { kind: "expand"; idx: number } | null
+  >(null);
 
   // Save in-progress input to localStorage as user types.
   useEffect(() => {
@@ -155,7 +158,7 @@ export default function Strategy() {
   }, [urlPackId]);
 
   async function runAutofill(extraHints?: { personal?: string; constraints?: string }) {
-    setPhase("autofilling"); setAutofillErr(null);
+    setPhase("autofilling"); setAutofillErr(null); setInfo(null);
     try {
       const r = await api.autofillStrategy({
         personal_hint: extraHints?.personal ?? input.personal_strengths ?? "",
@@ -174,9 +177,11 @@ export default function Strategy() {
         constraints: r.input.constraints || "",
         platform: r.input.platform || "",
       });
+      setLastFailedAction(null);
       setPhase("input");
     } catch (e: any) {
       setAutofillErr(humaniseError(e));
+      setLastFailedAction({ kind: "autofill" });
       setPhase("input");
     }
   }
@@ -197,12 +202,15 @@ export default function Strategy() {
       });
       setPackId(res.pack_id);
       setDirections(res.directions);
+      setLastFailedAction(null);
       setPhase("directions");
       // Persist URL so reload/bookmark works
       navigate(`/strategy/${res.pack_id}`, { replace: true });
       api.listStrategies().then(setHistory).catch(() => {});
     } catch (e: any) {
-      setErr(humaniseError(e)); setPhase("input");
+      setErr(humaniseError(e)); setInfo(null);
+      setLastFailedAction({ kind: "propose" });
+      setPhase("input");
     }
   }
 
@@ -219,6 +227,7 @@ export default function Strategy() {
       });
       setPack(res.pack);
       setInfo(null);
+      setLastFailedAction(null);
       setPhase("pack");
       // Update URL so refresh / bookmark works
       navigate(`/strategy/${packId}`, { replace: true });
@@ -227,8 +236,18 @@ export default function Strategy() {
       // Refresh history list
       api.listStrategies().then(setHistory).catch(() => {});
     } catch (e: any) {
-      setErr(humaniseError(e)); setPhase("directions");
+      setErr(humaniseError(e)); setInfo(null);
+      setLastFailedAction({ kind: "expand", idx });
+      setPhase("directions");
     }
+  }
+
+  function retryLastAction() {
+    if (!lastFailedAction) return;
+    setErr(null);
+    if (lastFailedAction.kind === "autofill") runAutofill();
+    else if (lastFailedAction.kind === "propose") submitInput();
+    else if (lastFailedAction.kind === "expand") pickDirection(lastFailedAction.idx);
   }
 
   function reset() {
@@ -269,8 +288,22 @@ export default function Strategy() {
           <Link to="/libraries" style={{marginLeft: 8}}>去上传 →</Link>
         </div>
       )}
-      {err && <div className="banner danger" onClick={() => setErr(null)}>{err}</div>}
-      {info && <div className="banner info">{info}</div>}
+      {err && (
+        <div className="banner danger" style={{display: "flex",
+                                                 justifyContent: "space-between",
+                                                 alignItems: "flex-start", gap: 12}}>
+          <div style={{whiteSpace: "pre-wrap", flex: 1}}>{err}</div>
+          <div className="row" style={{gap: 6, flexShrink: 0}}>
+            {lastFailedAction && (
+              <button className="secondary" style={{padding: "4px 10px", fontSize: 12}}
+                onClick={retryLastAction}>↻ 重试</button>
+            )}
+            <button className="ghost" style={{padding: "4px 8px", fontSize: 12}}
+              onClick={() => setErr(null)}>关闭</button>
+          </div>
+        </div>
+      )}
+      {info && !err && <div className="banner info">{info}</div>}
 
       {/* Strategy history — visible across all phases when not viewing a specific pack */}
       {history.length > 0 && phase === "input" && !urlPackId && (
