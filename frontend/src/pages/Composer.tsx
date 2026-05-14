@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api";
-import { fmtLikes, roleName } from "../format";
+import { fmtLikes, roleName, slotDate, defaultCycleStartDate } from "../format";
 import AgentConfigPanel, {
   AgentSelection, defaultSelection, selectionToSpecs,
 } from "../components/AgentConfigPanel";
@@ -11,7 +11,10 @@ import { humaniseError, humaniseErrorAsync } from "../errors";
 import { isAborted } from "../api";
 import { startJob, getJob, cancelJob, useJob } from "../lib/jobs";
 import { LLM_CATALOG } from "../catalog";
-import type { ComposeBundle, DraftCandidate, Library, Platform } from "../types";
+import type {
+  ComposeBundle, DraftCandidate, Library, Platform,
+  StrategyPackDTO, TopicSlotDTO,
+} from "../types";
 
 const COMPOSE_STAGES: TimelineStage[] = [
   { label: "🤖 策略师定方向", durationSec: 25, sub: "选 hook 类型 / 开头钩子 / 结构 / 避坑" },
@@ -96,6 +99,19 @@ export default function Composer() {
   const [angleModels, setAngleModels] = useState<Record<string, string>>(
     initialForm.angleModels ?? {}
   );
+
+  // v0.62 ：从 URL ?pack=PACK_ID 加载 Strategy 输出的 schedule，在顶部显示
+  // SchedulePanel 让用户在 30 个 slot 之间挑选 + 在每个 slot 的推荐/次选间挑。
+  // 这是「Strategy 内容合并到 Composer」的核心入口。
+  const [searchParams] = useSearchParams();
+  const packIdFromUrl = searchParams.get("pack");
+  const [strategyPack, setStrategyPack] = useState<StrategyPackDTO | null>(null);
+  useEffect(() => {
+    if (!packIdFromUrl) return;
+    api.getStrategy(packIdFromUrl).then((d: any) => {
+      if (d.pack) setStrategyPack(d.pack);
+    }).catch(() => { /* pack not found / no backend — silent fallback */ });
+  }, [packIdFromUrl]);
   function setAngleModel(angle: string, spec: string) {
     setAngleModels(prev => {
       const next = { ...prev };
@@ -103,6 +119,52 @@ export default function Composer() {
       else next[angle] = spec;
       return next;
     });
+  }
+
+  // v0.62 ：SchedulePanel 里选了哪个 slot/alt 就把那条的 metadata 直接灌进
+  // 当前 Composer 表单。等于「Strategy 的内容」+「Composer 的 form」无缝衔接。
+  function handleSlotChosen(slot: TopicSlotDTO, altIdx: number = -1) {
+    const alts = Array.isArray((slot as any).alternative_versions) ? (slot as any).alternative_versions : [];
+    const alt = (altIdx >= 0 && altIdx < alts.length) ? alts[altIdx] : null;
+    const eff = alt ? {
+      title: alt.title || slot.title,
+      angle: alt.angle || slot.angle,
+      hook_type: alt.hook_type || slot.hook_type,
+      content_format: alt.content_format || slot.content_format,
+      outline: Array.isArray(alt.mini_outline) ? alt.mini_outline : slot.outline,
+      publish_slot: alt.publish_slot || slot.publish_slot,
+    } : {
+      title: slot.title,
+      angle: slot.angle,
+      hook_type: slot.hook_type,
+      content_format: slot.content_format,
+      outline: slot.outline,
+      publish_slot: slot.publish_slot,
+    };
+    setTopic(eff.title || "");
+    // angle must be in ANGLES enum to render properly
+    if (eff.angle && ANGLES.includes(eff.angle)) {
+      setAngles([eff.angle]);
+    }
+    if (strategyPack?.platform) setPlatform(strategyPack.platform);
+    const niche = strategyPack?.chosen_direction?.positioning_statement || "";
+    setNiche(niche);
+    setExtra([
+      alt ? `🎯 从 Strategy 「${alt.label || "次选"}」 进入 ：${alt.why_alt || ""}` : "🎯 从 Strategy 推荐方案进入",
+      eff.content_format ? `内容形式 ：${eff.content_format}（必须按此格式写）` : "",
+      eff.hook_type ? `hook_type: ${eff.hook_type}` : "",
+      eff.publish_slot ? `发布时段 ：${eff.publish_slot}` : "",
+      slot.intent ? `意图 ：${slot.intent}` : "",
+      eff.outline?.length ? "大纲：" + (eff.outline as string[]).join(" / ") : "",
+      slot.materials_needed?.length ? "需要材料：" + (slot.materials_needed as string[]).join("、") : "",
+      strategyPack?.chosen_direction?.target_audience ? `目标受众：${strategyPack.chosen_direction.target_audience}` : "",
+    ].filter(Boolean).join("\n\n"));
+    setPrefillNote(`从 Strategy ${alt ? `「${alt.label || "次选"}」` : "推荐方案"} 一键带入 ：${eff.title?.slice(0, 30) || ""}`);
+    // 滚到表单顶部
+    setTimeout(() => {
+      const el = document.getElementById("composer-step-1");
+      if (el) el.scrollIntoView({behavior: "smooth", block: "start"});
+    }, 50);
   }
 
   function toggleAngle(a: string) {
@@ -283,6 +345,12 @@ export default function Composer() {
         <h1>✍️ Composer · AI 起号助手</h1>
         <p>填主题 → 点开始 → 多个 AI 协作出最佳稿件 + 发布计划</p>
       </div>
+
+      {/* v0.62 ：Strategy schedule 合并到 Composer。pack_id 在 URL 时显示。
+          从 Strategy 「→ 去出稿」 进来 = 看完整 30 篇 schedule + alt picker。 */}
+      {strategyPack && (
+        <SchedulePanel pack={strategyPack} onChoose={handleSlotChosen} />
+      )}
 
       {/* v0.61.18 ：4 步跳转条 — 点击滚动到对应 section */}
       <div className="card" style={{padding: "10px 12px"}}>
@@ -723,6 +791,172 @@ function PlanCard({plan}: {plan: any}) {
     </div>
   );
 }
+
+// v0.62 ：SchedulePanel — Strategy 的 schedule 合并到 Composer 里渲染。
+// 用户从 Strategy 「→ 去出稿」 进来时，URL 带 ?pack=ID，Composer 加载 pack，
+// 顶部用这个面板显示 30 个 slot ：每条紧凑一行（日期 + 标题 + 角度 + 格式），
+// 展开后看 outline + materials + 2 个 alternative_versions（每个独立 「✍️ 写这个」）。
+// 点哪个 → handleSlotChosen 把 metadata 灌进下面的 Composer 表单。
+function SchedulePanel({pack, onChoose}: {
+  pack: StrategyPackDTO;
+  onChoose: (slot: TopicSlotDTO, altIdx: number) => void;
+}) {
+  const [expanded, setExpanded] = useState<number | null>(null);
+  const [collapsed, setCollapsed] = useState(false);
+  const schedule = Array.isArray(pack.schedule) ? pack.schedule : [];
+  const dirName = (pack.chosen_direction && pack.chosen_direction.name) || "";
+  const cycleStart = pack.input.cycle_start_date || "";
+  return (
+    <div className="card" style={{borderLeft: "4px solid #a855f7", padding: "12px 14px"}}>
+      <div className="spread" style={{alignItems: "flex-start"}}>
+        <div style={{flex: 1, minWidth: 0}}>
+          <h2 style={{margin: 0, fontSize: 15}}>
+            📅 当前起号策略 schedule · {schedule.length} 篇
+          </h2>
+          <p className="muted" style={{fontSize: 12, margin: "4px 0 0"}}>
+            来自 Strategy 包 #{pack.pack_id.slice(0, 8)} · 方向「{dirName}」
+            · 点任一条选 「主推荐」 或 「次选」 → 自动填进下面的表单 → ▶️ 开始 → 多 agent 出稿
+          </p>
+        </div>
+        <button className="ghost" onClick={() => setCollapsed(v => !v)}
+          style={{fontSize: 12}}>
+          {collapsed ? "展开 schedule →" : "收起 ▴"}
+        </button>
+      </div>
+      {!collapsed && (
+        <div style={{marginTop: 10, display: "grid", gap: 4, maxHeight: "60vh", overflow: "auto"}}>
+          {schedule.length === 0 && (
+            <div className="muted" style={{fontSize: 13, padding: 8}}>
+              这份 pack 的 schedule 为空，可能上一次 expand 出错。回 Strategy 重跑。
+            </div>
+          )}
+          {schedule.map((s: any, i: number) => {
+            const isExp = expanded === i;
+            const dt = slotDate(cycleStart, s.week, s.day_of_week);
+            const dateLabel = dt ? dt.display : `W${s.week}·D${s.day_of_week}`;
+            const alts = Array.isArray(s.alternative_versions) ? s.alternative_versions : [];
+            return (
+              <div key={i} style={{
+                border: isExp ? "1px solid var(--primary)" : "1px solid #eee",
+                borderRadius: 6,
+                background: isExp ? "var(--primary-soft)" : "#fff",
+              }}>
+                <div className="row" style={{
+                  padding: "6px 10px", gap: 8, alignItems: "center", cursor: "pointer",
+                }} onClick={() => setExpanded(isExp ? null : i)}>
+                  <span style={{
+                    fontSize: 11, padding: "1px 6px", background: "var(--primary)",
+                    color: "#fff", borderRadius: 4, fontWeight: 600, flexShrink: 0,
+                  }}>#{i + 1}</span>
+                  <span className="muted" style={{fontSize: 11, flexShrink: 0, minWidth: 80}}>
+                    📅 {dateLabel}
+                  </span>
+                  {s.publish_slot && (
+                    <span className="muted" style={{fontSize: 11, flexShrink: 0}}>⏰ {s.publish_slot}</span>
+                  )}
+                  <span style={{
+                    flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600,
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                  }}>{s.title || "(无标题)"}</span>
+                  {s.angle && <span className="tag-pill" style={{fontSize: 10.5, flexShrink: 0}}>{s.angle}</span>}
+                  {s.content_format && (
+                    <span className="tag-pill" style={{fontSize: 10.5, flexShrink: 0}}>
+                      {s.content_format}
+                    </span>
+                  )}
+                  {alts.length > 0 && (
+                    <span className="muted" style={{fontSize: 10.5, flexShrink: 0}}>
+                      + {alts.length} 备选
+                    </span>
+                  )}
+                  <span style={{fontSize: 11, color: "var(--muted)", flexShrink: 0}}>{isExp ? "▴" : "▾"}</span>
+                </div>
+                {isExp && (
+                  <div style={{padding: "0 10px 10px"}}>
+                    {/* Main option */}
+                    <div style={{padding: 8, background: "#fff", borderRadius: 4, marginTop: 4,
+                                  border: "1px solid #ffd0d8"}}>
+                      <div className="row" style={{justifyContent: "space-between", alignItems: "flex-start", gap: 8}}>
+                        <div style={{flex: 1, minWidth: 0}}>
+                          <span style={{
+                            fontSize: 10.5, padding: "1px 6px", background: "var(--primary)",
+                            color: "#fff", borderRadius: 4, fontWeight: 600,
+                          }}>★ 主推荐</span>
+                          {s.outline?.length > 0 && (
+                            <ul style={{margin: "6px 0 0 18px", fontSize: 11.5, lineHeight: 1.55, color: "#555"}}>
+                              {s.outline.slice(0, 5).map((o: string, j: number) => <li key={j}>{o}</li>)}
+                            </ul>
+                          )}
+                          {s.materials_needed?.length > 0 && (
+                            <div className="muted" style={{fontSize: 11, marginTop: 4}}>
+                              📦 材料 ：{s.materials_needed.join("、")}
+                            </div>
+                          )}
+                          {s.decision_rationale && (
+                            <div className="muted" style={{fontSize: 11, marginTop: 4, fontStyle: "italic"}}>
+                              🧠 {s.decision_rationale}
+                            </div>
+                          )}
+                        </div>
+                        <button onClick={(e) => { e.stopPropagation(); onChoose(s, -1); }}
+                          style={{whiteSpace: "nowrap", fontSize: 12, padding: "4px 10px"}}>
+                          ✍️ 写这个 →
+                        </button>
+                      </div>
+                    </div>
+                    {/* Alternative options */}
+                    {alts.map((alt: any, ai: number) => (
+                      <div key={ai} style={{
+                        padding: 8, background: "#fff", borderRadius: 4, marginTop: 6,
+                        borderLeft: "3px solid #a855f7", border: "1px solid #eadcff",
+                      }}>
+                        <div className="row" style={{justifyContent: "space-between", alignItems: "flex-start", gap: 8}}>
+                          <div style={{flex: 1, minWidth: 0}}>
+                            <div className="row" style={{gap: 6, flexWrap: "wrap"}}>
+                              <span style={{
+                                fontSize: 10.5, padding: "1px 6px", background: "#a855f7",
+                                color: "#fff", borderRadius: 4, fontWeight: 600,
+                              }}>{alt.label || `次选 ${ai === 0 ? "A" : "B"}`}</span>
+                              {alt.publish_slot && <span className="tag-pill" style={{fontSize: 10.5}}>⏰ {alt.publish_slot}</span>}
+                              {alt.angle && <span className="tag-pill" style={{fontSize: 10.5}}>{alt.angle}</span>}
+                              {alt.content_format && <span className="tag-pill" style={{fontSize: 10.5}}>{alt.content_format}</span>}
+                            </div>
+                            {alt.title && (
+                              <div style={{fontSize: 12.5, fontWeight: 600, marginTop: 4}}>{alt.title}</div>
+                            )}
+                            {Array.isArray(alt.mini_outline) && alt.mini_outline.length > 0 && (
+                              <ul style={{margin: "4px 0 0 18px", fontSize: 11.5, lineHeight: 1.55, color: "#555"}}>
+                                {alt.mini_outline.map((o: string, j: number) => <li key={j}>{o}</li>)}
+                              </ul>
+                            )}
+                            {alt.why_alt && (
+                              <div className="muted" style={{fontSize: 11, marginTop: 4, fontStyle: "italic"}}>
+                                💡 {alt.why_alt}
+                              </div>
+                            )}
+                          </div>
+                          <button onClick={(e) => { e.stopPropagation(); onChoose(s, ai); }}
+                            className="ghost"
+                            style={{
+                              whiteSpace: "nowrap", fontSize: 12, padding: "4px 10px",
+                              borderColor: "#a855f7", color: "#a855f7",
+                            }}>
+                            ✍️ 写这个 →
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 // v0.61.25 ：参考素材面板 — 让用户看清 AI 写这条稿时具体参考了哪些 ：
 // 1) 同赛道高赞标题 + 正文片段（refs）— 验证 AI 没编内容

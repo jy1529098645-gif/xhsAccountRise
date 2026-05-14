@@ -1602,40 +1602,73 @@ function PackView({pack, onReset, onBack, hasDirections}: {
 
       <TopPublishingSlotsCard />
 
-      <div className="card">
+      {/* v0.62 重构 ：Strategy 不再渲染每篇 slot 详细卡（含 body draft）。
+          那些详细 UI + alternatives picker 已经搬到 Composer 的 SchedulePanel。
+          这里只给紧凑概览 + 大「→ 去出稿写每篇」按钮。 */}
+      <div className="card" style={{borderTop: "3px solid var(--primary)"}}>
         <div className="spread" style={{alignItems: "flex-start", marginBottom: 8}}>
           <div>
-            <h2 style={{margin: 0}}>📝 全部 {totalSlots} 篇 · 含初稿正文</h2>
+            <h2 style={{margin: 0}}>📋 排期概览 · {totalSlots} 篇</h2>
             <p className="muted" style={{fontSize: 12, margin: "4px 0 0"}}>
-              AI 已经给每一篇写好可发布的 300-600 字初稿。点「出这一篇 →」会把它丢进 Composer，多 Agent 协作出最终发布稿。
+              每篇都有 AI 推荐 + 2 个次选方案 · 点下方「→ 去出稿写每篇」进 Composer，
+              那里能看完整 schedule + 备选 + 多 agent 写每一篇。
             </p>
             {pack.input.cycle_start_date && (
               <p className="muted" style={{fontSize: 12, marginTop: 4}}>
                 📅 起点日期 ：<b>{pack.input.cycle_start_date}</b>
-                <span style={{marginLeft: 6, color: "var(--muted)"}}>（每篇的真实日期 + 时段已显示在卡片标签上）</span>
               </p>
             )}
           </div>
+          <Link to={`/composer?pack=${encodeURIComponent(pack.pack_id)}`}>
+            <button style={{whiteSpace: "nowrap", fontSize: 14, padding: "10px 18px", fontWeight: 600}}>
+              ✍️ 去出稿写每篇 →
+            </button>
+          </Link>
         </div>
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(460px, 1fr))",
-          gap: 12,
-          alignItems: "start",
-        }}>
-          {schedule.map((s, i) => (
-            <SlotCard key={i} slot={s} idx={i} onCompose={goCompose}
-              cycleStartDate={pack.input.cycle_start_date}
-              chosenDirections={pack.chosen_directions ?? []} />
-          ))}
-          {schedule.length === 0 && (
-            <div className="muted" style={{padding: 16, background: "#fafafa",
-                                            borderRadius: 8, fontSize: 13}}>
-              ⚠️ 这次 AI 没有排出任何 slot（可能是模型一次性输出超长被截）。
-              点上面「新建策略」重新跑一次，或者去 设置 切到 claude:opus 重试。
-            </div>
-          )}
-        </div>
+        {schedule.length === 0 ? (
+          <div className="muted" style={{padding: 16, background: "#fafafa",
+                                          borderRadius: 8, fontSize: 13}}>
+            ⚠️ 这次 AI 没有排出任何 slot（可能是模型一次性输出超长被截）。
+            点上面「新建策略」重新跑一次，或者去 设置 切到 claude:opus 重试。
+          </div>
+        ) : (
+          // 紧凑表格 ：日期 / 标题 / 角度 / 格式 / 备选数 — 详情都在 Composer 看
+          <table className="table" style={{marginTop: 8, fontSize: 12.5}}>
+            <thead>
+              <tr>
+                <th style={{width: 36}}>#</th>
+                <th style={{width: 90}}>📅 日期</th>
+                <th style={{width: 90}}>⏰ 时段</th>
+                <th>标题</th>
+                <th style={{width: 70}}>角度</th>
+                <th style={{width: 70}}>格式</th>
+                <th style={{width: 60}}>备选</th>
+              </tr>
+            </thead>
+            <tbody>
+              {schedule.map((s: any, i: number) => {
+                const dt = slotDate(pack.input.cycle_start_date, s.week, s.day_of_week);
+                const dateLabel = dt ? dt.display : `W${s.week}·D${s.day_of_week}`;
+                const altCount = Array.isArray(s.alternative_versions) ? s.alternative_versions.length : 0;
+                return (
+                  <tr key={i}>
+                    <td className="muted">{i + 1}</td>
+                    <td className="muted" style={{fontSize: 11}}>{dateLabel}</td>
+                    <td className="muted" style={{fontSize: 11}}>{s.publish_slot || "—"}</td>
+                    <td style={{maxWidth: 360, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"}}>
+                      <b>{s.title || "(无标题)"}</b>
+                    </td>
+                    <td><span className="tag-pill" style={{fontSize: 10.5}}>{s.angle || "—"}</span></td>
+                    <td><span className="tag-pill" style={{fontSize: 10.5}}>{s.content_format || "—"}</span></td>
+                    <td className="num muted" style={{fontSize: 11}}>
+                      {altCount > 0 ? `+ ${altCount}` : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
       </div>
 
       {materials.length > 0 && (
@@ -1666,9 +1699,9 @@ function PackView({pack, onReset, onBack, hasDirections}: {
       )}
 
       <NextStepCard
-        label="去 ✍️ 出稿 写第一篇"
-        hint="基于这份策略 + 报告，Composer 会用多 Agent 协作出完整稿件 + 发布计划。"
-        to="/composer"
+        label="✍️ 去出稿 · 写每篇（带这份 schedule）"
+        hint="Composer 顶部会显示完整 schedule + 每条的备选方案。点哪条就写哪条，多 agent 协作出最终稿。"
+        to={`/composer?pack=${encodeURIComponent(pack.pack_id)}`}
       />
 
       <IterateCard pack={pack} />
