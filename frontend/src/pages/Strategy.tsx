@@ -1,17 +1,22 @@
-// v0.62.6 ：起号策略板块（第 2 步，分析报告 → 起号策略 → 出稿）。
+// v0.62.8 ：起号策略板块（第 2 步）— 创建 pack + 看大纲，全流程闭环。
 //
-// 这个板块**只做一件事** ：给用户看时间线大纲。
-//   • 文字策略指导 ：方向 / 主线 / 周主题 / 材料 / 风险 / 指标
-//   • 每日所需信息 ：日期 / 冷热启动 / 风格 / 主题 / 图文视频 / 时段
-//   • 每日多方案 ：主推荐 + 2 个备选（不同时段/角度/格式）
-//   • 「✍️ 写这个 →」 跳出稿板块 (/composer?slot=PACK:IDX&alt=N)
+// 板块依赖关系（终于对了）：
+//   分析报告 (1) → 起号策略 (2) → 出稿 (3) → 复盘 (4)
+//
+// 起号策略板块 = **前置阶段**，输出一份带时间线 + 多方案备选的 pack。
+// 出稿板块 = **后置阶段**，消费 pack 去多 agent 写每篇正文。
 //
 // 路由 ：
-//   /strategy            默认显示最新 pack 的大纲 + 顶部 pack 切换器
-//   /strategy/{pack_id}  显示指定 pack 的大纲
+//   /strategy             默认 ：有 pack → 看最新 ；无 pack → 进 wizard
+//   /strategy/new         强制进 wizard（即使有 pack 也允许新建）
+//   /strategy/{pack_id}   看指定 pack
 //
-// **没有任何创建动作** — 创建 pack 在出稿板块用 wizard 完成。
-// **没有任何写正文动作** — 写正文在出稿板块多 agent 完成。
+// wizard（4 步 ：目标 → 输入 → 方向 → 排期）内容描述账号的 ：
+//   平台 / 目的 / 详细描述 / 受众 / 强项 / 约束 / 周期 / 频率 / 启动方式 / 内容形式
+// 全部依赖分析报告 + DNA 数据驱动，AI 据此生成 timeline + 文字策略指导。
+//
+// pack 视图（StrategyPackView）显示 ：方向卡 + 文字策略大纲 + 30 条时间线
+// + 每条主推荐 + 2 个备选 + 「✍️ 写这个 →」跳 /composer 写正文。
 
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -19,6 +24,7 @@ import { api } from "../api";
 import { fmtRelative } from "../format";
 import PlatformPill from "../components/PlatformPill";
 import { humaniseError } from "../errors";
+import StrategyWizard from "../components/strategy/StrategyWizard";
 import StrategyPackView from "../components/strategy/StrategyPackView";
 import type { StrategyPackDTO, StrategyListItem } from "../types";
 
@@ -27,8 +33,6 @@ export default function Strategy() {
   return <StrategyPage explicitPackId={urlPackId} />;
 }
 
-/** 板块主页 ：默认拿最新 pack 来显示 ；URL 有 pack_id 用那个。
- *  顶部带一个 pack 切换器，让用户在多个 pack 之间切。 */
 function StrategyPage({ explicitPackId }: { explicitPackId?: string }) {
   const navigate = useNavigate();
   const [history, setHistory] = useState<StrategyListItem[]>([]);
@@ -36,14 +40,22 @@ function StrategyPage({ explicitPackId }: { explicitPackId?: string }) {
   const [pack, setPack] = useState<StrategyPackDTO | null>(null);
   const [packLoading, setPackLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // 是否处于「新建模式」：覆盖 PackView 渲染 wizard。
+  // 触发条件 ：URL = /strategy/new ；或用户点「+ 新建另一份 pack」按钮 ；
+  // 或完全没有 pack 历史（首次用户）。
+  const [createMode, setCreateMode] = useState(explicitPackId === "new");
 
-  // 1) 先拉 history（用来决定哪个 pack 默认显示 + 渲染切换器）
+  // 1) 拉 history（决定默认 pack + 切换器选项 + 是否首次用户）
   useEffect(() => {
     let cancel = false;
     (async () => {
       try {
         const list = await api.listStrategies();
-        if (!cancel) setHistory(list);
+        if (!cancel) {
+          setHistory(list);
+          // 没有任何 pack → 直接进 wizard（首次用户体验）
+          if (list.length === 0 && explicitPackId !== "new") setCreateMode(true);
+        }
       } catch (e: any) {
         if (!cancel) setErr(humaniseError(e));
       } finally {
@@ -51,16 +63,21 @@ function StrategyPage({ explicitPackId }: { explicitPackId?: string }) {
       }
     })();
     return () => { cancel = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 2) 决定显示哪个 pack ：URL > 最新一个 expanded 的 pack > 第一个 > 啥也没
-  const expandedPacks = history.filter(p => p.status === "expanded");
-  const targetPackId = explicitPackId
-    || (expandedPacks[0]?.pack_id)
-    || (history[0]?.pack_id)
-    || null;
+  // 当 URL 变为 /strategy/new 时切到 wizard
+  useEffect(() => {
+    if (explicitPackId === "new") setCreateMode(true);
+  }, [explicitPackId]);
 
-  // 3) 拉指定 pack 的详情
+  // 2) 决定默认显示哪个 pack
+  const expandedPacks = history.filter(p => p.status === "expanded");
+  const targetPackId = (!createMode && explicitPackId !== "new")
+    ? (explicitPackId || expandedPacks[0]?.pack_id || history[0]?.pack_id || null)
+    : null;
+
+  // 3) 拉指定 pack 详情
   useEffect(() => {
     if (!targetPackId) { setPack(null); return; }
     let cancel = false;
@@ -73,7 +90,7 @@ function StrategyPage({ explicitPackId }: { explicitPackId?: string }) {
           setPack(d.pack);
         } else {
           setPack(null);
-          setErr("这个 pack 还没生成完成 — 去出稿板块继续 4 步流程");
+          setErr("这个 pack 还没生成完成 — 重跑或换一个");
         }
       } catch (e: any) {
         if (!cancel) setErr(humaniseError(e));
@@ -89,45 +106,52 @@ function StrategyPage({ explicitPackId }: { explicitPackId?: string }) {
     try {
       await api.deleteStrategy(id);
       setHistory(h => h.filter(p => p.pack_id !== id));
-      // 如果删的是当前显示的，跳回 /strategy 让 effect 重选默认 pack
       if (targetPackId === id) navigate("/strategy", { replace: true });
     } catch (e: any) {
       alert(humaniseError(e));
     }
   }
 
-  // No pack at all → onboarding
-  if (!historyLoading && history.length === 0) {
+  // v0.62.8 ：wizard 完成 = pack 已 expanded。导航到该 pack，离开新建模式。
+  function handleWizardPackReady(pid: string) {
+    setCreateMode(false);
+    // 重新拉一次 history 让切换器显示新 pack
+    api.listStrategies().then(setHistory).catch(() => {});
+    navigate(`/strategy/${pid}`, { replace: true });
+  }
+
+  // ─── 新建模式 ：渲染 wizard ──────────────────────────────────
+  if (createMode) {
     return (
       <div>
-        <div className="page-header">
-          <h1>🚀 起号策略</h1>
-          <p>时间线大纲 + 每日多方案备选 + 文字策略指导 — 进出稿前先看清整盘节奏</p>
+        <div className="page-header" style={{display: "flex", justifyContent: "space-between", alignItems: "flex-start"}}>
+          <div>
+            <h1>🚀 起号策略 · 创建新 pack</h1>
+            <p>详细描述账号情况 → AI 据分析报告 + DNA 生成时间线大纲 + 多方案备选</p>
+          </div>
+          {history.length > 0 && (
+            <button className="ghost" onClick={() => {
+              setCreateMode(false);
+              navigate("/strategy", { replace: true });
+            }} style={{fontSize: 12.5, padding: "6px 12px"}}>
+              ← 取消，看现有 pack
+            </button>
+          )}
         </div>
-        <div className="card" style={{textAlign: "center", padding: 48}}>
-          <div style={{fontSize: 48, marginBottom: 12}}>📭</div>
-          <h2 style={{margin: 0}}>还没有任何起号策略 pack</h2>
-          <p className="muted" style={{fontSize: 13, marginTop: 6}}>
-            策略 pack 在出稿板块创建 — 选目标 → 填输入 → 选方向 → 自动排期，一气呵成。
-            <br />回到这里就能看完整时间线大纲 + 每日多方案。
-          </p>
-          <button onClick={() => navigate("/composer")}
-            style={{marginTop: 18, fontSize: 14, padding: "10px 20px", fontWeight: 600}}>
-            ✍️ 去出稿创建第一份 pack →
-          </button>
-        </div>
+        <StrategyWizard onPackReady={handleWizardPackReady} />
       </div>
     );
   }
 
+  // ─── 浏览模式 ：渲染 PackView ──────────────────────────────────
   return (
     <div>
       <div className="page-header">
         <h1>🚀 起号策略 · 时间线大纲</h1>
-        <p>看大局 · 每天 AI 给主推荐 + 2 个备选 · 点哪条进出稿板块写哪条</p>
+        <p>详细策略 + 每日多方案 · 选哪条进出稿板块写哪条</p>
       </div>
 
-      {/* pack 切换器 — 当前显示哪个 pack，下拉切其它 */}
+      {/* pack 切换器 + 新建按钮 */}
       {history.length > 0 && (
         <div className="card" style={{padding: "10px 14px", marginBottom: 12}}>
           <div className="row" style={{gap: 10, alignItems: "center", flexWrap: "wrap"}}>
@@ -160,11 +184,12 @@ function StrategyPage({ explicitPackId }: { explicitPackId?: string }) {
                 ✕ 删除此 pack
               </button>
             )}
-            <Link to="/composer">
-              <button style={{fontSize: 12, padding: "4px 12px", whiteSpace: "nowrap"}}>
-                + 出稿建新 pack
-              </button>
-            </Link>
+            <button onClick={() => {
+              setCreateMode(true);
+              navigate("/strategy/new", { replace: true });
+            }} style={{fontSize: 12, padding: "4px 12px", whiteSpace: "nowrap"}}>
+              + 新建另一份 pack
+            </button>
           </div>
           {targetPackId && (() => {
             const p = history.find(x => x.pack_id === targetPackId);
@@ -189,12 +214,35 @@ function StrategyPage({ explicitPackId }: { explicitPackId?: string }) {
       {err && !packLoading && (
         <div className="card">
           <div className="banner danger">{err}</div>
-          <button onClick={() => navigate("/composer")} style={{marginTop: 12}}>
-            ✍️ 去出稿板块继续 / 新建
+          <button onClick={() => {
+            setCreateMode(true);
+            navigate("/strategy/new", { replace: true });
+          }} style={{marginTop: 12}}>
+            🚀 新建一份 pack
           </button>
         </div>
       )}
-      {pack && !err && <StrategyPackView pack={pack} />}
+      {pack && !err && (
+        <>
+          <StrategyPackView pack={pack} />
+          {/* 底部 ：明确「下一步去出稿」CTA — 让用户清楚两板块的依赖关系 */}
+          <div className="card" style={{borderTop: "3px solid var(--ok)", marginTop: 14}}>
+            <div className="row" style={{justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap"}}>
+              <div>
+                <h2 style={{margin: 0}}>📦 这份 pack 准备好了 → 去出稿写每篇</h2>
+                <p className="muted" style={{fontSize: 12, margin: "4px 0 0"}}>
+                  上面 schedule 里每条都有「✍️ 写这个 →」按钮可单独跳。也可以直接进出稿板块挑。
+                </p>
+              </div>
+              <Link to="/composer">
+                <button style={{fontSize: 14, padding: "10px 18px", whiteSpace: "nowrap", fontWeight: 600}}>
+                  ✍️ 去出稿板块 →
+                </button>
+              </Link>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

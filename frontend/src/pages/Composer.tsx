@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { fmtLikes, roleName } from "../format";
 import AgentConfigPanel, {
@@ -7,7 +7,6 @@ import AgentConfigPanel, {
 } from "../components/AgentConfigPanel";
 import ProgressTimeline, { Stage as TimelineStage } from "../components/ProgressTimeline";
 import NextStepCard from "../components/NextStepCard";
-import StrategyWizard from "../components/strategy/StrategyWizard";
 import StrategyPackView from "../components/strategy/StrategyPackView";
 import { humaniseErrorAsync } from "../errors";
 import { isAborted } from "../api";
@@ -18,10 +17,12 @@ import type {
   StrategyPackDTO, TopicSlotDTO,
 } from "../types";
 
-// v0.62.5 ：Composer = 全流程操作中心。
-//   1) 没有 active pack 时 ：渲染 <StrategyWizard /> 4 步走完出 pack
-//   2) 有 active pack 时 ：渲染 <StrategyPackView /> + 「写每篇」表单
-// 起号策略板块 (/strategy) 只是 pack 浏览页，所有创建/写正文动作都在这。
+// v0.62.8 ：Composer = 后置阶段，消费起号策略板块出的 pack 来写每篇正文。
+// 依赖关系 ：分析报告 → 起号策略（创建 pack）→ Composer（写每篇）→ 复盘
+//   1) 没有 ?pack= / ?slot= 时 ：引导用户去起号策略板块创建 pack
+//   2) 有 ?pack= ：显示 pack 顶部 + 表单（用户选哪条 slot 写哪条）
+//   3) 有 ?slot=PACK:IDX&alt=N ：自动预填表单为那条 slot
+// Composer **不再渲染 wizard** — wizard 现在只在 /strategy 板块里。
 
 const COMPOSE_STAGES: TimelineStage[] = [
   { label: "🤖 策略师定方向", durationSec: 25, sub: "选 hook 类型 / 开头钩子 / 结构 / 避坑" },
@@ -112,7 +113,7 @@ export default function Composer() {
   //   ?slot=PACK_ID:IDX&alt=N — 用户在 Strategy 板块选了某个 slot 来写
   // 两种都会显示 StrategyPackView 顶部 + 写每篇表单。?slot= 还会自动
   // 预填表单。没有任一参数 = 全新会话，渲染 wizard。
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const packIdFromUrl = searchParams.get("pack")
     || (searchParams.get("slot") || "").split(":")[0]
     || null;
@@ -294,11 +295,6 @@ export default function Composer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [strategyPack, slotIdxFromUrl, altIdxFromUrl]);
 
-  /** Wizard 完成回调 ：URL 写入 ?pack=PACK_ID，触发 pack fetch 自动加载。 */
-  function handleWizardPackReady(pid: string) {
-    setSearchParams({ pack: pid }, { replace: true });
-  }
-
   async function run() {
     setErr(null); setBundle(null); setPaused(false);
     const job = startJob<ComposeBundle>(
@@ -382,13 +378,37 @@ export default function Composer() {
         <p>填主题 → 点开始 → 多个 AI 协作出最佳稿件 + 发布计划</p>
       </div>
 
-      {/* v0.62.5 ：Composer 全流程 — 没 pack 时显示 wizard，有 pack 时显示 PackView。
-          - 没 pack ：StrategyWizard（goal → input → directions → expand）
-          - 有 pack ：StrategyPackView（方向/元信息/主题/排期/材料/风险/指标 + 备选 picker）
-            + 下面的 4 步表单（主题→策略→候选→最终稿）
-          PackView 的「✍️ 写这个」直接 handleSlotChosen 填表单 — 不跳路由。 */}
+      {/* v0.62.8 ：出稿板块依赖起号策略板块的 pack。
+          - 没 pack & 没 URL 参数 ：明确提示「先去起号策略板块创建 pack」
+            （顺便给「无脑写一篇」的逃生口，老用户可以绕过 pack 直接填 topic）
+          - 有 pack ：顶部显示 PackView + 写每篇表单 */}
       {!strategyPack && !packIdFromUrl && (
-        <StrategyWizard onPackReady={handleWizardPackReady} />
+        <div className="card" style={{borderLeft: "4px solid var(--primary)", padding: "16px 18px"}}>
+          <div className="row" style={{justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap"}}>
+            <div style={{flex: 1, minWidth: 240}}>
+              <h2 style={{margin: 0}}>📋 先去起号策略板块生成一份 pack</h2>
+              <p className="muted" style={{fontSize: 12.5, margin: "6px 0 0", lineHeight: 1.7}}>
+                出稿板块的最佳工作流是 ：先在起号策略板块详细描述账号（平台 / 目的 / 受众 / 风格），
+                AI 据分析报告 + DNA 出一份时间线大纲 + 多方案备选 — 然后回这里逐条写正文。<br/>
+                每条 slot 自带主题/角度/格式/受众/大纲，出稿质量比裸填 topic 高很多。
+              </p>
+            </div>
+            <Link to="/strategy/new">
+              <button style={{fontSize: 14, padding: "10px 18px", whiteSpace: "nowrap", fontWeight: 600}}>
+                🚀 去起号策略创建 pack →
+              </button>
+            </Link>
+          </div>
+          <details style={{marginTop: 14, fontSize: 12.5}}>
+            <summary style={{cursor: "pointer", color: "var(--muted)"}}>
+              或者不依赖 pack，直接填 topic 写一篇（适合临时灵感）↓
+            </summary>
+            <p className="muted" style={{fontSize: 11.5, marginTop: 8}}>
+              下面 4 步表单可以直接用 — 但 AI 拿不到方向 / 受众 / 排期上下文，
+              通常质量比走 pack 流程低 30-40%。
+            </p>
+          </details>
+        </div>
       )}
       {strategyPack && (
         <StrategyPackView pack={strategyPack}
