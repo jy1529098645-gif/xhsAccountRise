@@ -1515,6 +1515,49 @@ function PackView({pack, onReset, onBack, hasDirections}: {
             主线：{pack.series_thesis}
           </p>
         )}
+        {/* v0.62.3 ：策略元信息行 — 把用户在表单选的关键字段（冷热启动 /
+            内容形式偏好 / 周期 / 频率 / 平台）固化到 pack 概览顶部，
+            让用户在排期表上面一眼看见「这份策略的总体节奏」。 */}
+        <div className="row" style={{
+          gap: 6, flexWrap: "wrap", marginTop: 10,
+          paddingTop: 8, borderTop: "1px dashed #eee",
+        }}>
+          {(() => {
+            const sp = pack.input.startup_phase || "";
+            const phaseMap: Record<string, {label: string; hint: string}> = {
+              "":       { label: "🤖 AI 自决节奏",       hint: "AI 据 DNA / 报告自己挑节奏" },
+              "cold":   { label: "🆕 冷启动",            hint: "0 粉 · 主营造人设痛点 · 后期才转化" },
+              "warm":   { label: "🔥 热启动",            hint: "已有粉丝/资源 · 早期就可强转化" },
+              "hybrid": { label: "🌗 混合启动",          hint: "前期人设 + 后期转化的渐进节奏" },
+            };
+            const fp = pack.input.content_format_preference || "";
+            const formatMap: Record<string, string> = {
+              "":            "🤖 内容形式 AI 自决",
+              "tuwen_only":  "📝 纯图文",
+              "video_only":  "🎬 纯短视频",
+              "mixed":       "🔀 图文+视频混合",
+            };
+            const ph = phaseMap[sp] || phaseMap[""];
+            return (
+              <>
+                <span className="tag-pill" title={ph.hint}
+                  style={{background: "#fff3e6", color: "#b34d00", fontWeight: 600}}>
+                  {ph.label}
+                </span>
+                <span className="tag-pill" style={{background: "#eef6ff", color: "#1e40af"}}>
+                  {formatMap[fp] || formatMap[""]}
+                </span>
+                <span className="tag-pill" style={{background: "#f4f4f4"}}>
+                  📅 {pack.input.cycle_weeks} 周
+                </span>
+                <span className="tag-pill" style={{background: "#f4f4f4"}}>
+                  📊 每周 {pack.input.posts_per_week} 篇
+                </span>
+                <PlatformPill platform={pack.platform} />
+              </>
+            );
+          })()}
+        </div>
       </div>
 
       {themes.length > 0 && (

@@ -897,6 +897,16 @@ function SchedulePanel({pack, onChoose}: {
                               🧠 {s.decision_rationale}
                             </div>
                           )}
+                          {s.publish_rationale && (
+                            <div className="muted" style={{fontSize: 11, marginTop: 2, fontStyle: "italic"}}>
+                              ⏰ {s.publish_rationale}
+                            </div>
+                          )}
+                          {s.flexible_window && (
+                            <div className="muted" style={{fontSize: 11, marginTop: 2, fontStyle: "italic"}}>
+                              🗓️ 推荐窗口 ：{s.flexible_window}
+                            </div>
+                          )}
                         </div>
                         <button onClick={(e) => { e.stopPropagation(); onChoose(s, -1); }}
                           style={{whiteSpace: "nowrap", fontSize: 12, padding: "4px 10px"}}>
