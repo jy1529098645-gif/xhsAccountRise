@@ -791,6 +791,32 @@ async def _expand_inner(
     goal_block = goal_voice_block(getattr(inp, "goal_type", "") or "")
     goal_section = f"\n\n{goal_block}\n" if goal_block else ""
 
+    # v0.61.5 ：startup_phase 用户偏好。AI 仍可据 DNA / 报告微调，但有了
+    # 用户明示倾向应主要遵从。
+    sp = (getattr(inp, "startup_phase", "") or "").lower()
+    startup_section = ""
+    if sp == "cold":
+        startup_section = (
+            "\n\n【👤 用户启动阶段倾向 ：冷启动（0 粉 / 陌生人）】\n"
+            "  · 前 1/2 周期 重点营造人设 + 痛点共鸣，几乎不卖货\n"
+            "  · 转化期只在最后 1/4 周期 才上力度\n"
+            "  · 产品/课程/品牌名只在合适的 slot 出现，且要包裹在真实场景里\n"
+        )
+    elif sp == "warm":
+        startup_section = (
+            "\n\n【🔥 用户启动阶段倾向 ：热启动（已有粉丝 / 行业资源）】\n"
+            "  · 早期就可以适度强化卖点 / 转化路径\n"
+            "  · 人设建立期可缩短（前 1/4 周期足够）\n"
+            "  · 互动 + 转化贯穿整个周期\n"
+        )
+    elif sp == "hybrid":
+        startup_section = (
+            "\n\n【🌗 用户启动阶段倾向 ：混合启动】\n"
+            "  · 前期人设 + 后期转化，标准 4 阶段曲线\n"
+            "  · 据 DNA / 报告信号微调具体比例\n"
+        )
+    # sp == "" / "auto" → AI 自己据 DNA / 报告决定（无额外 prompt）
+
     # v0.58 phase rules — 4 阶段硬性约束（之前只是软建议，导致 4 周内容看不出差异化）。
     # 按 cycle_weeks 切分阶段并把规则塞进 prompt。
     cw = inp.cycle_weeks
@@ -833,6 +859,7 @@ async def _expand_inner(
     sched_user = (
         f"{chosen_block}"
         f"{goal_section}"
+        f"{startup_section}"
         f"{pctx_block}"
         f"{report_block}\n"
         f"【运营约束】cycle_weeks={inp.cycle_weeks}, posts_per_week={inp.posts_per_week}"

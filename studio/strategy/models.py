@@ -39,6 +39,12 @@ class AccountInput:
     # v0.59: 起号目标分类。8 大目标见 goals.GOAL_TYPES。决定 voice / phase
     # emphasis / product_context 是否必填 / prompt addendum。Empty = 通用（旧行为）。
     goal_type: str = ""
+    # v0.61.5 ：启动阶段。"" / "auto" = AI 据 DNA + 报告自己定（默认）；
+    # "cold" = 0 粉/陌生人，主营造人设痛点共鸣；
+    # "warm" = 已有粉丝基础或行业资源，可强转化；
+    # "hybrid" = 中间态，前期人设后期转化。注入到 SCHEDULER prompt，
+    # 但仍是软建议（AI 可据其它信号微调）。
+    startup_phase: str = ""
 
 
 @dataclass

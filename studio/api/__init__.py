@@ -1044,6 +1044,9 @@ class StrategyInput(BaseModel):
     # v0.59: 8 大起号目标分类 — 决定 voice / 阶段权重 / 产品上下文必需性。
     # 见 studio.strategy.goals.GOAL_TYPES。Empty = 通用（兼容旧客户端）。
     goal_type: str = ""
+    # v0.61.5: 启动阶段倾向 — "" / "auto" = AI 自决；"cold" = 0 粉冷启动；
+    # "warm" = 已有粉丝/资源热启动；"hybrid" = 混合渐进。
+    startup_phase: str = ""
     positioner_spec: str = "openai:gpt-4o"
 
 
@@ -1118,6 +1121,7 @@ async def strategy_propose(req: StrategyInput) -> dict[str, Any]:
         expected_angles=_exp_angles,
         cycle_start_date=req.cycle_start_date,
         goal_type=req.goal_type,
+        startup_phase=req.startup_phase,
     )
     try:
         result = await strategy_pipeline.propose(inp, positioner_spec=req.positioner_spec)
@@ -1148,6 +1152,7 @@ async def strategy_propose_stream(req: StrategyInput):
         expected_angles=_exp_angles,
         cycle_start_date=req.cycle_start_date,
         goal_type=req.goal_type,
+        startup_phase=req.startup_phase,
     )
     return StreamingResponse(
         strategy_pipeline.propose_stream(inp, positioner_spec=req.positioner_spec),

@@ -73,11 +73,9 @@ export default function ProjectPicker() {
                   title="永久删除这个项目和它所有的数据"
                   style={{padding: "1px 6px", fontSize: 11, opacity: 0.5, color: "var(--danger)"}}
                   onClick={async (e) => {
+                    // v0.61.5 ：用户要求删除时不再弹 confirm — 一点就删。
+                    // 误点风险用户接受 ：项目删了还能再新建，数据丢了是用户自己的决定。
                     e.stopPropagation();
-                    const ok = window.confirm(
-                      `永久删除「${p.name}」？\n\n所有数据（策略 / 出稿 / 报告 / 数据指标）都会**不可恢复**地删除。`
-                    );
-                    if (!ok) return;
                     setBusy(true);
                     try {
                       await api.hardDeleteProject(p.project_id);

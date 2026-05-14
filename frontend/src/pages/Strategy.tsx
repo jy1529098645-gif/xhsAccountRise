@@ -613,10 +613,7 @@ export default function Strategy() {
     <div>
       <div className="page-header">
         <h1>🚀 起号策略 · 第 2 步</h1>
-        <p>多 AI 团队帮你定方向 + 排周期 + 写每篇标题大纲 + 列要准备的材料</p>
-        <p className="muted" style={{fontSize: 12, marginTop: 4}}>
-          💡 建议先去 <Link to="/reports">📊 分析报告</Link> 看一眼 Claude × OpenAI 对你库的共识洞察，再回这里拟策略，效果更准。
-        </p>
+        <p>定方向 + 排周期 + 出初稿正文</p>
       </div>
 
       {!api.isConnected() && (
@@ -883,12 +880,43 @@ function InputForm(props: {
           marginTop: 8, padding: 8, background: "var(--primary-soft)",
           borderRadius: 6, fontSize: 12.5,
         }}>
-          <b>{props.selectedGoal.emoji} 起号目标 ：{props.selectedGoal.name}</b>
+          <b>{props.selectedGoal.emoji} {props.selectedGoal.name}</b>
           <span className="muted" style={{marginLeft: 8}}>{props.selectedGoal.description}</span>
         </div>
       )}
+
+      {/* v0.61.5 启动阶段 — AI 据 DNA/报告推荐，用户可手动覆盖 */}
+      <div style={{marginTop: 10, marginBottom: 12}}>
+        <label style={{fontSize: 12.5, marginBottom: 4}}>启动阶段</label>
+        <div className="row" style={{gap: 6, flexWrap: "wrap"}}>
+          {[
+            {k: "", label: "🤖 AI 自决", hint: "据 DNA/报告自己挑节奏（默认）"},
+            {k: "cold", label: "🆕 冷启动", hint: "0 粉 · 主营造人设/痛点共鸣 · 后期才转化"},
+            {k: "warm", label: "🔥 热启动", hint: "已有粉丝/资源 · 早期就可强转化"},
+            {k: "hybrid", label: "🌗 混合", hint: "前期人设 + 后期转化的渐进节奏"},
+          ].map(opt => {
+            const sel = (i.startup_phase || "") === opt.k;
+            return (
+              <button key={opt.k} type="button"
+                onClick={() => set("startup_phase", opt.k)}
+                title={opt.hint}
+                style={{
+                  flex: 1, minWidth: 130,
+                  padding: "6px 10px", fontSize: 12.5,
+                  background: sel ? "var(--primary)" : "#fff",
+                  color: sel ? "#fff" : "var(--fg)",
+                  border: sel ? "1px solid var(--primary)" : "1px solid var(--border)",
+                  borderRadius: 6, cursor: "pointer", fontWeight: sel ? 600 : 400,
+                }}>
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       <p className="muted" style={{fontSize: 12, margin: "4px 0 12px"}}>
-        所有字段都可以直接填。AI 帮拟只是给你个起点 — 改一改再启动也行。
+        字段都可直接填 · AI 帮拟只是给你起点。
       </p>
 
       <FieldWithRationale label="账号定位（可选 · 留空让 AI 自由推荐）"
@@ -908,7 +936,7 @@ function InputForm(props: {
       <div style={{padding: 12, background: "var(--primary-soft)", borderRadius: 8,
                    marginBottom: 12, border: "1px solid var(--primary)"}}>
         <div className="muted" style={{fontSize: 12, marginBottom: 8}}>
-          ⭐ 下面这两项决定**最终会出多少篇初稿** ：周期 × 每周篇数 = 总篇数
+          ⭐ 周期 × 每周篇数 = 总稿数
         </div>
         <div className="row" style={{gap: 12}}>
           <FieldWithRationale label="运营周期"
@@ -1983,11 +2011,9 @@ function ProductContextCard({contexts, onChanged}: {
     <div className="card" style={{borderLeft: "4px solid var(--primary)"}}>
       <div className="spread" style={{alignItems: "flex-start"}}>
         <div style={{flex: 1}}>
-          <h2 style={{margin: 0}}>📦 产品上下文 ─ 告诉 AI 你的产品到底是啥</h2>
+          <h2 style={{margin: 0}}>📦 产品上下文</h2>
           <p className="muted" style={{fontSize: 12, margin: "4px 0 0"}}>
-            上传/粘贴你的产品介绍 / 账号定位 / 经典叙事 / 核心功能清单 / 雷区。
-            <b style={{color: "var(--primary)"}}>项目级永久存储</b> — 一次设置，所有 Strategy / Compose / Insight 都自动注入。
-            不上传的话 AI 容易编造功能名 / 走通用 AI 工具腔。
+            告诉 AI 你的产品 — 项目级永久，Strategy/Compose/Insight 自动读。
           </p>
         </div>
         <button className="ghost" onClick={() => setExpanded(!expanded)}>
@@ -2091,10 +2117,9 @@ function GoalPicker({goals, selected, onPick}: {
 }) {
   return (
     <div className="card">
-      <h2 style={{margin: "0 0 6px"}}>1. 先选起号目标 ─ AI 据此调整后续整套策略</h2>
+      <h2 style={{margin: "0 0 6px"}}>1. 起号目标</h2>
       <p className="muted" style={{fontSize: 12.5, margin: "0 0 16px"}}>
-        不同目标的起号打法差别极大 ：情感账号弱转化、产品/SaaS 强卖点 + 产品上下文必填、
-        学术干货走方法论、教学走结构化课程。AI 据此调整 voice / 阶段权重 / required 字段。
+        AI 据此调整 voice / 阶段 / required 字段。
       </p>
 
       {goals.length === 0 && <div className="muted">加载中…</div>}
@@ -2159,7 +2184,7 @@ function GoalPicker({goals, selected, onPick}: {
       </div>
 
       <div className="muted" style={{fontSize: 11.5, marginTop: 14, textAlign: "center"}}>
-        选完后可以在下一步表单里改 / 也能回来重选 — 这只是起点，不锁死。
+        下一步可改 / 可重选。
       </div>
     </div>
   );

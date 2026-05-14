@@ -289,6 +289,10 @@ export interface AccountInputDTO {
   cycle_start_date?: string;
   /** v0.59: 起号目标分类 — personal_share / emotional / academic / product_saas / 等。Empty = 通用。 */
   goal_type?: string;
+  /** v0.61.5: 启动阶段。"" / "auto" = AI 据 DNA + 报告自己推荐；
+   *  "cold" = 0 粉 / 陌生人，主走人设痛点；"warm" = 已有粉丝/行业资源，可强转化；
+   *  "hybrid" = 前期人设 + 后期转化的中间态。 */
+  startup_phase?: string;
 }
 
 /** v0.59: 8 大起号目标分类，前端 GoalPicker 渲染用。 */

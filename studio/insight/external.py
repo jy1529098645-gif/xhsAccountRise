@@ -157,46 +157,138 @@ def save_external_report(
 
 
 def list_external_reports(library_id: str | None = None) -> list[dict[str, Any]]:
+    """v0.61.5 ：studio_external_reports 也是 per-library .db scoped。
+    用户上传 .db 后 active_lib 会切到新库，老库里的 external_reports 行从
+    current_db_path 看就消失了。修复 ：扫所有 data/libraries/*/xhs.db，
+    union 当前项目下的 external_reports 行 + 按 uploaded_at DESC 排序。"""
+    import sqlite3
+    from .. import config, library as _lib
+
     db.apply_migrations(verbose=False)
     project.ensure_bootstrap()
     pid = project.active_project_id()
-    where = "WHERE (project_id = ? OR project_id IS NULL)"
-    args: list[Any] = [pid]
-    if library_id:
-        where += " AND (library_id = ? OR library_id IS NULL)"
-        args.append(library_id)
-    with db.connect(read_only=True) as con:
-        rows = list(con.execute(
-            f"SELECT report_id, project_id, library_id, name, source, format,"
-            f" LENGTH(content) AS content_chars, uploaded_at"
-            f" FROM studio_external_reports {where}"
-            f" ORDER BY uploaded_at DESC",
-            args,
-        ))
-    return [dict(r) for r in rows]
+
+    libs_dir = config.DATA_DIR / "libraries"
+    seen: dict[str, dict[str, Any]] = {}
+    if libs_dir.exists():
+        for lib_dir in libs_dir.iterdir():
+            if not lib_dir.is_dir():
+                continue
+            per_lib_db = lib_dir / "xhs.db"
+            if not per_lib_db.exists():
+                continue
+            try:
+                uri = f"file:{per_lib_db.as_posix()}?mode=ro"
+                con = sqlite3.connect(uri, uri=True)
+                con.row_factory = sqlite3.Row
+                try:
+                    has = con.execute(
+                        "SELECT name FROM sqlite_master"
+                        " WHERE type='table' AND name='studio_external_reports'"
+                    ).fetchone()
+                    if not has:
+                        continue
+                    where = "WHERE (project_id = ? OR project_id IS NULL)"
+                    args: list[Any] = [pid]
+                    if library_id:
+                        where += " AND (library_id = ? OR library_id IS NULL)"
+                        args.append(library_id)
+                    rows = list(con.execute(
+                        f"SELECT report_id, project_id, library_id, name, source, format,"
+                        f" LENGTH(content) AS content_chars, uploaded_at"
+                        f" FROM studio_external_reports {where}",
+                        args,
+                    ))
+                    for r in rows:
+                        d = dict(r)
+                        # report_id 是 PK，跨库不会冲突；后到的覆盖前到无所谓
+                        seen[d["report_id"]] = d
+                finally:
+                    con.close()
+            except Exception:
+                continue
+    items = sorted(seen.values(), key=lambda d: -(d.get("uploaded_at") or 0))
+    return items
 
 
 def get_external_report(report_id: str) -> dict[str, Any] | None:
+    """v0.61.5 ：跨所有 per-lib .db 找该 report_id。"""
+    import sqlite3
+    from .. import config
+
     db.apply_migrations(verbose=False)
-    with db.connect(read_only=True) as con:
-        row = con.execute(
-            "SELECT * FROM studio_external_reports WHERE report_id = ?",
-            (report_id,),
-        ).fetchone()
-    return dict(row) if row else None
+    libs_dir = config.DATA_DIR / "libraries"
+    if not libs_dir.exists():
+        return None
+    for lib_dir in libs_dir.iterdir():
+        if not lib_dir.is_dir():
+            continue
+        per_lib_db = lib_dir / "xhs.db"
+        if not per_lib_db.exists():
+            continue
+        try:
+            uri = f"file:{per_lib_db.as_posix()}?mode=ro"
+            con = sqlite3.connect(uri, uri=True)
+            con.row_factory = sqlite3.Row
+            try:
+                has = con.execute(
+                    "SELECT name FROM sqlite_master"
+                    " WHERE type='table' AND name='studio_external_reports'"
+                ).fetchone()
+                if not has:
+                    continue
+                row = con.execute(
+                    "SELECT * FROM studio_external_reports WHERE report_id = ?",
+                    (report_id,),
+                ).fetchone()
+                if row:
+                    return dict(row)
+            finally:
+                con.close()
+        except Exception:
+            continue
+    return None
 
 
 def delete_external_report(report_id: str) -> bool:
+    """v0.61.5 ：在所有 per-lib .db 里都试一次删除，命中即返回。"""
+    import sqlite3
+    from .. import config
+
     db.apply_migrations(verbose=False)
     project.ensure_bootstrap()
     pid = project.active_project_id()
-    with db.connect() as con:
-        cur = con.execute(
-            "DELETE FROM studio_external_reports"
-            " WHERE report_id = ? AND (project_id = ? OR project_id IS NULL)",
-            (report_id, pid),
-        )
-        deleted = cur.rowcount > 0
+    libs_dir = config.DATA_DIR / "libraries"
+    deleted = False
+    if libs_dir.exists():
+        for lib_dir in libs_dir.iterdir():
+            if not lib_dir.is_dir():
+                continue
+            per_lib_db = lib_dir / "xhs.db"
+            if not per_lib_db.exists():
+                continue
+            try:
+                con = sqlite3.connect(per_lib_db)
+                con.row_factory = sqlite3.Row
+                try:
+                    has = con.execute(
+                        "SELECT name FROM sqlite_master"
+                        " WHERE type='table' AND name='studio_external_reports'"
+                    ).fetchone()
+                    if not has:
+                        continue
+                    cur = con.execute(
+                        "DELETE FROM studio_external_reports"
+                        " WHERE report_id = ? AND (project_id = ? OR project_id IS NULL)",
+                        (report_id, pid),
+                    )
+                    if cur.rowcount > 0:
+                        deleted = True
+                    con.commit()
+                finally:
+                    con.close()
+            except Exception:
+                continue
     if deleted:
         try:
             from . import pipeline as _ip

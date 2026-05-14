@@ -102,21 +102,28 @@ export default function Reports() {
   }
 
   async function load() {
-    try {
-      const [ls, rs, ps, exts, ints] = await Promise.all([
-        api.libraries(), api.listInsights(), api.platforms(),
-        api.listExternalReports(), api.listIntegratedReports(),
-      ]);
-      setLibs(ls);
-      const active = ls.find(l => l.active);
+    // v0.61.5 ：用 allSettled 而不是 all — 单个 API fail（比如 listInsights
+    // 不见库时返回 4xx）不应该把整个 load 拽崩，导致 externals 永远不更新、
+    // 合并按钮和「下一步」按钮神秘消失。
+    const [lsR, rsR, psR, extsR, intsR] = await Promise.allSettled([
+      api.libraries(), api.listInsights(), api.platforms(),
+      api.listExternalReports(), api.listIntegratedReports(),
+    ]);
+    if (lsR.status === "fulfilled") {
+      setLibs(lsR.value);
+      const active = lsR.value.find(l => l.active);
       if (active) setSelectedLibId(active.lib_id);
-      else if (ls[0]) setSelectedLibId(ls[0].lib_id);
-      setReports(rs as any);
-      setPlatforms(ps);
-      setExternals(exts as any);
-      setIntegrated(ints as any);
-    } catch (e: any) {
-      setErr(e.message);
+      else if (lsR.value[0]) setSelectedLibId(lsR.value[0].lib_id);
+    }
+    if (rsR.status === "fulfilled") setReports(rsR.value as any);
+    if (psR.status === "fulfilled") setPlatforms(psR.value);
+    if (extsR.status === "fulfilled") setExternals(extsR.value as any);
+    if (intsR.status === "fulfilled") setIntegrated(intsR.value as any);
+    // 只把第一个真正失败的错误 surface 出来，且不阻塞别的状态更新
+    const firstFail = [lsR, rsR, psR, extsR, intsR].find(r => r.status === "rejected") as PromiseRejectedResult | undefined;
+    if (firstFail) {
+      // eslint-disable-next-line no-console
+      console.warn("[Reports] partial load failure:", firstFail.reason);
     }
   }
   useEffect(() => { load(); }, []);
@@ -292,12 +299,8 @@ export default function Reports() {
   return (
     <div>
       <div className="page-header">
-        <h1>📊 数据库分析报告 · 第 1 步</h1>
-        <p>
-          {hasLib
-            ? "Claude × OpenAI 双 AI 独立分析 → 互相评审查漏补缺 → 主编融合 → 共识报告 + 数据图表"
-            : "拖一个 .db 进来 → AI 团队自动分析 → 出一份共识报告。其它步骤都基于这份洞察。"}
-        </p>
+        <h1>📊 分析报告 · 第 1 步</h1>
+        <p>{hasLib ? "双 AI 共识 + 图表" : "拖一个 .db 进来 → AI 出共识报告"}</p>
       </div>
 
       {err && (
@@ -341,10 +344,8 @@ export default function Reports() {
           {busy ? (
             <>
               <div className="big-icon">🤖🤖</div>
-              <h2 style={{margin: 0}}>{progress || "AI 团队正在分析你的数据库"}</h2>
-              <div className="muted" style={{marginTop: 6}}>
-                不要关闭页面 · 看下面进度，1-3 分钟自动跳到报告
-              </div>
+              <h2 style={{margin: 0}}>{progress || "AI 正在分析"}</h2>
+              <div className="muted" style={{marginTop: 6}}>1-3 分钟，别关页面</div>
               <button className="ghost" onClick={(e) => { e.stopPropagation(); pauseInsight(); }}
                 style={{pointerEvents: "auto", marginTop: 12, padding: "6px 16px", fontSize: 13}}>
                 ⏸ 暂停
@@ -353,12 +354,9 @@ export default function Reports() {
           ) : (
             <>
               <div className="big-icon">📂</div>
-              <h2 style={{margin: 0}}>把数据库丢给 AI 分析</h2>
+              <h2 style={{margin: 0}}>把数据库丢给 AI</h2>
               <div className="muted" style={{marginTop: 6}}>
-                拖一个 SQLite 数据库到这里 / 点击选择 · AI 自己读 + 出专业起号分析报告
-              </div>
-              <div className="muted" style={{marginTop: 4, fontSize: 11}}>
-                支持 .db / .sqlite / .sqlite3 · 任何 schema 都吃 · 整个过程 1-3 分钟
+                .db / .sqlite / .sqlite3 · 任何 schema · 约 1-3 分钟
               </div>
             </>
           )}
@@ -440,11 +438,9 @@ export default function Reports() {
       {/* ====== User-uploaded external reports ====== */}
       <div className="card">
         <div>
-          <h2 style={{margin: 0}}>📥 你自己的报告（来自别处）</h2>
+          <h2 style={{margin: 0}}>📥 你自己的报告</h2>
           <p className="muted" style={{fontSize: 12, marginTop: 4, marginBottom: 12}}>
-            已经从咨询、ChatGPT、竞品拆解、行业报告里拿到了分析？上传或粘贴到这里，
-            下面「起号策略」、「Composer 出稿」都会引用。
-            多份上传后可让 GPT-4o 整合成一份统一稿。
+            咨询稿 / ChatGPT 分析 / 竞品拆解都行，AI 会自动引用。多份可整合。
           </p>
         </div>
 
@@ -465,7 +461,7 @@ export default function Reports() {
               {uploadBusy ? "解析 + 上传中…" : "拖文件 / 点击选择"}
             </div>
             <div className="muted" style={{fontSize: 11.5, marginTop: 4}}>
-              <b>不限格式</b> · PDF / TeX / DOCX / MD / TXT / 任何文本 — 服务器自动提取文字给 AI
+              PDF / DOCX / MD / TXT / 任何文本
             </div>
             <input type="file" ref={textFileRef}
               style={{display: "none"}}
@@ -477,11 +473,8 @@ export default function Reports() {
             <div style={{fontWeight: 600, marginBottom: 6}}>✍️ 或直接粘贴文本</div>
             <button onClick={() => { setShowUpload(s => !s); setUploadName(""); setUploadContent(""); }}
               disabled={offline} style={{width: "100%", fontSize: 13, padding: "8px 0"}}>
-              {showUpload ? "✕ 收起粘贴框" : "＋ 打开粘贴框"}
+              {showUpload ? "✕ 收起" : "＋ 粘贴文本"}
             </button>
-            <div className="muted" style={{fontSize: 11.5, marginTop: 6}}>
-              短报告 / ChatGPT 对话直接复制过来更方便
-            </div>
           </div>
         </div>
 
@@ -570,10 +563,10 @@ export default function Reports() {
         {externals.length > 0 && (
           <>
             <h3 style={{margin: "18px 0 4px", fontSize: 14}}>
-              ✓ 已成功保存的报告（{externals.length}）
+              已保存（{externals.length}）
             </h3>
             <p className="muted" style={{margin: "0 0 6px", fontSize: 11.5}}>
-              起号策略 / Composer 出稿都会**自动引用所有**这些报告。删了就不再用。
+              起号策略 / Composer 自动引用。
             </p>
             <table className="table" style={{marginTop: 6}}>
               <thead>
@@ -616,22 +609,19 @@ export default function Reports() {
                          borderRadius: 8, border: "1px solid var(--primary)"}}>
               <div className="spread" style={{alignItems: "flex-start", gap: 10}}>
                 <div style={{flex: 1}}>
-                  <b>🪄 让 GPT-4o 整合所选的 {selectedSourceIds.size} 份</b>
-                  <div className="muted" style={{fontSize: 12, marginTop: 4}}>
-                    生成一份统一的「起号共识」，下游 Strategy / Composer 自动引用最新的一份。
-                  </div>
+                  <b>🪄 整合所选 {selectedSourceIds.size} 份 → 一份共识</b>
                   <label style={{display: "inline-flex", alignItems: "center", gap: 6,
                                   fontSize: 12, marginTop: 8, cursor: "pointer"}}>
                     <input type="checkbox" checked={includeOwnConsensus}
                       onChange={e => setIncludeOwnConsensus(e.target.checked)} />
-                    一起融合本工具自动出的 Claude×OpenAI 共识报告（如有）
+                    一起融合工具自出共识（如有）
                   </label>
                 </div>
                 <div className="row" style={{gap: 6}}>
                   <button onClick={runIntegrate}
                     disabled={integrating || selectedSourceIds.size === 0 || offline}
                     style={{minWidth: 160}}>
-                    {integrating ? "🤖 GPT-4o 整合中（约 30-60s）…" : "🚀 整合所选 → 一份共识"}
+                    {integrating ? "🤖 整合中…" : "🚀 整合所选"}
                   </button>
                   {integrating && (
                     <button className="ghost" onClick={pauseIntegrate}
@@ -679,11 +669,11 @@ export default function Reports() {
           benefiting from these uploads. */}
       {externals.length > 0 && (
         <NextStepCard
-          label={`去 🚀 起号策略 — 现在会引用你上传的 ${externals.length} 份外部报告`}
+          label={`去 🚀 起号策略（引用 ${externals.length} 份报告）`}
           hint={
             integrated.length > 0
-              ? `Strategy / Composer 都会自动读最新的整合稿 + 工具自身的共识。报告改动会即时生效。`
-              : `还没点「🚀 整合所选」？没关系 — Strategy 会直接读你上传的原文（最多 5 份，每份 3000 字截断）。整合一下效果更好。`
+              ? `Strategy / Composer 自动读最新整合稿。`
+              : `直接读原文也行；整合一下效果更好。`
           }
           to="/strategy"
           emoji="→"
@@ -776,8 +766,8 @@ export default function Reports() {
 
       {hasLib && reportsForSelected.length > 0 && (
         <NextStepCard
-          label="去 🚀 起号策略 让 AI 拟方案"
-          hint="基于你刚出的共识报告 + 你的想法，AI 自动拟一版完整起号方案（含周历 + 选题 + 材料清单）"
+          label="去 🚀 起号策略"
+          hint="基于共识报告自动拟方案（周历 + 选题 + 材料）"
           to="/strategy"
         />
       )}
