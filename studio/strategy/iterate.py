@@ -12,7 +12,6 @@ parent_pack_id + iteration_n.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import time
 import uuid
@@ -133,12 +132,34 @@ _ITERATE_SYSTEM = """\
       "angle": "...", "hook_type": "...",
       "outline": ["...", "...", "..."],
       "materials_needed": ["..."],
-      "intent": "..."
+      "intent": "...",
+      "content_format": "图文|短视频|长视频|直播|纯文本",
+      "publish_rationale": "<≤30 字 为什么这个时段>",
+      "decision_rationale": "<≤40 字 为什么这周 + 这个角度，引用本轮哪个信号>",
+      "alternative_versions": [
+        {
+          "label": "次选 A · 不同时段",
+          "publish_slot": "...", "angle": "...", "hook_type": "...",
+          "content_format": "...", "title": "...",
+          "mini_outline": ["...", "..."],
+          "why_alt": "<≤30 字 为啥这是个值得考虑的备选>"
+        },
+        {
+          "label": "次选 B · 不同角度",
+          "publish_slot": "...", "angle": "...", "hook_type": "...",
+          "content_format": "...", "title": "...",
+          "mini_outline": ["...", "..."],
+          "why_alt": "..."
+        }
+      ]
     }
   ]
 }
 
-严格保证 schedule 长度 = 用户在 parent 中设置的 cycle_weeks × posts_per_week。
+严格保证：
+- schedule 长度 = 用户在 parent 中设置的 cycle_weeks × posts_per_week
+- 每个 slot 必须给 **正好 2 个** alternative_versions（v0.62 架构 — 用户得 ≥ 3 选项后进 Composer 写正文）
+- **这一步只输出结构 + alternatives，不要写 body_draft**（正文交 Composer 多 agent 流程逐篇写）
 """
 
 _ITERATE_SCHEMA = {
@@ -310,92 +331,20 @@ async def iterate_strategy(
             intent=str(s.get("intent", "")),
             content_format=str(s.get("content_format", "")),
             publish_rationale=str(s.get("publish_rationale", "")),
+            decision_rationale=str(s.get("decision_rationale", "")),
+            # v0.62 ：next-iteration packs must carry alternatives so SchedulePanel can
+            # render 主推荐 + 2 备选 just like the first-round pack.
+            alternative_versions=[a for a in (s.get("alternative_versions") or [])
+                                  if isinstance(a, dict)],
         )
         for _raw in schedule_raw
         for s in [_slot_dict(_raw)]
     ]
 
-    # Body-draft pool — parallel, same as expand().
-    from . import prompts as strat_prompts
-    direction_block = (
-        f"【账号方向】{chosen.name}\n"
-        f"【一句话定位】{chosen.positioning_statement}\n"
-        f"【目标受众】{chosen.target_audience}\n"
-        f"【平台】{new_pack.platform}\n"
-        f"【可参考的爆款 hook 角度】{', '.join(chosen.hook_angles)}\n"
-        + (f"\n【参考报告】\n{ref}\n" if ref else "")
-    )
-
-    # Batched body drafter — same architecture as expand (v0.46/v0.48).
-    # 5 slots per call, 12-slot pack runs in ~3 parallel batches.
-    def _slot_block(idx: int, slot: TopicSlot) -> str:
-        return (
-            f"--- slot #{idx} ---\n"
-            f"- 标题：{slot.title}\n"
-            f"- 备选标题：{', '.join(slot.title_variants[:3])}\n"
-            f"- 角度：{slot.angle} · hook 类型：{slot.hook_type} · 意图：{slot.intent}\n"
-            f"- 大纲：" + " / ".join(slot.outline) + "\n"
-            + (f"- 需要的素材：{', '.join(slot.materials_needed)}\n" if slot.materials_needed else "")
-        )
-
-    BATCH_SCHEMA = {
-        "type": "object", "required": ["drafts"],
-        "properties": {
-            "drafts": {
-                "type": "array",
-                "items": {
-                    "type": "object", "required": ["idx", "body_draft"],
-                    "properties": {
-                        "idx": {"type": "integer"},
-                        "body_draft": {"type": "string"},
-                    },
-                },
-            },
-        },
-    }
-
-    async def _draft_batch(items: list[tuple[int, TopicSlot]]) -> list[tuple[int, str]]:
-        if not items:
-            return []
-        blocks = "\n\n".join(_slot_block(i, s) for i, s in items)
-        prompt = (
-            f"{direction_block}\n\n"
-            f"【一次性给你 {len(items)} 个 slot，请同时为每个写 body_draft】\n\n"
-            f"{blocks}\n\n"
-            f"按 schema 输出 drafts 数组。每个 body_draft 必须按它自己的 content_format 写。"
-            f" 不同 slot 之间要差异化，不要互相重复。"
-        )
-        try:
-            r = await asyncio.wait_for(
-                call_for_json(
-                    gen, strat_prompts.BODY_DRAFTER_BATCH_SYSTEM, prompt,
-                    max_tokens=8000,
-                    tool_name="submit_body_draft_batch",
-                    schema=BATCH_SCHEMA,
-                ),
-                timeout=180,
-            )
-            drafts = r.get("drafts") or []
-            returned = {int(d.get("idx", -1)): str(d.get("body_draft", "")).strip()
-                        for d in drafts if isinstance(d, dict)}
-            return [(i, returned.get(i, "")) for i, _ in items]
-        except Exception:
-            return [(i, "") for i, _ in items]
-
-    if new_pack.schedule:
-        BATCH_SIZE = 5
-        batches: list[list[tuple[int, TopicSlot]]] = []
-        cur: list[tuple[int, TopicSlot]] = []
-        for i, s in enumerate(new_pack.schedule):
-            cur.append((i, s))
-            if len(cur) >= BATCH_SIZE:
-                batches.append(cur); cur = []
-        if cur: batches.append(cur)
-        batch_results = await asyncio.gather(*[_draft_batch(b) for b in batches])
-        for batch in batch_results:
-            for idx, draft in batch:
-                if 0 <= idx < len(new_pack.schedule):
-                    new_pack.schedule[idx].body_draft = draft
+    # v0.62 ：iterate no longer pre-generates body drafts. Same rationale as
+    # pipeline.expand — Composer writes per-slot with critic + refiner. Saves
+    # ~$0.30 + 2-3 min per iteration and keeps quality higher (single-slot
+    # focus vs batched).
 
     # Persist.
     iteration_n = int(row["iteration_n"] or 1) + 1
