@@ -529,7 +529,7 @@ function ComposeResult({bundle}: {bundle: ComposeBundle}) {
         <div className="card" id="composer-step-3">
           <h2>📝 {bundle.drafts.length} 份候选 (起草团 + 审稿团)</h2>
           <p className="muted" style={{fontSize: 12, marginTop: -4, marginBottom: 8}}>
-            默认 AI 自动选 critic 分最高的那条作为 final（★）— 不满意点 「★ 选这条」直接覆盖。
+            默认 AI 自动选 critic 分最高的那条作为 final（★）— 不满意**点别的卡片就能换**（整张卡可点）。
           </p>
           <div className="candidate-grid">
             {bundle.drafts.map(c => (
@@ -644,7 +644,8 @@ function Candidate({c, highlighted, chosen, onChoose}: {
   c: DraftCandidate;
   highlighted?: boolean;
   /** v0.61.19 ：是否当前 final（替代之前的「Synthesizer 融合」）。chosen=true
-   *  的卡用 primary 边框 + 「★ 已选为 final」徽章；其它卡显示「★ 选这条」按钮。 */
+   *  的卡用 primary 边框 + 「★ 已选为 final」徽章。
+   *  v0.61.20 ：onChoose 时整张卡可点 — 不再需要单独点小按钮。 */
   chosen?: boolean;
   onChoose?: () => void;
 }) {
@@ -661,8 +662,21 @@ function Candidate({c, highlighted, chosen, onChoose}: {
   const tok = c.token_usage ?? {};
   const scores = c.critiques?.[0]?.scores ?? {};
   const cAngle = (p as any).angle as string | undefined;
+  const clickable = !!onChoose && !chosen;
+  // 整张卡可点 ：onClick + cursor + hover。chosen 的卡不响应点击（避免重复
+  // 触发 API），但点别的卡仍能切换 chosen。
   return (
-    <div className={`cand ${highlighted || chosen ? "final" : ""}`}>
+    <div
+      className={`cand ${(chosen || highlighted) ? "final" : ""} ${clickable ? "cand-clickable" : ""}`}
+      onClick={clickable ? () => onChoose!() : undefined}
+      role={clickable ? "button" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onKeyDown={clickable ? (e => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onChoose!(); }
+      }) : undefined}
+      title={clickable ? "点击这条卡 = 选为 final（覆盖当前选择）" : undefined}
+      style={clickable ? { cursor: "pointer" } : undefined}
+    >
       <div className="row" style={{justifyContent: "space-between", alignItems: "flex-start", gap: 8}}>
         <div className="llm" style={{flex: 1, minWidth: 0}}>
           {c.llm}
@@ -680,17 +694,13 @@ function Candidate({c, highlighted, chosen, onChoose}: {
             }}>★ 已选为 final</span>
           )}
         </div>
-        {onChoose && !chosen && (
-          <button onClick={onChoose}
-            title="把这条标为 final — 后续 Refiner 在这条上做最终润色，Drafts 历史也记这条"
-            style={{
-              padding: "4px 10px", fontSize: 12, fontWeight: 600,
-              background: "#fff", color: "var(--primary)",
-              border: "1px solid var(--primary)", borderRadius: 6,
-              cursor: "pointer", flexShrink: 0,
-            }}>
-            ★ 选这条
-          </button>
+        {clickable && (
+          <span style={{
+            padding: "3px 10px", fontSize: 11.5, fontWeight: 600,
+            background: "var(--primary-soft)", color: "var(--primary)",
+            border: "1px dashed var(--primary)", borderRadius: 6,
+            flexShrink: 0, whiteSpace: "nowrap",
+          }}>★ 点这卡选这条</span>
         )}
       </div>
       <div className="muted" style={{fontSize: 11}}>
