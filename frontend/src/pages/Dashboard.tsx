@@ -76,8 +76,10 @@ export default function Dashboard() {
         <div className="card">
           <h2>最新 DNA · v{dna.version}</h2>
           <p className="muted">
-            {dna.summary.total_notes_analysed} 条 notes · 生成耗时 {dna.summary.generated_in_seconds}s ·
-            主导 hook：{dna.summary.dominant_hooks.map(h => h.category).join(" · ")}
+            {dna.summary?.total_notes_analysed ?? "?"} 条 notes · 生成耗时 {dna.summary?.generated_in_seconds ?? "?"}s
+            {Array.isArray(dna.summary?.dominant_hooks) && dna.summary.dominant_hooks.length > 0 && (
+              <> · 主导 hook：{dna.summary.dominant_hooks.map(h => h.category).join(" · ")}</>
+            )}
           </p>
           <Link to="/analysis">查看完整 DNA →</Link>
         </div>

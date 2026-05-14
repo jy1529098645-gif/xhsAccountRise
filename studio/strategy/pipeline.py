@@ -364,15 +364,33 @@ async def _expand_inner(
         + "\n\n请按 system 提示，融合 + 去重 + 排成完整周历。"
     )
     scheduler_gen = registry.build(scheduler_spec)[0]
-    try:
-        # Scheduler only outputs structure (titles/outlines/materials/timing).
-        # Body drafts are written by a separate parallel pool below — asking
-        # one LLM call to do N body drafts ballooned past 16k tokens and
-        # silently returned empty schedules (see v0.29 bug report).
-        sched_parsed = await _call_json(
-            scheduler_gen, prompts.SCHEDULER_SYSTEM, sched_user,
-            max_tokens=6000, tool_name="submit_schedule", schema=_SCHEDULE_SCHEMA,
+    async def _try_scheduler(user_payload: str, max_tokens: int = 6000):
+        return await _call_json(
+            scheduler_gen, prompts.SCHEDULER_SYSTEM, user_payload,
+            max_tokens=max_tokens, tool_name="submit_schedule",
+            schema=_SCHEDULE_SCHEMA,
         )
+
+    try:
+        # Scheduler only outputs structure. Body drafts come later from a
+        # parallel pool — see v0.29 / v0.30 commits for why we split this.
+        sched_parsed = await _try_scheduler(sched_user)
+        # Sonnet sometimes returns {"schedule": []} when its tool_use call
+        # hits truncation or a content-quirk. Retry once with a shorter
+        # prompt (drop the topic candidates pool, keep direction + count).
+        if not (sched_parsed.get("schedule") or []):
+            short_user = (
+                f"【已选定方向】{chosen.name} — {chosen.positioning_statement}\n"
+                f"【受众】{chosen.target_audience}\n"
+                f"【运营】{inp.cycle_weeks} 周 × {inp.posts_per_week} 篇/周 = 共 {topic_count} 篇\n\n"
+                f"请直接基于这个方向 + 周期编排出 {topic_count} 篇排期。"
+                f" 不需要再读候选选题池 — 自己写 {topic_count} 个差异化标题就行。"
+                f" 严格按 system schema 输出 schedule（长度 = {topic_count}）+ weekly_themes。"
+            )
+            try:
+                sched_parsed = await _try_scheduler(short_user, max_tokens=8000)
+            except Exception as e:
+                sched_parsed["_error"] = f"retry failed: {e!r}"
     except Exception as e:
         sched_parsed = {"_error": str(e)}
 
@@ -503,13 +521,35 @@ async def _expand_inner(
     except Exception as e:
         res_parsed = {"_error": str(e)}
 
+    # Defensive coercion. Sonnet's tool_use occasionally returns these
+    # list fields as a single JSON-encoded string (e.g. '["a","b"]'). If we
+    # iterate that, each character ends up as its own list item, and the
+    # frontend renders one Chinese character per <li> — see user bug
+    # report. Detect string and json.loads / fall back to single-item list.
+    def _coerce_list(value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(x) for x in value]
+        if isinstance(value, str):
+            s = value.strip()
+            if s.startswith("[") and s.endswith("]"):
+                try:
+                    parsed = json.loads(s)
+                    if isinstance(parsed, list):
+                        return [str(x) for x in parsed]
+                except json.JSONDecodeError:
+                    pass
+            # Last resort: split on newlines, ignore empties.
+            lines = [ln.strip(" •·-—") for ln in s.split("\n") if ln.strip()]
+            return lines or [s]
+        return []
+
     pack = StrategyPack.new(library_id=lib_id, platform=platform, input=inp, chosen=chosen)
     pack.series_thesis = str(sched_parsed.get("series_thesis", ""))
     pack.weekly_themes = weekly_themes
     pack.schedule = schedule
-    pack.materials_checklist = [str(x) for x in (res_parsed.get("materials_checklist") or [])]
-    pack.risks_and_mitigations = [str(x) for x in (res_parsed.get("risks_and_mitigations") or [])]
-    pack.success_metrics = [str(x) for x in (res_parsed.get("success_metrics") or [])]
+    pack.materials_checklist = _coerce_list(res_parsed.get("materials_checklist"))
+    pack.risks_and_mitigations = _coerce_list(res_parsed.get("risks_and_mitigations"))
+    pack.success_metrics = _coerce_list(res_parsed.get("success_metrics"))
 
     elapsed_total = int(time.time() - t0)
     now = int(time.time())

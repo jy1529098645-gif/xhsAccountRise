@@ -804,7 +804,27 @@ function DirectionsList({directions, chosenIdx, onPick, onReset}: {
 }
 
 function PackView({pack, onReset}: {pack: StrategyPackDTO; onReset: () => void}) {
-  const totalSlots = pack.schedule.length;
+  // Defensive: a legacy pack from before the resourcer-output coercion fix
+  // can have risks_and_mitigations or success_metrics stored as a single
+  // JSON-encoded string. .map on a string throws and would blank the
+  // page (or hit ErrorBoundary). Coerce here too.
+  function toArr(x: any): string[] {
+    if (Array.isArray(x)) return x.map(String);
+    if (typeof x === "string") {
+      const s = x.trim();
+      if (s.startsWith("[") && s.endsWith("]")) {
+        try { const j = JSON.parse(s); if (Array.isArray(j)) return j.map(String); } catch { /* fall through */ }
+      }
+      return s.split("\n").map(l => l.trim()).filter(Boolean);
+    }
+    return [];
+  }
+  const schedule = Array.isArray(pack.schedule) ? pack.schedule : [];
+  const materials = toArr(pack.materials_checklist);
+  const risks = toArr(pack.risks_and_mitigations);
+  const metrics = toArr(pack.success_metrics);
+  const themes = Array.isArray(pack.weekly_themes) ? pack.weekly_themes : [];
+  const totalSlots = schedule.length;
   const navigate = useNavigate();
 
   function goCompose(slot: any, _runImmediately: boolean) {
@@ -865,11 +885,11 @@ function PackView({pack, onReset}: {pack: StrategyPackDTO; onReset: () => void})
         )}
       </div>
 
-      {pack.weekly_themes.length > 0 && (
+      {themes.length > 0 && (
         <div className="card">
           <h2>📅 周主题</h2>
           <div className="cards-grid">
-            {pack.weekly_themes.map((w, i) => (
+            {themes.map((w, i) => (
               <div key={i} className="stat-card" style={{
                 background: INTENT_COLORS[w.intent] ?? undefined,
               }}>
@@ -892,35 +912,42 @@ function PackView({pack, onReset}: {pack: StrategyPackDTO; onReset: () => void})
           </div>
         </div>
         <div style={{display: "grid", gap: 12}}>
-          {pack.schedule.map((s, i) => (
+          {schedule.map((s, i) => (
             <SlotCard key={i} slot={s} idx={i} onCompose={goCompose} />
           ))}
+          {schedule.length === 0 && (
+            <div className="muted" style={{padding: 16, background: "#fafafa",
+                                            borderRadius: 8, fontSize: 13}}>
+              ⚠️ 这次 AI 没有排出任何 slot（可能是 Sonnet 一次性输出超长被截）。
+              点上面「新建策略」重新跑一次，或者去 设置 切到 claude:opus 重试。
+            </div>
+          )}
         </div>
       </div>
 
-      {pack.materials_checklist.length > 0 && (
+      {materials.length > 0 && (
         <div className="card">
           <h2>🎒 启动前要准备的材料</h2>
           <ul style={{marginLeft: 20, lineHeight: 1.9}}>
-            {pack.materials_checklist.map((m, i) => <li key={i}>{m}</li>)}
+            {materials.map((m, i) => <li key={i}>{m}</li>)}
           </ul>
         </div>
       )}
 
-      {pack.risks_and_mitigations.length > 0 && (
+      {risks.length > 0 && (
         <div className="card">
           <h2>⚠️ 风险 + 应对</h2>
           <ol style={{marginLeft: 20, lineHeight: 1.9}}>
-            {pack.risks_and_mitigations.map((r, i) => <li key={i}>{r}</li>)}
+            {risks.map((r, i) => <li key={i}>{r}</li>)}
           </ol>
         </div>
       )}
 
-      {pack.success_metrics.length > 0 && (
+      {metrics.length > 0 && (
         <div className="card">
           <h2>📈 成功指标</h2>
           <ul style={{marginLeft: 20, lineHeight: 1.9}}>
-            {pack.success_metrics.map((m, i) => <li key={i}>{m}</li>)}
+            {metrics.map((m, i) => <li key={i}>{m}</li>)}
           </ul>
         </div>
       )}
