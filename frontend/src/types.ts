@@ -297,6 +297,9 @@ export interface AccountInputDTO {
    *  "cold" = 0 粉 / 陌生人，主走人设痛点；"warm" = 已有粉丝/行业资源，可强转化；
    *  "hybrid" = 前期人设 + 后期转化的中间态。 */
   startup_phase?: string;
+  /** v0.61.13: 内容形式偏好。"" / "auto" = AI 按 DNA 自决；
+   *  "tuwen_only" = 全部图文；"video_only" = 全部短视频；"mixed" = 强制图文+视频混合。 */
+  content_format_preference?: string;
 }
 
 /** v0.59: 8 大起号目标分类，前端 GoalPicker 渲染用。 */

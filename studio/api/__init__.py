@@ -1064,6 +1064,9 @@ class StrategyInput(BaseModel):
     # v0.61.5: 启动阶段倾向 — "" / "auto" = AI 自决；"cold" = 0 粉冷启动；
     # "warm" = 已有粉丝/资源热启动；"hybrid" = 混合渐进。
     startup_phase: str = ""
+    # v0.61.13: 内容形式偏好 — "" / "auto" = AI 按 DNA 自决；"tuwen_only" =
+    # 全部图文；"video_only" = 全部短视频；"mixed" = 强制图文 + 视频混合。
+    content_format_preference: str = ""
     positioner_spec: str = "openai:gpt-4o"
 
 
@@ -1139,6 +1142,7 @@ async def strategy_propose(req: StrategyInput) -> dict[str, Any]:
         cycle_start_date=req.cycle_start_date,
         goal_type=req.goal_type,
         startup_phase=req.startup_phase,
+        content_format_preference=req.content_format_preference,
     )
     try:
         result = await strategy_pipeline.propose(inp, positioner_spec=req.positioner_spec)
@@ -1170,6 +1174,7 @@ async def strategy_propose_stream(req: StrategyInput):
         cycle_start_date=req.cycle_start_date,
         goal_type=req.goal_type,
         startup_phase=req.startup_phase,
+        content_format_preference=req.content_format_preference,
     )
     return StreamingResponse(
         strategy_pipeline.propose_stream(inp, positioner_spec=req.positioner_spec),

@@ -45,6 +45,11 @@ class AccountInput:
     # "hybrid" = 中间态，前期人设后期转化。注入到 SCHEDULER prompt，
     # 但仍是软建议（AI 可据其它信号微调）。
     startup_phase: str = ""
+    # v0.61.13 ：内容形式偏好。"" / "auto" = AI 按 DNA 真实分布自决（默认）；
+    # "tuwen_only" = 全部图文；"video_only" = 全部短视频；
+    # "mixed" = 强制图文 + 视频混合，AI 定比例。注入 SCHEDULER + BODY_DRAFTER
+    # prompt 作硬约束（用户明示要求时不再让 AI 推翻）。
+    content_format_preference: str = ""
 
 
 @dataclass

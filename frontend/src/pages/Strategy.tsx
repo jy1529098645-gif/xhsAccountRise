@@ -915,6 +915,36 @@ function InputForm(props: {
         </div>
       </div>
 
+      {/* v0.61.13 内容形式偏好 — 图文 / 短视频 / 混合 / AI 自决。硬约束。 */}
+      <div style={{marginTop: 6, marginBottom: 12}}>
+        <label style={{fontSize: 12.5, marginBottom: 4}}>内容形式</label>
+        <div className="row" style={{gap: 6, flexWrap: "wrap"}}>
+          {[
+            {k: "", label: "🤖 AI 自决", hint: "按 DNA 真实分布决定每篇格式（默认）"},
+            {k: "tuwen_only", label: "📝 纯图文", hint: "所有 slot 都是图文（不出视频脚本）"},
+            {k: "video_only", label: "🎬 纯短视频", hint: "所有 slot 都是短视频分镜脚本"},
+            {k: "mixed", label: "🔀 混合", hint: "图文 + 视频都要，比例 AI 自定（至少 30% / 30%）"},
+          ].map(opt => {
+            const sel = (i.content_format_preference || "") === opt.k;
+            return (
+              <button key={opt.k} type="button"
+                onClick={() => set("content_format_preference", opt.k)}
+                title={opt.hint}
+                style={{
+                  flex: 1, minWidth: 130,
+                  padding: "6px 10px", fontSize: 12.5,
+                  background: sel ? "var(--primary)" : "#fff",
+                  color: sel ? "#fff" : "var(--fg)",
+                  border: sel ? "1px solid var(--primary)" : "1px solid var(--border)",
+                  borderRadius: 6, cursor: "pointer", fontWeight: sel ? 600 : 400,
+                }}>
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       <p className="muted" style={{fontSize: 12, margin: "4px 0 12px"}}>
         字段都可直接填 · AI 帮拟只是给你起点。
       </p>

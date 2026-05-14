@@ -817,6 +817,35 @@ async def _expand_inner(
         )
     # sp == "" / "auto" → AI 自己据 DNA / 报告决定（无额外 prompt）
 
+    # v0.61.13 ：用户对内容形式（图文 / 短视频 / 混合）的硬偏好。
+    # 跟 startup_phase 不同 ：这一项是用户对 content_format 字段的明确约束，
+    # 不是软建议 — 用户选了「纯图文」就别给视频 slot。
+    cfp = (getattr(inp, "content_format_preference", "") or "").lower()
+    cfp_section = ""
+    if cfp == "tuwen_only":
+        cfp_section = (
+            "\n\n【📝 用户硬约束 ：全部图文】\n"
+            "  · schedule 里每个 slot 的 content_format 都必须填「图文」\n"
+            "  · 即使 DNA 显示短视频高赞，也不要排短视频/长视频/直播\n"
+            "  · BODY_DRAFTER 也只会按图文格式写正文（不会出现脚本/分镜）\n"
+        )
+    elif cfp == "video_only":
+        cfp_section = (
+            "\n\n【🎬 用户硬约束 ：全部短视频】\n"
+            "  · schedule 里每个 slot 的 content_format 都必须填「短视频」\n"
+            "  · 即使 DNA 显示图文高赞，也不排图文 — 用户明确要短视频\n"
+            "  · BODY_DRAFTER 会写分镜脚本（不是图文文章）\n"
+        )
+    elif cfp == "mixed":
+        cfp_section = (
+            "\n\n【🔀 用户硬约束 ：图文 + 短视频混合】\n"
+            "  · schedule 里必须**同时**有图文和短视频 slot（不能全部一种）\n"
+            "  · 具体比例据 DNA + 选题类型自决 ：教程 / 测评偏图文，\n"
+            "    剧情 / 故事 / 段子偏短视频，干货长文留图文\n"
+            "  · 至少 30% 一种 + 至少 30% 另一种作平衡\n"
+        )
+    # cfp == "" / "auto" → AI 按 DNA content_format 真实分布自决（无额外 prompt）
+
     # v0.58 phase rules — 4 阶段硬性约束（之前只是软建议，导致 4 周内容看不出差异化）。
     # 按 cycle_weeks 切分阶段并把规则塞进 prompt。
     cw = inp.cycle_weeks
@@ -860,6 +889,7 @@ async def _expand_inner(
         f"{chosen_block}"
         f"{goal_section}"
         f"{startup_section}"
+        f"{cfp_section}"
         f"{pctx_block}"
         f"{report_block}\n"
         f"【运营约束】cycle_weeks={inp.cycle_weeks}, posts_per_week={inp.posts_per_week}"
