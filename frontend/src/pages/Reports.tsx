@@ -562,12 +562,6 @@ export default function Reports() {
           </div>
         )}
 
-        {externals.length === 0 && !showUpload && uploadLog.length === 0 && (
-          <p className="muted" style={{margin: "12px 0 0", fontSize: 12.5}}>
-            还没上传任何外部报告。上方拖文件或点「＋ 打开粘贴框」开始。
-          </p>
-        )}
-
         {externals.length > 0 && (
           <>
             <h3 style={{margin: "18px 0 4px", fontSize: 14}}>
@@ -612,34 +606,51 @@ export default function Reports() {
                 ))}
               </tbody>
             </table>
-
-            <div style={{marginTop: 12, padding: 12, background: "var(--primary-soft)",
-                         borderRadius: 8, border: "1px solid var(--primary)"}}>
-              <div className="spread" style={{alignItems: "flex-start", gap: 10}}>
-                <div style={{flex: 1}}>
-                  <b>🪄 整合所选 {selectedSourceIds.size} 份 → 一份共识</b>
-                  <label style={{display: "inline-flex", alignItems: "center", gap: 6,
-                                  fontSize: 12, marginTop: 8, cursor: "pointer"}}>
-                    <input type="checkbox" checked={includeOwnConsensus}
-                      onChange={e => setIncludeOwnConsensus(e.target.checked)} />
-                    一起融合工具自出共识（如有）
-                  </label>
-                </div>
-                <div className="row" style={{gap: 6}}>
-                  <button onClick={runIntegrate}
-                    disabled={integrating || selectedSourceIds.size === 0 || offline}
-                    style={{minWidth: 160}}>
-                    {integrating ? "🤖 整合中…" : "🚀 整合所选"}
-                  </button>
-                  {integrating && (
-                    <button className="ghost" onClick={pauseIntegrate}
-                      style={{padding: "8px 14px", fontSize: 13}}>⏸ 暂停</button>
-                  )}
-                </div>
-              </div>
-            </div>
           </>
         )}
+
+        {/* v0.61.9 ：整合卡永远渲染（哪怕 externals 为空），给用户「这功能存在」
+            的可见 affordance。空状态按钮 disabled + 提示「先上传 1 份」。 */}
+        <div style={{
+          marginTop: 12, padding: 12,
+          background: externals.length > 0 ? "var(--primary-soft)" : "#fafafa",
+          borderRadius: 8,
+          border: externals.length > 0 ? "1px solid var(--primary)" : "1px dashed #ddd",
+          opacity: externals.length === 0 ? 0.85 : 1,
+        }}>
+          <div className="spread" style={{alignItems: "flex-start", gap: 10}}>
+            <div style={{flex: 1}}>
+              <b>🪄 整合所选 {selectedSourceIds.size} 份 → 一份共识报告</b>
+              <div className="muted" style={{fontSize: 11.5, marginTop: 4}}>
+                {externals.length === 0
+                  ? "上传 ≥ 2 份外部报告后，让 GPT-4o 跨报告找共识 + 分歧 → 生成统一稿。"
+                  : "跨报告找共识 + 分歧 → 一份统一稿，下游 Strategy / Composer 自动读最新整合稿。"}
+              </div>
+              {externals.length > 0 && (
+                <label style={{display: "inline-flex", alignItems: "center", gap: 6,
+                                fontSize: 12, marginTop: 8, cursor: "pointer"}}>
+                  <input type="checkbox" checked={includeOwnConsensus}
+                    onChange={e => setIncludeOwnConsensus(e.target.checked)} />
+                  一起融合工具自出共识（如有）
+                </label>
+              )}
+            </div>
+            <div className="row" style={{gap: 6}}>
+              <button onClick={runIntegrate}
+                disabled={integrating || selectedSourceIds.size === 0 || offline}
+                title={externals.length === 0 ? "先上传 ≥ 1 份外部报告" : ""}
+                style={{minWidth: 160}}>
+                {integrating ? "🤖 整合中…"
+                : externals.length === 0 ? "⏳ 等你上传报告"
+                : "🚀 整合所选"}
+              </button>
+              {integrating && (
+                <button className="ghost" onClick={pauseIntegrate}
+                  style={{padding: "8px 14px", fontSize: 13}}>⏸ 暂停</button>
+              )}
+            </div>
+          </div>
+        </div>
 
         {integrated.length > 0 && (
           <div style={{marginTop: 16}}>
