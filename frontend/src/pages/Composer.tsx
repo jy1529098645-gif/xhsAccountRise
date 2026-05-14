@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api";
-import { fmtLikes, roleName, slotDate, defaultCycleStartDate } from "../format";
+import { fmtLikes, roleName, slotDate, defaultCycleStartDate, topPublishingSlots } from "../format";
 import AgentConfigPanel, {
   AgentSelection, defaultSelection, selectionToSpecs,
 } from "../components/AgentConfigPanel";
 import ProgressTimeline, { Stage as TimelineStage } from "../components/ProgressTimeline";
 import NextStepCard from "../components/NextStepCard";
+import PlatformPill from "../components/PlatformPill";
 import { humaniseError, humaniseErrorAsync } from "../errors";
 import { isAborted } from "../api";
 import { startJob, getJob, cancelJob, useJob } from "../lib/jobs";
@@ -15,6 +16,15 @@ import type {
   ComposeBundle, DraftCandidate, Library, Platform,
   StrategyPackDTO, TopicSlotDTO,
 } from "../types";
+
+// v0.62.4 ：StrategyOverview / IterateCard / TopPublishingSlotsCard 从
+// Strategy.tsx 整体搬过来。Strategy 现在不再渲染 PackView，expand 完成
+// 后直接跳 /composer?pack=... — 所有 pack 概览 + 排期 + 迭代 UI 集中
+// 在 Composer 这一个板块里，跟「写正文」环节无缝衔接。
+const DIRECTION_COLORS = ["#2E5C8A", "#a36df0", "#10a37f", "#e0a800", "#c4429a", "#5BC0EB", "#FCB97D", "#7a6fc8"];
+const INTENT_COLORS: Record<string, string> = {
+  "拉新": "#fff5f5", "互动": "#fff8e6", "转化": "#fdecea", "沉淀": "#f0fafe",
+};
 
 const COMPOSE_STAGES: TimelineStage[] = [
   { label: "🤖 策略师定方向", durationSec: 25, sub: "选 hook 类型 / 开头钩子 / 结构 / 避坑" },
@@ -346,10 +356,15 @@ export default function Composer() {
         <p>填主题 → 点开始 → 多个 AI 协作出最佳稿件 + 发布计划</p>
       </div>
 
-      {/* v0.62 ：Strategy schedule 合并到 Composer。pack_id 在 URL 时显示。
-          从 Strategy 「→ 去出稿」 进来 = 看完整 30 篇 schedule + alt picker。 */}
+      {/* v0.62.4 ：Strategy 板块整体迁移到 Composer。pack 存在时顶部依次显示 ：
+          1) StrategyOverview — 方向/元信息/周主题/最佳时段/材料/风险/指标
+          2) SchedulePanel — 30 篇排期 + 主推荐 + 2 备选 picker
+          下面才是 4 步表单（主题→策略→候选→最终稿）+ IterateCard。 */}
       {strategyPack && (
-        <SchedulePanel pack={strategyPack} onChoose={handleSlotChosen} />
+        <>
+          <StrategyOverview pack={strategyPack} />
+          <SchedulePanel pack={strategyPack} onChoose={handleSlotChosen} />
+        </>
       )}
 
       {/* v0.61.18 ：4 步跳转条 — 点击滚动到对应 section */}
@@ -554,6 +569,10 @@ export default function Composer() {
           {bundle && <ComposeResult bundle={bundle} />}
         </div>
       </div>
+
+      {/* v0.62.4 ：IterateCard 从 Strategy 搬来 — 用户写完整轮 30 篇后可以
+          在这里填表现数据 → AI 出下一轮 pack（也直接进 Composer）。 */}
+      {strategyPack && <IterateCard pack={strategyPack} />}
     </div>
   );
 }
@@ -961,6 +980,351 @@ function SchedulePanel({pack, onChoose}: {
               </div>
             );
           })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// v0.62.4 ：StrategyOverview — 从 Strategy.tsx PackView 整体搬过来。
+// 在 Composer 顶部（SchedulePanel 上面）渲染 ：方向卡 + 元信息行（冷热
+// 启动 / 内容形式偏好 / 周期 / 频率 / 平台）+ 周主题 + 本号最佳时段 +
+// 材料 / 风险 / 指标。Strategy 不再渲染这些 — 全部集中到这里。
+function StrategyOverview({pack}: {pack: StrategyPackDTO}) {
+  function toArr(x: any): string[] {
+    if (Array.isArray(x)) return x.map(String);
+    if (typeof x === "string") {
+      const s = x.trim();
+      if (s.startsWith("[") && s.endsWith("]")) {
+        try { const j = JSON.parse(s); if (Array.isArray(j)) return j.map(String); } catch { /* fall through */ }
+      }
+      return s.split("\n").map(l => l.trim()).filter(Boolean);
+    }
+    return [];
+  }
+  const materials = toArr(pack.materials_checklist);
+  const risks = toArr(pack.risks_and_mitigations);
+  const metrics = toArr(pack.success_metrics);
+  const themes = Array.isArray(pack.weekly_themes) ? pack.weekly_themes : [];
+  return (
+    <>
+      <div className="card">
+        {(pack.chosen_directions && pack.chosen_directions.length > 1) ? (
+          <>
+            <h2 style={{marginTop: 0}}>方向 · {pack.chosen_directions.length} 个主题混排</h2>
+            <p className="muted" style={{fontSize: 12, margin: "4px 0 10px"}}>
+              多方向起号 — {pack.schedule.length} 篇 slot 跨这 {pack.chosen_directions.length} 个方向混排，
+              每周保留拉新/专业感/沉淀/转化 4 阶段意图。
+            </p>
+            <div style={{display: "grid", gap: 8}}>
+              {pack.chosen_directions.map((d, i) => (
+                <div key={i} style={{
+                  padding: "8px 12px", background: "#fafafa", borderRadius: 6,
+                  borderLeft: `3px solid ${DIRECTION_COLORS[i % DIRECTION_COLORS.length]}`,
+                  fontSize: 13,
+                }}>
+                  <span style={{
+                    display: "inline-block", marginRight: 8, fontSize: 11,
+                    padding: "1px 6px", borderRadius: 3,
+                    background: DIRECTION_COLORS[i % DIRECTION_COLORS.length], color: "#fff",
+                    fontWeight: 600,
+                  }}>方向 #{i + 1}</span>
+                  <b>{d.name}</b>
+                  <div className="muted" style={{fontSize: 12, marginTop: 2}}>
+                    {d.positioning_statement} · 受众：{d.target_audience}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+          <>
+            <h2 style={{marginTop: 0}}>方向 · {pack.chosen_direction.name}</h2>
+            <p style={{margin: "4px 0", fontSize: 14}}>{pack.chosen_direction.positioning_statement}</p>
+            <p className="muted" style={{fontSize: 12}}>受众：{pack.chosen_direction.target_audience}</p>
+          </>
+        )}
+        {pack.series_thesis && (
+          <p style={{fontStyle: "italic", color: "var(--muted)", fontSize: 13, marginTop: 8}}>
+            主线：{pack.series_thesis}
+          </p>
+        )}
+        {/* 策略元信息行 — 冷热启动 / 内容形式偏好 / 周期 / 频率 / 平台 */}
+        <div className="row" style={{
+          gap: 6, flexWrap: "wrap", marginTop: 10,
+          paddingTop: 8, borderTop: "1px dashed #eee",
+        }}>
+          {(() => {
+            const sp = pack.input.startup_phase || "";
+            const phaseMap: Record<string, {label: string; hint: string}> = {
+              "":       { label: "🤖 AI 自决节奏",       hint: "AI 据 DNA / 报告自己挑节奏" },
+              "cold":   { label: "🆕 冷启动",            hint: "0 粉 · 主营造人设痛点 · 后期才转化" },
+              "warm":   { label: "🔥 热启动",            hint: "已有粉丝/资源 · 早期就可强转化" },
+              "hybrid": { label: "🌗 混合启动",          hint: "前期人设 + 后期转化的渐进节奏" },
+            };
+            const fp = pack.input.content_format_preference || "";
+            const formatMap: Record<string, string> = {
+              "":            "🤖 内容形式 AI 自决",
+              "tuwen_only":  "📝 纯图文",
+              "video_only":  "🎬 纯短视频",
+              "mixed":       "🔀 图文+视频混合",
+            };
+            const ph = phaseMap[sp] || phaseMap[""];
+            return (
+              <>
+                <span className="tag-pill" title={ph.hint}
+                  style={{background: "#fff3e6", color: "#b34d00", fontWeight: 600}}>
+                  {ph.label}
+                </span>
+                <span className="tag-pill" style={{background: "#eef6ff", color: "#1e40af"}}>
+                  {formatMap[fp] || formatMap[""]}
+                </span>
+                <span className="tag-pill" style={{background: "#f4f4f4"}}>
+                  📅 {pack.input.cycle_weeks} 周
+                </span>
+                <span className="tag-pill" style={{background: "#f4f4f4"}}>
+                  📊 每周 {pack.input.posts_per_week} 篇
+                </span>
+                {pack.input.cycle_start_date && (
+                  <span className="tag-pill" style={{background: "#f4f4f4"}}>
+                    🗓️ 起 {pack.input.cycle_start_date}
+                  </span>
+                )}
+                <PlatformPill platform={pack.platform} />
+              </>
+            );
+          })()}
+        </div>
+      </div>
+
+      {themes.length > 0 && (
+        <div className="card">
+          <h2 style={{marginTop: 0}}>📅 周主题</h2>
+          <div className="cards-grid">
+            {themes.map((w, i) => (
+              <div key={i} className="stat-card" style={{
+                background: INTENT_COLORS[w.intent] ?? undefined,
+              }}>
+                <div className="label">第 {w.week} 周 · {w.intent}</div>
+                <div style={{fontSize: 14, fontWeight: 600, marginTop: 4}}>{w.theme}</div>
+                {w.notes && <div className="muted" style={{fontSize: 11, marginTop: 4}}>{w.notes}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <TopPublishingSlotsCard />
+
+      {materials.length > 0 && (
+        <div className="card">
+          <h2 style={{marginTop: 0}}>🎒 启动前要准备的材料</h2>
+          <ul style={{marginLeft: 20, lineHeight: 1.9}}>
+            {materials.map((m, i) => <li key={i}>{m}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {risks.length > 0 && (
+        <div className="card">
+          <h2 style={{marginTop: 0}}>⚠️ 风险 + 应对</h2>
+          <ol style={{marginLeft: 20, lineHeight: 1.9}}>
+            {risks.map((r, i) => <li key={i}>{r}</li>)}
+          </ol>
+        </div>
+      )}
+
+      {metrics.length > 0 && (
+        <div className="card">
+          <h2 style={{marginTop: 0}}>📈 成功指标</h2>
+          <ul style={{marginLeft: 20, lineHeight: 1.9}}>
+            {metrics.map((m, i) => <li key={i}>{m}</li>)}
+          </ul>
+        </div>
+      )}
+    </>
+  );
+}
+
+// 「本账号最佳发布时段 Top 5」总览卡 — 从 Strategy.tsx 整体搬过来。
+function TopPublishingSlotsCard() {
+  const [top, setTop] = useState<Array<{label: string; median_likes: number; count: number}>>([]);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      try {
+        const dna: any = await api.dnaLatest();
+        if (cancel) return;
+        const heatmap = (dna?.sections?.timing?.heatmap || []) as any[];
+        setTop(topPublishingSlots(heatmap, 5, 5));
+      } catch (e: any) {
+        if (!cancel) setErr(e.message || String(e));
+      }
+    })();
+    return () => { cancel = true; };
+  }, []);
+
+  if (err || top.length === 0) return null;  // 静默失败 — 没 DNA 就不显示
+  return (
+    <div className="card" style={{
+      background: "linear-gradient(180deg, #fff8e6 0%, #fff 100%)",
+      borderColor: "#fde2a3",
+    }}>
+      <h2 style={{marginTop: 0}}>📊 本账号最佳发布时段 Top 5</h2>
+      <p className="muted" style={{fontSize: 12, marginTop: 2, marginBottom: 12}}>
+        从你激活的语料库的 DNA 热力图里挑出来 — 这 5 个 (周几, 小时) 格子的中位点赞最高。
+        AI 排期会优先把内容塞进这些时段，但也会按「内容类型 vs 时段」做差异化。
+      </p>
+      <div style={{display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8}}>
+        {top.map((cell, i) => (
+          <div key={i} style={{
+            padding: 10, background: "#fff", borderRadius: 8,
+            border: "1px solid #f0d8a0", textAlign: "center",
+          }}>
+            <div style={{fontSize: 11, color: "#a67700", fontWeight: 600}}>
+              #{i + 1}
+            </div>
+            <div style={{fontSize: 14, fontWeight: 700, marginTop: 4}}>
+              {cell.label}
+            </div>
+            <div className="muted" style={{fontSize: 11, marginTop: 4}}>
+              中位赞 <b style={{color: "#333"}}>{Math.round(cell.median_likes)}</b>
+            </div>
+            <div className="muted" style={{fontSize: 10}}>
+              （n={cell.count}）
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// IterateCard — 从 Strategy.tsx 搬过来。让用户在 Composer 写完这一轮
+// 30 篇后填表现数据 → AI 出下一轮 pack（也直接进 Composer）。
+function IterateCard({pack}: {pack: StrategyPackDTO}) {
+  const navigate = useNavigate();
+  const [showForm, setShowForm] = useState(false);
+  const [rawNotes, setRawNotes] = useState("");
+  const [perSlot, setPerSlot] = useState<{[idx: number]: {likes?: string; comments?: string; saves?: string}}>({});
+  const [busy, setBusy] = useState(false);
+  const [iterating, setIterating] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+  const [history, setHistory] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (!pack?.pack_id) return;
+    api.listStrategyPerformance(pack.pack_id).then(setHistory).catch(() => {});
+  }, [pack?.pack_id]);
+
+  async function submit() {
+    setBusy(true); setErr(null); setInfo(null);
+    try {
+      const per_slot = Object.entries(perSlot)
+        .filter(([, v]) => v && (v.likes || v.comments || v.saves))
+        .map(([idx, v]) => ({
+          slot_idx: Number(idx),
+          likes: v.likes ? Number(v.likes) : undefined,
+          comments: v.comments ? Number(v.comments) : undefined,
+          saves: v.saves ? Number(v.saves) : undefined,
+        }));
+      const r = await api.saveStrategyPerformance(pack.pack_id, {
+        raw_notes: rawNotes, per_slot, overall: {},
+      });
+      setInfo(`✓ 数据已保存（${per_slot.length} 篇有数 / ${rawNotes ? "含" : "无"}文字复盘）`);
+      setHistory(prev => [r, ...prev]);
+      setIterating(true);
+      const out = await api.iterateStrategy(pack.pack_id, {
+        feedback_id: r.feedback_id, iterator_spec: "openai",
+      });
+      setInfo(`✓ 下一轮策略已生成（迭代 #${out.iteration_n}）。即将跳转…`);
+      setTimeout(() => navigate(`/composer?pack=${out.pack_id}`), 800);
+    } catch (e: any) {
+      setErr(humaniseError(e));
+      setIterating(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card" style={{borderTop: "3px solid var(--primary)"}}>
+      <div className="spread" style={{alignItems: "flex-start"}}>
+        <div>
+          <h2 style={{margin: 0}}>🔄 跑完这一轮？让 AI 看效果 + 出下一轮</h2>
+          <p className="muted" style={{fontSize: 12, margin: "4px 0 0"}}>
+            发完这 {pack.schedule.length} 篇后回来填真实表现 → AI 会分析哪些 hook / 角度真的爆了，下一轮加大投入、砍掉翻车点。
+          </p>
+        </div>
+        {!showForm && (
+          <button onClick={() => setShowForm(true)}>📊 我跑完了 / 上传表现</button>
+        )}
+      </div>
+
+      {history.length > 0 && (
+        <div className="muted" style={{fontSize: 12, marginTop: 6}}>
+          上次反馈 ：{new Date(history[0].created_at * 1000).toLocaleString()} ·
+          逐篇 {history[0].per_slot?.length ?? 0} 篇有数
+        </div>
+      )}
+
+      {showForm && (
+        <div style={{marginTop: 14, padding: 12, background: "#fafafa", borderRadius: 8}}>
+          <label style={{marginBottom: 4}}>📝 文字复盘（什么爆了 / 什么翻了 / 评论里看到什么 — 越具体越好）</label>
+          <textarea value={rawNotes} onChange={e => setRawNotes(e.target.value)}
+            placeholder="比如：第 2 篇 hook '4小时跑通'爆了, 2800 赞；第 5 篇标题太长没人点；评论里反复问'文科版的prompt模板'，下一轮要专门做。"
+            style={{minHeight: 100, width: "100%", fontFamily: "inherit", fontSize: 13, lineHeight: 1.7,
+                    marginBottom: 12}} />
+
+          <label style={{marginBottom: 4}}>📊 逐篇数据（可只填几篇代表性的，不需要全填）</label>
+          <div style={{display: "grid", gap: 6, fontSize: 12}}>
+            <div style={{display: "grid", gridTemplateColumns: "1fr 90px 90px 90px",
+                         gap: 6, fontWeight: 600, color: "#555", padding: "2px 4px"}}>
+              <div>标题</div>
+              <div className="num">👍 点赞</div>
+              <div className="num">💬 评论</div>
+              <div className="num">⭐ 收藏</div>
+            </div>
+            {pack.schedule.slice(0, 30).map((s, i) => {
+              const v = perSlot[i] || {};
+              const set = (k: "likes"|"comments"|"saves", val: string) =>
+                setPerSlot(prev => ({...prev, [i]: {...prev[i], [k]: val}}));
+              return (
+                <div key={i} style={{display: "grid", gridTemplateColumns: "1fr 90px 90px 90px",
+                                      gap: 6, alignItems: "center", padding: "2px 4px"}}>
+                  <div className="muted" style={{fontSize: 11.5, whiteSpace: "nowrap",
+                                                  overflow: "hidden", textOverflow: "ellipsis"}}>
+                    W{s.week}·#{i+1} {s.title}
+                  </div>
+                  <input type="number" min="0" value={v.likes ?? ""}
+                    onChange={e => set("likes", e.target.value)}
+                    style={{padding: "3px 6px", fontSize: 12}} />
+                  <input type="number" min="0" value={v.comments ?? ""}
+                    onChange={e => set("comments", e.target.value)}
+                    style={{padding: "3px 6px", fontSize: 12}} />
+                  <input type="number" min="0" value={v.saves ?? ""}
+                    onChange={e => set("saves", e.target.value)}
+                    style={{padding: "3px 6px", fontSize: 12}} />
+                </div>
+              );
+            })}
+          </div>
+
+          {err && <div className="banner danger" style={{marginTop: 10}}>{err}</div>}
+          {info && <div className="banner info" style={{marginTop: 10}}>{info}</div>}
+
+          <div className="row" style={{gap: 8, marginTop: 12}}>
+            <button onClick={submit} disabled={busy || (!rawNotes.trim() && Object.keys(perSlot).length === 0)}>
+              {iterating ? "🤖 Claude 在分析上轮 + 出下轮策略（60-90s）…"
+              : busy ? "上传中…"
+              : "🚀 保存表现 + 一键出下一轮策略"}
+            </button>
+            <button className="ghost" onClick={() => setShowForm(false)} disabled={busy}>关闭</button>
+          </div>
         </div>
       )}
     </div>
