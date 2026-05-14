@@ -224,8 +224,9 @@ _RESOURCES_SCHEMA = {
 async def expand(
     pack_id: str,
     chosen_idx: int,
-    # Topic generation: keep one Opus (best variety) + 2 cheap fast models.
-    topicgen_spec: str = "claude:sonnet,deepseek,openai",
+    # Topic generation: dropped DeepSeek by default — it was 30-80s slow and
+    # blocked the pool's gather(). Sonnet + OpenAI is plenty for variety.
+    topicgen_spec: str = "claude:sonnet,openai",
     # Scheduler is mechanical (merge + arrange); Sonnet is plenty.
     scheduler_spec: str = "claude:sonnet",
     # Resourcer aggregates lists; Sonnet handles it.
@@ -579,32 +580,10 @@ async def _expand_inner(
             await asyncio.sleep(2 + slot_idx * 0.4)
         return slot_idx, "", last_err
 
-    drafter_errors: list[str] = []
-    # Resume: skip body-drafter pool if already done; merge cached body_drafts
-    # back into the in-memory schedule.
-    if "drafter" in saved and isinstance(saved["drafter"], list):
-        cached = {item.get("idx"): item for item in saved["drafter"] if isinstance(item, dict)}
-        for i, slot in enumerate(schedule):
-            entry = cached.get(i)
-            if entry and entry.get("body"):
-                slot.body_draft = entry["body"]
-            elif entry and entry.get("err"):
-                drafter_errors.append(f"slot #{i + 1} ({slot.title[:40]}): {entry['err']}")
-    elif schedule:
-        _check_cancel()
-        draft_results = await asyncio.gather(
-            *[_draft_one(i, s) for i, s in enumerate(schedule)]
-        )
-        for idx, draft, err in draft_results:
-            schedule[idx].body_draft = draft
-            if err:
-                drafter_errors.append(f"slot #{idx + 1} ({schedule[idx].title[:40]}): {err}")
-        _save_checkpoint("drafter", [
-            {"idx": idx, "body": d, "err": e} for idx, d, e in draft_results
-        ])
-        _check_cancel()
-
-    # --- Resourcer: consolidate ---
+    # --- Body-drafter pool + Resourcer in parallel ---
+    # Resourcer only reads titles/materials from the schedule, NOT body_drafts,
+    # so it can run concurrently with the body-drafter pool. This saves ~20s
+    # off expand total (resourcer is ~15-25s and used to block sequentially).
     schedule_summary = "\n".join(
         f"- W{slot.week} D{slot.day_of_week} {slot.publish_slot or ''} | "
         f"{slot.title} | 需要：{', '.join(slot.materials_needed)}"
@@ -616,18 +595,44 @@ async def _expand_inner(
         f"请按 system 输出 materials_checklist + risks_and_mitigations + success_metrics。"
     )
     resourcer_gen = registry.build(resourcer_spec)[0]
-    if "resourcer" in saved:
-        res_parsed = saved["resourcer"]
-    else:
+
+    async def _drafter_pool():
+        if "drafter" in saved and isinstance(saved["drafter"], list):
+            return [(item.get("idx"), item.get("body") or "", item.get("err"))
+                    for item in saved["drafter"] if isinstance(item, dict)]
+        if not schedule:
+            return []
+        results = await asyncio.gather(*[_draft_one(i, s) for i, s in enumerate(schedule)])
+        _save_checkpoint("drafter", [
+            {"idx": idx, "body": d, "err": e} for idx, d, e in results
+        ])
+        return results
+
+    async def _resourcer_call():
+        if "resourcer" in saved:
+            return saved["resourcer"]
         try:
-            _check_cancel()
-            res_parsed = await _call_json(
+            r = await _call_json(
                 resourcer_gen, prompts.RESOURCER_SYSTEM, res_user,
                 max_tokens=2048, tool_name="submit_resources", schema=_RESOURCES_SCHEMA,
             )
         except Exception as e:
-            res_parsed = {"_error": str(e)}
-        _save_checkpoint("resourcer", res_parsed)
+            r = {"_error": str(e)}
+        _save_checkpoint("resourcer", r)
+        return r
+
+    _check_cancel()
+    draft_results, res_parsed = await asyncio.gather(_drafter_pool(), _resourcer_call())
+    _check_cancel()
+
+    drafter_errors: list[str] = []
+    for idx, draft, err in draft_results:
+        if idx is None or idx >= len(schedule):
+            continue
+        if draft:
+            schedule[idx].body_draft = draft
+        if err:
+            drafter_errors.append(f"slot #{idx + 1} ({schedule[idx].title[:40]}): {err}")
 
     # Defensive coercion. Sonnet's tool_use occasionally returns these
     # list fields as a single JSON-encoded string (e.g. '["a","b"]'). If we

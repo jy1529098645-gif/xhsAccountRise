@@ -357,11 +357,27 @@ _CONSENSUS_SCHEMA = {
 # ---- Pipeline orchestrator ---------------------------------------------
 
 async def run(library_id: str, *,
-              claude_spec: str = "claude:opus",
+              # Default = Fast mode (Sonnet only, no critique step) ~60-80s.
+              # Pass mode='deep' for full Opus + critique pipeline ~200-250s.
+              mode: str = "fast",
+              claude_spec: str | None = None,
               openai_spec: str = "openai",
-              moderator_spec: str = "claude:opus") -> dict[str, Any]:
+              moderator_spec: str | None = None) -> dict[str, Any]:
     """End-to-end run. Persists into studio_insight_reports and returns the
-    full record."""
+    full record.
+
+    Modes:
+      fast (default)  Sonnet × 2 parallel → Sonnet moderator. No critique.
+                      ~60-80 s, ~70% cheaper. Plenty for first-run users.
+      deep            Opus × 2 parallel → Opus critiques → Opus moderator.
+                      ~200-250 s. Use when the consensus report itself is
+                      the deliverable (e.g. selling analysis to a client).
+    """
+    deep = (mode == "deep")
+    if claude_spec is None:
+        claude_spec = "claude:opus" if deep else "claude:sonnet"
+    if moderator_spec is None:
+        moderator_spec = "claude:opus" if deep else "claude:sonnet"
     db.apply_migrations(verbose=False)
     project.ensure_bootstrap()
 
@@ -430,27 +446,34 @@ async def run(library_id: str, *,
 
         claude_a, openai_a = await asyncio.gather(analyze(claude_gen), analyze(openai_gen))
 
-        # ---- Phase 2: cross-critique in parallel ----
-        async def critique(gen: Generator, other_output: dict[str, Any]) -> dict[str, Any]:
-            other_blob = json.dumps(other_output, ensure_ascii=False, indent=2)
-            user = (
-                f"【该平台爆款数据 (DNA)】\n{context}\n\n"
-                f"【对方 AI ({'OpenAI' if gen.name == 'claude' else 'Claude'}) 出的报告】\n{other_blob}\n\n"
-                "请按 system 给的 schema 输出你的赞成/反对/补充。"
-            )
-            try:
-                return await _call_json(
-                    gen, CRITIQUE_SYSTEM, user,
-                    max_tokens=3500,
-                    tool_name="submit_critique",
-                    schema=_CRITIQUE_SCHEMA,
+        # ---- Phase 2: cross-critique in parallel (DEEP MODE ONLY) ----
+        # The critique step was ~60 s and contributed mostly to "single_side_views"
+        # quality. In fast mode the moderator can derive the same single-side
+        # signal by comparing the two independent reports directly.
+        claude_crit: dict[str, Any] = {}
+        openai_crit: dict[str, Any] = {}
+        if deep:
+            async def critique(gen: Generator, other_output: dict[str, Any]) -> dict[str, Any]:
+                other_blob = json.dumps(other_output, ensure_ascii=False, indent=2)
+                user = (
+                    f"【该平台爆款数据 (DNA)】\n{context}\n\n"
+                    f"【对方 AI ({'OpenAI' if gen.name == 'claude' else 'Claude'}) 出的报告】\n{other_blob}\n\n"
+                    "请按 system 给的 schema 输出你的赞成/反对/补充。"
                 )
-            except Exception as e:
-                return {"_error": f"{gen.model}: {e!r}"}
+                try:
+                    return await _call_json(
+                        gen, CRITIQUE_SYSTEM, user,
+                        max_tokens=3500,
+                        tool_name="submit_critique",
+                        schema=_CRITIQUE_SCHEMA,
+                    )
+                except Exception as e:
+                    return {"_error": f"{gen.model}: {e!r}"}
 
-        claude_crit_task = critique(claude_gen, openai_a)
-        openai_crit_task = critique(openai_gen, claude_a)
-        claude_crit, openai_crit = await asyncio.gather(claude_crit_task, openai_crit_task)
+            claude_crit, openai_crit = await asyncio.gather(
+                critique(claude_gen, openai_a),
+                critique(openai_gen, claude_a),
+            )
 
         debate = {
             "claude_critique_of_openai": claude_crit,
@@ -459,13 +482,21 @@ async def run(library_id: str, *,
 
         # ---- Phase 3: moderator synthesis ----
         moderator_gen = registry.build(moderator_spec)[0]
-        moderator_user = (
-            f"【DNA 摘要】\n{context}\n\n"
-            f"【Claude 独立分析】\n{json.dumps(claude_a, ensure_ascii=False, indent=2)}\n\n"
-            f"【OpenAI 独立分析】\n{json.dumps(openai_a, ensure_ascii=False, indent=2)}\n\n"
-            f"【Claude 对 OpenAI 的赞成/反对/补充】\n{json.dumps(claude_crit, ensure_ascii=False, indent=2)}\n\n"
-            f"【OpenAI 对 Claude 的赞成/反对/补充】\n{json.dumps(openai_crit, ensure_ascii=False, indent=2)}\n\n"
-            "请按 system 给的 schema 输出共识报告。只把双方都认可的点放进 consensus_*，分歧放 single_side_views。"
+        mod_parts = [
+            f"【DNA 摘要】\n{context}",
+            f"【Claude 独立分析】\n{json.dumps(claude_a, ensure_ascii=False, indent=2)}",
+            f"【OpenAI 独立分析】\n{json.dumps(openai_a, ensure_ascii=False, indent=2)}",
+        ]
+        if deep:
+            mod_parts.append(f"【Claude 对 OpenAI 的赞成/反对/补充】\n{json.dumps(claude_crit, ensure_ascii=False, indent=2)}")
+            mod_parts.append(f"【OpenAI 对 Claude 的赞成/反对/补充】\n{json.dumps(openai_crit, ensure_ascii=False, indent=2)}")
+        else:
+            mod_parts.append(
+                "（fast 模式 ：没有 critique 步骤。请你直接对比上面两份独立分析，"
+                "把两家都提到的点放 consensus_*，只有一家提到的放 single_side_views。）"
+            )
+        moderator_user = "\n\n".join(mod_parts) + (
+            "\n\n请按 system 给的 schema 输出共识报告。只把双方都认可的点放进 consensus_*，分歧放 single_side_views。"
         )
         try:
             consensus = await _call_json(

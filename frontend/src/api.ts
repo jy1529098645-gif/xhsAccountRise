@@ -300,7 +300,8 @@ export const api = {
   },
 
   // Insight (Claude × OpenAI report) -----------
-  runInsight: (libraryId: string, opts?: { claude_spec?: string; openai_spec?: string; moderator_spec?: string }, signal?: AbortSignal) =>
+  // mode='fast' (default) Sonnet × 2, ~60-80 s. mode='deep' = Opus full pipeline, ~200-250 s.
+  runInsight: (libraryId: string, opts?: { mode?: "fast" | "deep"; claude_spec?: string; openai_spec?: string; moderator_spec?: string }, signal?: AbortSignal) =>
     postJson<InsightReportDTO>("/api/insight/run", { library_id: libraryId, ...opts }, signal),
   listInsights: (libraryId?: string) =>
     getJson<{ report_id: string; library_id: string; created_at: number; status: string; elapsed_s: number | null }[]>(
@@ -373,6 +374,7 @@ export const api = {
 
   // Strategy -----------------
   autofillStrategy: (opts?: { personal_hint?: string; constraints_hint?: string;
+                              deep?: boolean;
                               claude_spec?: string; openai_spec?: string;
                               moderator_spec?: string }, signal?: AbortSignal) =>
     postJson<{

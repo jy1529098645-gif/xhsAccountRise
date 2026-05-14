@@ -157,13 +157,24 @@ _CONSENSUS_SCHEMA = {
 async def autofill(
     personal_hint: str = "",
     constraints_hint: str = "",
-    # Autofill = quick first draft of the form. Sonnet for everything;
-    # the moderator is just merging two compact proposals.
+    # Single Sonnet call by default — was 3 LLM calls (dual-AI + moderator)
+    # which took 60-100 s just to fill 6 form fields. Sonnet handles it in
+    # 10-15 s with identical structure (the moderator step was over-engineered
+    # for what's effectively a templated form). 'deep' kwarg restores the
+    # old behaviour for users who want it.
+    spec: str = "claude:sonnet",
+    deep: bool = False,
+    # back-compat kwargs (deprecated; callers can still pass them but only
+    # the deep=True path uses them)
     claude_spec: str = "claude:sonnet",
     openai_spec: str = "openai",
     moderator_spec: str = "claude:sonnet",
 ) -> dict[str, Any]:
-    """Run the 2-LLM debate and return a starter AccountInput + rationale."""
+    """Quickly draft a starter AccountInput.
+
+    Default: 1 Sonnet call (~10-15 s).
+    deep=True: 2-LLM debate + moderator (~30-50 s) for higher confidence.
+    """
     db.apply_migrations(verbose=False)
     project.ensure_bootstrap()
 
@@ -172,7 +183,6 @@ async def autofill(
     platform = lib_meta.platform if lib_meta else "xiaohongshu"
 
     if not dna:
-        # Don't hard-fail — build an ad-hoc artifact so we always have *something*
         from .. import adapt as _adapt
         try:
             db_path = library.current_db_path()
@@ -187,11 +197,8 @@ async def autofill(
     t0 = time.time()
     dna_context = strat_prompts.dna_blurb(dna)
 
-    # Include the tool's own consensus AND any integrated (user-uploaded) report
-    # as 强参考 — both must be threaded so the user's outside intel matters.
     from ..insight.pipeline import full_reference_block_for_prompt
     report_ctx = full_reference_block_for_prompt()
-
     report_block = f"\n\n{report_ctx}\n" if report_ctx else ""
 
     user_msg = (
@@ -207,7 +214,60 @@ async def autofill(
            if report_ctx else "")
     )
 
-    # ---- Phase 1: parallel proposals ----
+    # ---- Fast path (default): single Sonnet call ----
+    if not deep:
+        gen = registry.build(spec)[0]
+        try:
+            proposal = await _call_json(
+                gen, _INDEPENDENT_SYSTEM, user_msg,
+                max_tokens=2500,
+                tool_name="submit_starter", schema=_PROPOSAL_SCHEMA,
+            )
+        except Exception as e:
+            raise RuntimeError(f"autofill 失败: {e!r}") from e
+
+        inp = {
+            "positioning": str(proposal.get("positioning", "")),
+            "target_audience": str(proposal.get("target_audience", "")),
+            "cycle_weeks": int(proposal.get("cycle_weeks") or 4),
+            "posts_per_week": int(proposal.get("posts_per_week") or 3),
+            "personal_strengths": personal_hint or "",
+            "constraints": constraints_hint or "",
+            "platform": platform,
+        }
+        # Build a lightweight field_rationale from the single proposal's
+        # rationale block so the UI's 💡 chips still light up.
+        rat = proposal.get("rationale") or {}
+        field_rat = {
+            "positioning": {
+                "source": "ai", "rationale": str(rat.get("positioning_why") or ""),
+                "alternatives": proposal.get("positioning_alts") or [],
+            },
+            "target_audience": {
+                "source": "ai", "rationale": str(rat.get("audience_why") or ""),
+                "alternatives": proposal.get("target_audience_alts") or [],
+            },
+            "cycle_weeks": {
+                "source": "ai", "rationale": str(rat.get("cycle_why") or ""),
+                "alternatives": proposal.get("cycle_alts") or [],
+            },
+            "posts_per_week": {
+                "source": "ai", "rationale": str(rat.get("frequency_why") or ""),
+                "alternatives": proposal.get("posts_alts") or [],
+            },
+        }
+        return {
+            "input": inp,
+            "field_rationale": field_rat,
+            "consensus_notes": [],
+            "single_side_views": [],
+            "claude_proposal": proposal,
+            "openai_proposal": None,
+            "elapsed_s": int(time.time() - t0),
+            "mode": "fast",
+        }
+
+    # ---- Deep path: 2-LLM debate + moderator (original behaviour) ----
     claude_gen = registry.build(claude_spec)[0]
     openai_gen = registry.build(openai_spec)[0]
 
@@ -223,13 +283,11 @@ async def autofill(
 
     claude_p, openai_p = await asyncio.gather(propose(claude_gen), propose(openai_gen))
 
-    # If either failed, fall back to the surviving one alone.
     if "_error" in claude_p and "_error" in openai_p:
         raise RuntimeError(
             f"both proposers failed.\nClaude: {claude_p['_error']}\nOpenAI: {openai_p['_error']}"
         )
 
-    # ---- Phase 2: moderator ----
     mod_gen = registry.build(moderator_spec)[0]
     mod_user = (
         f"【该平台爆款 DNA 摘要】\n{dna_context}\n\n"
@@ -245,7 +303,6 @@ async def autofill(
             tool_name="submit_consensus_starter", schema=_CONSENSUS_SCHEMA,
         )
     except Exception as e:
-        # Last-resort fallback: pick whichever proposer succeeded.
         winner = claude_p if "_error" not in claude_p else openai_p
         consensus = {
             "input": {
@@ -262,15 +319,12 @@ async def autofill(
             "single_side_views": [],
         }
 
-    # Ensure platform is set + carry user hints into input
     inp = consensus.setdefault("input", {})
     inp.setdefault("platform", platform)
     if personal_hint and not inp.get("personal_strengths"):
         inp["personal_strengths"] = personal_hint
     if constraints_hint and not inp.get("constraints"):
         inp["constraints"] = constraints_hint
-
-    # Coerce numeric types (Claude may return as strings sometimes).
     try: inp["cycle_weeks"] = int(inp.get("cycle_weeks") or 4)
     except (TypeError, ValueError): inp["cycle_weeks"] = 4
     try: inp["posts_per_week"] = int(inp.get("posts_per_week") or 3)
@@ -284,4 +338,5 @@ async def autofill(
         "claude_proposal": claude_p,
         "openai_proposal": openai_p,
         "elapsed_s": int(time.time() - t0),
+        "mode": "deep",
     }

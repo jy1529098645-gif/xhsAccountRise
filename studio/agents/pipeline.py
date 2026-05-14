@@ -45,9 +45,9 @@ class PipelineConfig:
     # LLM tiers — Opus reserved ONLY for the final consumer-facing fusion.
     # Everything else is fast-mid (Sonnet / cheaper). Pre-rebalance the
     # average compose call burned ~6× Opus calls; now it's 1.
-    strategist_spec: str = "claude:sonnet"               # strategic planning, Sonnet is plenty
-    drafter_spec: str = "claude:sonnet,deepseek,openai"  # creative bulk
-    critic_spec: str = "claude:sonnet,deepseek"          # scoring + critique
+    strategist_spec: str = "claude:sonnet"               # strategic planning
+    drafter_spec: str = "claude:sonnet,openai"           # 2 fast LLMs; DeepSeek dropped for speed
+    critic_spec: str = "claude:sonnet"                   # scoring; one fast model is enough
     refiner_spec: str = "claude:sonnet"                  # rewrite on feedback
     synthesizer_spec: str = "claude:opus"                # FINAL user-facing fusion — keep Opus
     planner_spec: str = "claude:sonnet"                  # publish schedule, mechanical

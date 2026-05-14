@@ -169,26 +169,13 @@ export default function Strategy() {
     } catch { /* ignore quota etc. */ }
   }, [input, phase]);
 
-  // Load library list + history on mount; trigger autofill only on first-time
-  // use (no existing history, no in-progress draft, no specific pack in URL).
+  // Load library list + history on mount. No more auto-firing autofill —
+  // it was blocking users 60-100s on first entry without consent. Now there's
+  // an explicit "✨ AI 帮拟初稿" button on the form for users who want it.
   useEffect(() => {
     api.libraries().then(ls => setActiveLib(ls.find(l => l.active) ?? null)).catch(() => {});
     api.platforms().then(setPlatforms).catch(() => {});
-    api.listStrategies().then(hs => {
-      setHistory(hs);
-      if (urlPackId) return;  // The other effect will load it
-      let hasDraft = false;
-      try {
-        const cached = localStorage.getItem(DRAFT_KEY);
-        if (cached) {
-          const d = JSON.parse(cached);
-          hasDraft = !!(d.positioning?.trim() || d.target_audience?.trim());
-        }
-      } catch { /* ignore */ }
-      if (api.isConnected() && !hasDraft && hs.length === 0) {
-        runAutofill();
-      }
-    }).catch(() => {});
+    api.listStrategies().then(setHistory).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -236,16 +223,14 @@ export default function Strategy() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlPackId]);
 
-  async function runAutofill(extraHints?: { personal?: string; constraints?: string }) {
+  async function runAutofill(extraHints?: { personal?: string; constraints?: string; deep?: boolean }) {
     setPhase("autofilling"); setAutofillErr(null); setInfo(null);
     abortRef.current = new AbortController();
     try {
       const r = await api.autofillStrategy({
         personal_hint: extraHints?.personal ?? input.personal_strengths ?? "",
         constraints_hint: extraHints?.constraints ?? input.constraints ?? "",
-        claude_spec: "claude:sonnet",
-        openai_spec: "openai",
-        moderator_spec: "claude:sonnet",
+        deep: !!extraHints?.deep,
       }, abortRef.current.signal);
       setAutofill(r);
       setInput({
@@ -530,6 +515,8 @@ export default function Strategy() {
             schedulerSpec={schedulerSpec} setSchedulerSpec={setSchedulerSpec}
             resourcerSpec={resourcerSpec} setResourcerSpec={setResourcerSpec}
             onSubmit={submitInput}
+            onRequestAutofill={() => runAutofill()}
+            hasAutofillResult={!!autofill}
             fieldRationale={autofill?.field_rationale ?? {}}
             consensusNotes={autofill?.consensus_notes ?? []}
             singleSideViews={autofill?.single_side_views ?? []}
@@ -605,6 +592,8 @@ function InputForm(props: {
   resourcerSpec: string;
   setResourcerSpec: (s: string) => void;
   onSubmit: () => void;
+  onRequestAutofill?: () => void;
+  hasAutofillResult?: boolean;
   fieldRationale: Record<string, FieldRationale>;
   consensusNotes: string[];
   singleSideViews: { side: string; field: string; point: string; note?: string }[];
@@ -616,7 +605,18 @@ function InputForm(props: {
   const hasAutofill = Object.keys(props.fieldRationale).length > 0;
   return (
     <div className="card">
-      <h2>{hasAutofill ? "1. 检查 / 编辑 AI 拟好的初稿" : "1. 你的账号想法"}</h2>
+      <div className="spread" style={{alignItems: "flex-start"}}>
+        <h2 style={{margin: 0}}>{hasAutofill ? "1. 检查 / 编辑 AI 拟好的初稿" : "1. 你的账号想法"}</h2>
+        {!hasAutofill && !props.hasAutofillResult && props.onRequestAutofill && (
+          <button className="ghost" onClick={props.onRequestAutofill}
+            style={{fontSize: 12, padding: "6px 12px"}}>
+            ✨ 不知道填啥？AI 帮拟一版（~15s）
+          </button>
+        )}
+      </div>
+      <p className="muted" style={{fontSize: 12, margin: "4px 0 12px"}}>
+        所有字段都可以直接填。AI 帮拟只是给你个起点 — 改一改再启动也行。
+      </p>
 
       <FieldWithRationale label="账号定位（一句话说清楚做什么）" required
         rationale={props.fieldRationale.positioning}

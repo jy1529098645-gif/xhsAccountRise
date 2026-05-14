@@ -586,8 +586,8 @@ class ComposeRequest(BaseModel):
     extra_constraints: str = ""
     platform: str | None = None  # auto-inherit from active library if None
     strategist_spec: str = "claude:sonnet"
-    drafter_spec: str = "claude:sonnet,deepseek,openai"
-    critic_spec: str = "claude:sonnet,deepseek"
+    drafter_spec: str = "claude:sonnet,openai"
+    critic_spec: str = "claude:sonnet"
     refiner_spec: str = "claude:sonnet"
     synthesizer_spec: str = "claude:opus"
     planner_spec: str = "claude:sonnet"
@@ -629,9 +629,10 @@ async def compose(req: ComposeRequest) -> dict[str, Any]:
 
 class InsightRequest(BaseModel):
     library_id: str
-    claude_spec: str = "claude:opus"
+    mode: str = "fast"  # "fast" (Sonnet × 2, no critique) | "deep" (Opus pipeline)
+    claude_spec: str | None = None
     openai_spec: str = "openai"
-    moderator_spec: str = "claude:opus"
+    moderator_spec: str | None = None
 
 
 @app.post("/api/insight/run")
@@ -639,6 +640,7 @@ async def insight_run(req: InsightRequest) -> dict[str, Any]:
     try:
         return await insight_pipeline.run(
             req.library_id,
+            mode=req.mode,
             claude_spec=req.claude_spec,
             openai_spec=req.openai_spec,
             moderator_spec=req.moderator_spec,
@@ -902,7 +904,7 @@ class StrategyInput(BaseModel):
 
 class StrategyExpandRequest(BaseModel):
     chosen_direction_idx: int = Field(ge=0)
-    topicgen_spec: str = "claude:sonnet,deepseek,openai"
+    topicgen_spec: str = "claude:sonnet,openai"
     scheduler_spec: str = "claude:sonnet"
     resourcer_spec: str = "claude:sonnet"
     drafter_spec: str = "claude:sonnet"
@@ -911,6 +913,7 @@ class StrategyExpandRequest(BaseModel):
 class StrategyAutofillRequest(BaseModel):
     personal_hint: str = ""
     constraints_hint: str = ""
+    deep: bool = False  # default = 1 Sonnet call (~15s); deep=true = dual-AI debate (~50s)
     claude_spec: str = "claude:sonnet"
     openai_spec: str = "openai"
     moderator_spec: str = "claude:sonnet"
@@ -929,6 +932,7 @@ async def strategy_autofill(req: StrategyAutofillRequest) -> dict[str, Any]:
         return await _af.autofill(
             personal_hint=req.personal_hint,
             constraints_hint=req.constraints_hint,
+            deep=req.deep,
             claude_spec=req.claude_spec,
             openai_spec=req.openai_spec,
             moderator_spec=req.moderator_spec,
