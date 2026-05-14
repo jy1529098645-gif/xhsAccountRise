@@ -6,7 +6,19 @@ import PlatformPill from "../components/PlatformPill";
 import { PLATFORM_GUIDES, GITHUB_REPO } from "../catalog";
 import type { Library, Platform } from "../types";
 
+// v0.54: also exported as `LibrariesSection` so Settings can embed the same
+// contents without re-implementing the manage UI. The default export keeps
+// working for the (deprecated) /libraries route which now redirects to
+// /settings#libraries.
+export function LibrariesSection() {
+  return <LibrariesImpl />;
+}
+
 export default function Libraries() {
+  return <LibrariesImpl />;
+}
+
+function LibrariesImpl() {
   const [libs, setLibs] = useState<Library[]>([]);
   const [platforms, setPlatforms] = useState<Platform[]>([]);
   const [err, setErr] = useState<string | null>(null);

@@ -386,7 +386,7 @@ export default function Reports() {
             </div>
             <div className="muted" style={{fontSize: 11, textAlign: "right", maxWidth: 360}}>
               没现成 .db？看 <a href={GITHUB_REPO + "#%E5%A4%9A%E5%B9%B3%E5%8F%B0--%E5%A4%9A-library"} target="_blank" rel="noreferrer">README 里的爬虫推荐</a>，
-              或者去 <Link to="/libraries">📥 资源库</Link> 看各平台的 schema 要求。
+              或者去 <Link to="/settings#libraries">⚙️ 设置 → 资源库</Link> 看各平台的 schema 要求。
             </div>
           </div>
         )}

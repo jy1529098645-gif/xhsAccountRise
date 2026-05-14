@@ -30,7 +30,8 @@ from typing import Any
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .. import config, db, library, project
@@ -1572,3 +1573,46 @@ def feedback_reject(proposal_id: str, req: DecideProposalRequest) -> dict[str, A
         return _feedback.reject_proposal(proposal_id, notes=req.notes)
     except LookupError as e:
         raise HTTPException(404, str(e))
+
+
+# ============================================================================
+# v0.54 — Static frontend serving for one-image cloud deploys.
+#
+# When the container is built via the repo's Dockerfile, the React app's
+# `dist/` ends up at `<repo>/frontend/dist`. Mount it under `/` so a single
+# port + domain hosts BOTH the API and the SPA (Render free tier / Fly.io
+# free tier / etc. each give one process, not two).
+#
+# SPA fallback: any path that isn't /api/* and isn't a real file resolves to
+# index.html so React-Router deep links (e.g. /drafts/abc) work after refresh.
+# ============================================================================
+_FRONTEND_DIST = config.REPO_ROOT / "frontend" / "dist"
+_FRONTEND_INDEX = _FRONTEND_DIST / "index.html"
+
+if _FRONTEND_INDEX.exists():
+    # Static asset files (anything under /assets/*) — long-cache them.
+    app.mount(
+        "/assets",
+        StaticFiles(directory=str(_FRONTEND_DIST / "assets")),
+        name="frontend-assets",
+    )
+
+    @app.get("/")
+    def _spa_root() -> FileResponse:
+        return FileResponse(str(_FRONTEND_INDEX))
+
+    # SPA deep-link fallback. Must come LAST in the file (FastAPI matches in
+    # registration order; this catch-all needs to lose to every concrete
+    # /api/* route declared above).
+    @app.get("/{full_path:path}")
+    def _spa_fallback(full_path: str):
+        # Guard: don't ever serve HTML for a missing /api/* — return a real
+        # 404 JSON so client code surfaces a sane error.
+        if full_path.startswith("api/"):
+            raise HTTPException(404, "no such API route")
+        # Real static file inside dist (e.g. /favicon.ico)? Serve it.
+        candidate = _FRONTEND_DIST / full_path
+        if candidate.is_file():
+            return FileResponse(str(candidate))
+        # Anything else (React-Router path) → index.html so SPA handles it.
+        return FileResponse(str(_FRONTEND_INDEX))

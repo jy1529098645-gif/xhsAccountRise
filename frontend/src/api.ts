@@ -22,9 +22,34 @@ const DISABLED_KEY = "studio.backendDisabled";
 const STATIC_BASE = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/data`;
 const DEFAULT_BACKEND = "http://127.0.0.1:8765";
 
+// v0.54: when the SPA is served from the same origin as a working backend
+// (i.e. the one-container Docker deploy), prefer that origin instead of
+// the local-dev default. Detected by checking whether the current page is
+// served from something OTHER than a Vite dev server / file:// — i.e. has
+// any non-loopback origin that responds at /api/health. We do this
+// synchronously by inspecting the page origin; an explicit user override in
+// localStorage always wins so dev workflow isn't broken.
+function _sameOriginCandidate(): string | null {
+  if (typeof window === "undefined") return null;
+  const loc = window.location;
+  if (loc.protocol === "file:" || !loc.origin) return null;
+  // Vite dev server runs on 5173 — definitely NOT our backend. Skip auto.
+  if (loc.port === "5173") return null;
+  // Static GitHub Pages deploy → don't auto-use same origin (no backend there).
+  if (/github\.io$/.test(loc.hostname)) return null;
+  return loc.origin;
+}
+
 export function backendUrl(): string {
   if (localStorage.getItem(DISABLED_KEY) === "1") return "";
-  return (localStorage.getItem(KEY) || DEFAULT_BACKEND).replace(/\/$/, "");
+  // 1) Explicit user setting always wins.
+  const explicit = localStorage.getItem(KEY);
+  if (explicit) return explicit.replace(/\/$/, "");
+  // 2) Cloud deploy: SPA + backend on same origin.
+  const sameOrigin = _sameOriginCandidate();
+  if (sameOrigin) return sameOrigin;
+  // 3) Local dev fallback.
+  return DEFAULT_BACKEND;
 }
 export function setBackendUrl(url: string) {
   if (url) {

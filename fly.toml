@@ -1,0 +1,45 @@
+# Fly.io one-click deploy: https://fly.io/docs/reference/configuration/
+#
+# Usage:
+#   curl -L https://fly.io/install.sh | sh
+#   fly auth signup
+#   fly launch --copy-config --no-deploy   # picks up this file as template
+#   fly secrets set ANTHROPIC_API_KEY=... OPENAI_API_KEY=... DEEPSEEK_API_KEY=...
+#   fly deploy
+#
+# Free tier:
+#   - 3 shared-cpu-1x VMs × 256 MB RAM (this app fits in 1 of them).
+#   - 3 GB total persistent volumes across apps.
+#   - No sleep — VMs stay warm.
+
+app = "academicats-rise"
+primary_region = "sin"  # singapore — change to nrt / hkg / sjc as needed
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  PYTHONUTF8 = "1"
+  STUDIO_CORS_ORIGINS = "*"
+  OPENAI_MODEL = "gpt-4o"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = true   # save free-tier minutes
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 20
+    hard_limit = 25
+
+[[mounts]]
+  source = "rise_data"
+  destination = "/app/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

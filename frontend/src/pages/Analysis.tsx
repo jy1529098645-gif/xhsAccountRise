@@ -1,17 +1,104 @@
 import { useEffect, useMemo, useState } from "react";
-import { api } from "../api";
+import { Link, useNavigate } from "react-router-dom";
+import { api, HttpError } from "../api";
 import { fmtLikes } from "../format";
-import type { DnaArtifact } from "../types";
+import { humaniseError } from "../errors";
+import type { DnaArtifact, Library } from "../types";
 
 export default function Analysis() {
   const [dna, setDna] = useState<DnaArtifact | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [missingDna, setMissingDna] = useState(false);
+  const [libs, setLibs] = useState<Library[]>([]);
+  const [analyzing, setAnalyzing] = useState(false);
+  const navigate = useNavigate();
 
-  useEffect(() => {
-    api.dnaLatest().then(setDna).catch(e => setErr(e.message));
-  }, []);
+  async function reload() {
+    setErr(null); setMissingDna(false);
+    try {
+      const d = await api.dnaLatest();
+      setDna(d);
+    } catch (e: any) {
+      // 404 means no DNA artifact yet — distinct from real errors.
+      if (e instanceof HttpError && e.status === 404) {
+        setMissingDna(true);
+        try { setLibs(await api.libraries()); } catch {/* ignore */}
+      } else {
+        setErr(humaniseError(e));
+      }
+    }
+  }
+  useEffect(() => { reload(); }, []);
 
-  if (err) return <div className="banner danger">{err}</div>;
+  async function runAnalyze(libId: string) {
+    setAnalyzing(true);
+    setErr(null);
+    try {
+      await api.analyzeLibrary(libId);
+      await reload();
+    } catch (e: any) {
+      setErr("分析失败：" + humaniseError(e));
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
+  if (missingDna) {
+    const active = libs.find(l => l.active);
+    return (
+      <div>
+        <div className="page-header">
+          <h1>🧬 爆款分析</h1>
+          <p>这里展示从你激活的语料库里反推出来的爆款 DNA（标题钩子、蓝海词、发布时段、评论需求等）。</p>
+        </div>
+        <div className="card" style={{textAlign: "center", padding: 32}}>
+          <div style={{fontSize: 36}}>📭</div>
+          <h2 style={{margin: "8px 0 4px"}}>还没跑过分析</h2>
+          {active ? (
+            <>
+              <p className="muted" style={{margin: "6px 0 16px"}}>
+                当前激活库：<b>{active.display_name}</b>（{active.notes_count.toLocaleString()} notes）
+                <br />点下面按钮跑一次 DNA 提取（5–15 秒，纯 Python，不需要 LLM），跑完这一页就有内容了。
+              </p>
+              <button onClick={() => runAnalyze(active.lib_id)} disabled={analyzing}>
+                {analyzing ? "🧬 分析中…" : "🚀 开始爆款分析"}
+              </button>
+              <div className="muted" style={{fontSize: 12, marginTop: 14}}>
+                想要更深入的双 AI 共识报告？跑完这步去
+                <Link to="/reports"> 📊 分析报告</Link>（第 1 步）。
+              </div>
+            </>
+          ) : libs.length > 0 ? (
+            <>
+              <p className="muted" style={{margin: "6px 0 16px"}}>
+                你已经有 {libs.length} 个库，但没有任何一个被激活。
+              </p>
+              <button onClick={() => navigate("/settings")}>去 ⚙️ 设置 激活一个库</button>
+            </>
+          ) : (
+            <>
+              <p className="muted" style={{margin: "6px 0 16px"}}>
+                还没有任何 SQLite 库 — 在 <Link to="/settings">⚙️ 设置 → 资源库</Link>{" "}
+                拖一个 .db 进来，自动检测平台 + 跑分析 + 激活，回这页就有内容了。
+              </p>
+              <button onClick={() => navigate("/settings")}>去 ⚙️ 设置 上传库</button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (err) {
+    return (
+      <div>
+        <div className="banner danger" style={{display: "flex", justifyContent: "space-between"}}>
+          <div style={{whiteSpace: "pre-wrap", flex: 1}}>{err}</div>
+          <button className="ghost" onClick={reload}>🔄 重试</button>
+        </div>
+      </div>
+    );
+  }
   if (!dna) return <div className="card muted">加载中…</div>;
 
   const sections = dna.sections ?? {} as any;

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { api, backendUrl, setBackendUrl, resetBackendUrl, DEFAULT_BACKEND_URL } from "../api";
 import { GITHUB_REPO } from "../catalog";
+import { LibrariesSection } from "./Libraries";
 
 const DEFAULT = DEFAULT_BACKEND_URL;
 
@@ -8,6 +10,7 @@ export default function Settings() {
   const [url, setUrl] = useState(backendUrl());
   const [healthy, setHealthy] = useState<boolean | null>(null);
   const [checking, setChecking] = useState(false);
+  const location = useLocation();
 
   async function check() {
     setChecking(true);
@@ -16,6 +19,17 @@ export default function Settings() {
     setChecking(false);
   }
   useEffect(() => { if (url) check(); }, []);
+
+  // v0.54: scroll to the Libraries section when navigated to with the
+  // #libraries anchor (from Reports.tsx and Dashboard.tsx links). Run on
+  // every hash change; small delay so the embedded section has mounted.
+  useEffect(() => {
+    if (location.hash !== "#libraries") return;
+    const t = setTimeout(() => {
+      document.getElementById("libraries")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 60);
+    return () => clearTimeout(t);
+  }, [location.hash]);
 
   function save(newUrl: string) {
     setBackendUrl(newUrl);
@@ -27,9 +41,17 @@ export default function Settings() {
   return (
     <div>
       <div className="page-header">
-        <h1>⚙️ 设置（高级）</h1>
-        <p>多数情况下不用动这里 —— 默认配置已经够用。</p>
+        <h1>⚙️ 设置</h1>
+        <p>资源库管理 + 后端连接 + LLM keys + 架构说明。</p>
       </div>
+
+      {/* v0.54: Libraries used to be a top-level sidebar page; folded in
+          here so the sidebar stays focused on the 4-step起号 flow. */}
+      <div id="libraries" style={{scrollMarginTop: 20}}>
+        <LibrariesSection />
+      </div>
+
+      <hr style={{margin: "24px 0", border: "none", borderTop: "1px solid #eee"}} />
 
       <div className="card">
         <h2>🚀 在新设备 / 服务器上启动后端</h2>

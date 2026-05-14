@@ -1,0 +1,47 @@
+# One-click Render deploy: https://render.com/docs/blueprint-spec
+#
+# Usage:
+#   1. Fork the repo on GitHub.
+#   2. https://dashboard.render.com → New → Blueprint → connect your fork.
+#   3. Render auto-detects this file, builds via Dockerfile, exposes one HTTPS URL.
+#   4. Set the 3 LLM key env vars in the Render dashboard (Anthropic/OpenAI/DeepSeek).
+#   5. Visit the URL. The static frontend is bundled in the same container.
+#
+# Free tier notes:
+#   - Render free instances sleep after 15 min of inactivity (cold start ~30s).
+#   - 512 MB RAM is enough for this app's footprint.
+#   - The 1 GB disk attaches at /app/data so libraries persist across deploys.
+
+services:
+  - type: web
+    name: academicats-rise
+    runtime: docker
+    plan: free
+    region: oregon            # or singapore / frankfurt — pick what's near you
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true          # rebuild on git push
+
+    # Single port; Render injects $PORT, our CMD honors it.
+    healthCheckPath: /api/health
+
+    envVars:
+      # Required — set actual values in the Render dashboard, never commit them.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
+
+      # Optional defaults that the app reads.
+      - key: OPENAI_MODEL
+        value: gpt-4o
+      - key: PYTHONUTF8
+        value: "1"
+      - key: STUDIO_CORS_ORIGINS
+        value: "*"
+
+    disk:
+      name: rise-data
+      mountPath: /app/data    # SQLite + library blobs persist here
+      sizeGB: 1

@@ -33,8 +33,6 @@ export default function Dashboard() {
 
   const active = libs.find(l => l.active);
 
-  const noLibs = libs.length === 0;
-
   return (
     <div>
       <div className="page-header">
@@ -43,15 +41,6 @@ export default function Dashboard() {
       </div>
 
       {err && <div className="banner danger">{err}</div>}
-
-      {noLibs && api.isConnected() && (
-        <div className="banner info">
-          <div>
-            <b>👋 还没有数据库</b> · 去 <Link to="/libraries">📥 资源库</Link> 拖一个 .db 进来，
-            自动跑完平台检测+爆款分析。完事建议先看 <Link to="/reports">📊 分析报告</Link>（第 1 步），再去做策略。
-          </div>
-        </div>
-      )}
 
       <div className="cards-grid">
         <Stat label="语料总数" value={status?.counts.notes ?? active?.notes_count ?? 0} />
@@ -153,7 +142,7 @@ export default function Dashboard() {
       <div className="card">
         <h2>当前 Library</h2>
         {!active ? (
-          <p className="muted">没有 active library。去 <Link to="/libraries">Libraries</Link> 上传或激活。</p>
+          <p className="muted">没有 active library。去 <Link to="/settings#libraries">⚙️ 设置 → 资源库</Link> 上传或激活。</p>
         ) : (
           <div className="spread">
             <div>
@@ -163,7 +152,7 @@ export default function Dashboard() {
                 lib_id: <code className="kbd">{active.lib_id}</code>
               </p>
             </div>
-            <Link to="/libraries"><button className="secondary">管理库</button></Link>
+            <Link to="/settings#libraries"><button className="secondary">管理库</button></Link>
           </div>
         )}
       </div>

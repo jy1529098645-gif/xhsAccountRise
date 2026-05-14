@@ -41,7 +41,17 @@ Brief ─▶ Strategist (Claude Opus) ─┐  hook 类型 / 开头钩子 / 结�
 
 实测一次「降AI率技巧」full-strength compose：3 drafter + 2 critic + refiner + synthesizer，99s / $0.19，Synthesizer 主动修掉 5 条 critic 标的风险（学术诚信立意、过度承诺数字、品牌背书、CTA 过强、缺免责说明）。
 
-## Quick start (本地后端)
+## 部署：三种方式任选
+
+| 方式 | 谁用 | 成本 | 启动时间 |
+|---|---|---|---|
+| **本地** | 自己一个人在自己电脑用 | 免费 + 你的 API 额度 | 5 分钟 |
+| **Docker** | 自己的服务器 / 公司内网 | 服务器 + API 额度 | 10 分钟 |
+| **Render / Fly 免费云** | 想让朋友/团队在浏览器直接用 | 0 元服务器 + 各自的 API 额度 | 5 分钟点点鼠标 |
+
+> 每种方式都是「一个人/一个团队 = 一套部署」。**别共享部署**：API key 是在后端进程里跑的，多人共用会把账单跑爆。
+
+### Quick start · 本地后端
 
 ```powershell
 # 1. Python deps
@@ -69,6 +79,58 @@ npm install
 npm run dev
 # → http://localhost:5173
 ```
+
+### Docker · 一个容器搞定（前后端 + SQLite）
+
+```bash
+docker build -t academicats-rise .
+
+docker run -p 8765:8765 \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  -e OPENAI_API_KEY=sk-... \
+  -e DEEPSEEK_API_KEY=sk-... \
+  -v $(pwd)/data:/app/data \
+  academicats-rise
+
+# 浏览器打开 http://localhost:8765/ — 前端 + API 都在同一个端口
+```
+
+镜像里捆了：Python 后端、构建好的 React 静态资源、`curl_cffi`（让「URL 一键刷数据」可用）。SQLite 落在 mount 的 `/app/data` 卷里，重启容器数据不丢。
+
+### Render 免费云 · 让别人直接打开网址用
+
+最适合「想分享给朋友/团队」的场景。0 元成本，每人自己跑自己的实例。
+
+1. **Fork 这个仓库到自己的 GitHub**。
+2. 打开 [render.com](https://dashboard.render.com) → New → Blueprint → 选你的 fork。
+3. Render 自动读 `render.yaml` 里的配置，按 `Dockerfile` 构建。
+4. 在 Render dashboard → Environment 里填三个 API key（ANTHROPIC / OPENAI / DEEPSEEK）。
+5. 等 5 分钟首次构建完，拿到一个形如 `https://academicats-rise-xxxx.onrender.com/` 的公网 URL。打开就能用。
+6. 把这个 URL 发给朋友 → 他们点开就能拖 .db、跑分析、出稿。
+
+⚠️ Render 免费层 15 分钟无访问会休眠，下次访问要等 30s 冷启动。`/app/data` 1GB 持久磁盘已配好，数据不丢。
+
+### Fly.io 免费云 · 不休眠版
+
+```bash
+curl -L https://fly.io/install.sh | sh
+fly auth signup
+fly launch --copy-config --no-deploy
+fly secrets set ANTHROPIC_API_KEY=sk-ant-... OPENAI_API_KEY=sk-... DEEPSEEK_API_KEY=sk-...
+fly deploy
+
+# 拿到 https://academicats-rise.fly.dev — 不休眠，但免费层只够 1 个小机器
+```
+
+`fly.toml` 已配好持久卷 + 自动 HTTPS + 健康检查。新加坡区域，国内访问也不算太慢。
+
+### 部署后第一次访问
+
+无论哪种方式，第一次打开 URL：
+1. 静态前端会自动检测「服务在同一域名」→ 直连后端，不需要去 Settings 里改 backend URL。
+2. 在 **⚙️ 设置 → 📥 资源库** 里拖一个 `.db` 文件进来 → 自动检测平台 + 跑 DNA 分析 + 激活。
+3. 跑完去 **📊 分析报告** 出 Insight 报告（5–10 分钟双 AI 协作）。
+4. 然后 **🚀 起号策略 → ✍️ 出稿 → 📊 复盘** 顺序走。
 
 ## CLI 全集
 

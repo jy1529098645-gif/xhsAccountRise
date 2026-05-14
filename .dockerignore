@@ -1,0 +1,33 @@
+# Don't bake these into the image — multi-stage already discards stage-1
+# artifacts, but Docker's context upload is slow if node_modules is included.
+
+# Frontend deps + build cache — rebuilt in stage-1 from package*.json.
+frontend/node_modules
+frontend/dist
+
+# Python local venv + caches.
+.venv
+**/__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+
+# Local data (libraries, generated reports, smoke outputs). The container
+# uses a mounted volume for these — including them in the image is wrong.
+data/
+exports/
+
+# Editor / CI noise.
+.git
+.github
+.idea
+.vscode
+.DS_Store
+
+# Local secrets — must NEVER be in an image.
+.env
+.env.*
+
+# Workspaces / Claude-Code internals.
+.claude
