@@ -217,10 +217,13 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--cta", default="soft", choices=["none", "soft", "strong"])
     sp.add_argument("--niche", default=None)
     sp.add_argument("--extra", default=None)
-    sp.add_argument("--strategist", default="claude:opus")
-    sp.add_argument("--drafters", default="claude:opus,deepseek,openai")
-    sp.add_argument("--critics", default="claude:sonnet,deepseek")
-    sp.add_argument("--refiner", default="claude:opus")
+    # v0.53: CLI defaults match the in-product defaults — gpt-4o for
+    # reasoning, deepseek for volume. Pass `--strategist claude:opus` etc.
+    # to opt back into Claude.
+    sp.add_argument("--strategist", default="openai:gpt-4o")
+    sp.add_argument("--drafters", default="openai:gpt-4o,deepseek")
+    sp.add_argument("--critics", default="deepseek")
+    sp.add_argument("--refiner", default="openai:gpt-4o")
     sp.add_argument("--skip-strategist", action="store_true")
     sp.add_argument("--skip-critics", action="store_true")
     sp.add_argument("--skip-refiner", action="store_true")

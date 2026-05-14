@@ -42,14 +42,16 @@ from .synthesizer import SynthesizerAgent
 
 @dataclass
 class PipelineConfig:
-    # v0.51: Claude defaults dropped — too expensive for daily volume.
-    # Reasoning/quality roles → gpt-4o; mechanical/volume roles → deepseek.
-    # Users can still override any role via the advanced agent config UI.
+    # v0.53: Claude kept ONLY for the actual writing roles where Chinese
+    # creative quality matters (drafter / refiner / synthesizer). Everything
+    # else — strategist, critic, planner — went to gpt-4o or deepseek for
+    # cost. Sonnet (not Opus) for the writers — comparable Chinese quality
+    # at ~5× lower cost.
     strategist_spec: str = "openai:gpt-4o"               # strategic planning
-    drafter_spec: str = "openai:gpt-4o"                  # consumer-facing post body
+    drafter_spec: str = "claude:sonnet"                  # 出稿核心 — Claude 中文好
     critic_spec: str = "deepseek"                        # cheap judgment is enough
-    refiner_spec: str = "openai:gpt-4o"                  # rewrite on critique
-    synthesizer_spec: str = "openai:gpt-4o"              # final fusion (user-facing)
+    refiner_spec: str = "claude:sonnet"                  # rewrite content — Claude
+    synthesizer_spec: str = "claude:sonnet"              # final fusion (user-facing)
     planner_spec: str = "deepseek"                       # publish schedule, mechanical
     # Refiner is auto-skipped when drafter pool produced ≤1 candidate (the
     # default Sonnet-only setup). Set force_refiner=True to always run it

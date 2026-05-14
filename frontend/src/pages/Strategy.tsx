@@ -1176,7 +1176,7 @@ function PackView({pack, onReset}: {pack: StrategyPackDTO; onReset: () => void})
             <div className="muted" style={{padding: 16, background: "#fafafa",
                                             borderRadius: 8, fontSize: 13}}>
               ⚠️ 这次 AI 没有排出任何 slot（可能是模型一次性输出超长被截）。
-              点上面「新建策略」重新跑一次，或者去 设置 切到 claude:opus 重试。
+              点上面「新建策略」重新跑一次，或者去 设置 换个更稳的模型（如 claude:opus）重试。
             </div>
           )}
         </div>

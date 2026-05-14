@@ -11,7 +11,7 @@ export interface AgentSelection {
 }
 
 export function defaultSelection(): AgentSelection {
-  const sel = COST_PRESETS["默认 (4o + DeepSeek ★ 性价比最高)"];
+  const sel = COST_PRESETS["默认 (Claude 出稿 + 4o/DS 辅助 ★ 推荐)"];
   return {
     strategist: sel.strategist, drafter: sel.drafter, critic: sel.critic,
     refiner: sel.refiner, synthesizer: sel.synthesizer, planner: sel.planner,
@@ -23,10 +23,10 @@ export function defaultSelection(): AgentSelection {
 export function selectionToSpecs(sel: AgentSelection) {
   return {
     strategist_spec: sel.strategist.join(",") || "openai",
-    drafter_spec: sel.drafter.join(",") || "openai",
+    drafter_spec: sel.drafter.join(",") || "claude:sonnet",
     critic_spec: sel.critic.join(",") || "deepseek",
-    refiner_spec: sel.refiner.join(",") || "openai",
-    synthesizer_spec: sel.synthesizer.join(",") || "openai",
+    refiner_spec: sel.refiner.join(",") || "claude:sonnet",
+    synthesizer_spec: sel.synthesizer.join(",") || "claude:sonnet",
     planner_spec: sel.planner.join(",") || "deepseek",
     skip_strategist: sel.skip.strategist,
     skip_critics: sel.skip.critic,

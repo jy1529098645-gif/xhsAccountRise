@@ -49,4 +49,4 @@ def build(spec: str) -> list[Generator]:
     return out
 
 
-DEFAULT_SPEC = "claude,deepseek,openai"
+DEFAULT_SPEC = "openai:gpt-4o,deepseek"

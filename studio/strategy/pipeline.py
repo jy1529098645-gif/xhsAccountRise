@@ -411,14 +411,15 @@ _RESOURCES_SCHEMA = {
 async def expand(
     pack_id: str,
     chosen_idx: int,
-    # v0.51: Claude defaults dropped. Topic creativity → gpt-4o + deepseek
-    # for diversity. Scheduler (planning reasoning) → gpt-4o. Resourcer +
-    # body drafter (volume / mechanical) → deepseek. Net cost ≈ 1/5 vs
-    # Sonnet, latency similar or faster.
+    # v0.53: topic creativity → gpt-4o + deepseek (diversity). Scheduler
+    # (planning reasoning) → gpt-4o. Resourcer (data compile) → deepseek.
+    # Body drafter reverted to claude:haiku — actual 出稿 quality matters
+    # and Haiku writes Chinese drafts much better than deepseek for similar
+    # cost.
     topicgen_spec: str = "openai:gpt-4o,deepseek",
     scheduler_spec: str = "openai:gpt-4o",
     resourcer_spec: str = "deepseek",
-    drafter_spec: str = "deepseek",
+    drafter_spec: str = "claude:haiku",
     # If True, cancel any in-flight expand for the same pack_id and start
     # fresh. Without this, the idempotency guard would 409 the duplicate
     # POST. Useful when user clicked the direction again because the
@@ -797,8 +798,9 @@ async def _expand_inner(
     # observation that a single 12-slot body-draft call would silently
     # return an empty schedule once total tokens crossed ~10k. Each call
     # here is small + focused, and failures isolate per slot.
-    # Defaults to claude:sonnet which is ~3x faster than opus and plenty
-    # capable for a 300-600 char drop-in draft.
+    # Defaults to claude:haiku — Haiku gives top-tier Chinese writing at
+    # ~1/3 Sonnet cost and beats deepseek/gpt-4o on the 出稿 quality the
+    # user actually reads. User can override via the advanced spec UI.
     drafter_chosen = registry.build(drafter_spec)[0]
     direction_block = (
         f"【账号方向】{chosen.name}\n"

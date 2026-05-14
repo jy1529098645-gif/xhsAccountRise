@@ -596,13 +596,13 @@ class ComposeRequest(BaseModel):
     niche: str = ""
     extra_constraints: str = ""
     platform: str | None = None  # auto-inherit from active library if None
-    # v0.51: Claude defaults dropped — too expensive. Reasoning roles → gpt-4o,
-    # mechanical roles → deepseek. Users can override via the advanced UI.
+    # v0.53: Claude kept for writing roles (drafter/refiner/synthesizer);
+    # everything else gpt-4o or deepseek for cost. Override via advanced UI.
     strategist_spec: str = "openai:gpt-4o"
-    drafter_spec: str = "openai:gpt-4o"
+    drafter_spec: str = "claude:sonnet"
     critic_spec: str = "deepseek"
-    refiner_spec: str = "openai:gpt-4o"
-    synthesizer_spec: str = "openai:gpt-4o"
+    refiner_spec: str = "claude:sonnet"
+    synthesizer_spec: str = "claude:sonnet"
     planner_spec: str = "deepseek"
     skip_strategist: bool = False
     skip_critics: bool = False
@@ -935,12 +935,14 @@ class StrategyInput(BaseModel):
 
 class StrategyExpandRequest(BaseModel):
     chosen_direction_idx: int = Field(ge=0)
-    # v0.51: topic creativity gets gpt-4o + deepseek diversity; scheduling
-    # (reasoning) → gpt-4o; resource compilation + body draft (volume) → deepseek.
+    # v0.53: topic creativity gets gpt-4o + deepseek diversity; scheduling
+    # (reasoning) → gpt-4o; resource compilation → deepseek. Body draft
+    # (per-slot 出稿) reverted to claude:haiku — Haiku gives Sonnet-tier
+    # Chinese writing for ~1/3 the cost; deepseek's 出稿 quality lagged.
     topicgen_spec: str = "openai:gpt-4o,deepseek"
     scheduler_spec: str = "openai:gpt-4o"
     resourcer_spec: str = "deepseek"
-    drafter_spec: str = "deepseek"
+    drafter_spec: str = "claude:haiku"
     restart: bool = False  # cancel any in-flight expand for this pack + restart fresh
 
 
