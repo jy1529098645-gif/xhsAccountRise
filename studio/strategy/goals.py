@@ -1,4 +1,4 @@
-"""8 大起号目标分类 — 决定 prompt voice + required fields + 阶段强度。
+"""16 大起号目标分类 — 决定 prompt voice + required fields + 阶段强度。
 
 不同 goal 的整套打法差异巨大 ：
   · personal_share / emotional → 弱转化，强真实感，无产品依赖
@@ -7,6 +7,9 @@
   · physical_product → 实物体验，对比测评为主
   · tech_review → 专业但易懂，避免技术黑话
   · career_business → 干货 + 案例，避免成功学
+  · food / travel / fitness → 生活方式垂类，重图 / 重视频
+  · fashion / beauty → 强配图 + 真人出镜，对比 + 测评
+  · parenting / pets / home → 场景化 + 真情实感
 
 每个 goal 有 ：
   · key            ：id（前后端共享）
@@ -230,7 +233,197 @@ GOAL_TYPES: tuple[GoalType, ...] = (
             "职场 / 副业 ：(a) 数字必须真实可核（"
             "「副业第一个月赚 800」比「副业月入过万」可信 10 倍），"
             "(b) 给完整流程，不留「私信给你方法」式钓鱼钩子，"
-            "(c) 避免「打工人觉醒 / 财富自由」类陈词滥调。"
+            "(c) 避免「打工人觉醒 / 财富自由」类陈词淘调。"
+        ),
+    ),
+    # ───────────────────── 生活方式 / 视觉垂类（v0.61.16 新增） ─────────────────────
+    GoalType(
+        key="food",
+        emoji="🍳",
+        name="美食 · 探店 · 厨艺",
+        description="探店打卡 / 自制料理 / 菜谱教程 / 美食 vlog",
+        voice_hint=(
+            "馋人 + 接地气，少形容多细节。"
+            "标题用「绝了 / 必吃 / 闭眼冲 / 自制级 / 翻车」类。"
+            "正文要给具体地址 / 价格 / 步骤 / 第一口味道。"
+        ),
+        phase_emphasis="全 4 阶段，强配图 / 短视频比例",
+        requires_product_context=False,
+        recommended_product_context=False,
+        example_directions=(
+            "城市探店清单", "家常菜教程", "网红店实测",
+            "便宜大碗合集", "翻车 / 避雷",
+        ),
+        prompt_addendum=(
+            "美食内容 ：(a) 每篇必须有真实细节（价格 / 地址 / 食材克数 / 第一口的味道），"
+            "(b) 推荐图文或短视频形式，不要纯文字，"
+            "(c) 避雷帖比安利更易爆（用户对踩坑信任度高），"
+            "(d) 别用「人均不到 50」这类已被烂用的套话，给具体单价 + 推荐单品。"
+        ),
+    ),
+    GoalType(
+        key="travel",
+        emoji="✈️",
+        name="旅游 · 攻略 · vlog",
+        description="旅行 vlog / 行程攻略 / 小众目的地 / 民宿安利",
+        voice_hint=(
+            "真实第一视角 + 美景描述，避免广告腔。"
+            "标题用「N 天 N 夜 / 小众绝美 / 反向旅游 / 穷游」类。"
+            "正文给完整行程 + 预算 + 实拍图 + 个人感受。"
+        ),
+        phase_emphasis="全 4 阶段，强视觉（图 / 视频）",
+        requires_product_context=False,
+        recommended_product_context=False,
+        example_directions=(
+            "城市深度攻略", "小众目的地", "民宿 / 酒店探店",
+            "穷游 / 反向旅游", "旅行 vlog",
+        ),
+        prompt_addendum=(
+            "旅游内容 ：(a) 每篇必须给总预算 / 天数 / 季节 / 推荐人群，"
+            "(b) 推 ≥ 1 个「打卡误区 / 避雷点」（透明感涨粉），"
+            "(c) 推荐图文 + 多图 + 地图标记，纯文字不利于扩散，"
+            "(d) 旺季 / 淡季差异要点明，别让用户去了发现关门。"
+        ),
+    ),
+    GoalType(
+        key="fitness",
+        emoji="💪",
+        name="健身 · 减脂 · 运动",
+        description="健身打卡 / 减脂日记 / 训练动作教学 / 运动装备测评",
+        voice_hint=(
+            "真实进度 + 实拍 before/after，避免假大空。"
+            "标题用「30 天减 N 斤 / 实测 / 0 基础 / 在家就能练」类。"
+            "正文给完整训练计划 / 饮食 / 翻车点。"
+        ),
+        phase_emphasis="全 4 阶段；2-3 周复盘 + 数据图爆款率高",
+        requires_product_context=False,
+        recommended_product_context=False,
+        example_directions=(
+            "减脂日记", "动作教学", "健身房 vs 居家",
+            "饮食搭配", "before/after 复盘",
+        ),
+        prompt_addendum=(
+            "健身内容 ：(a) 数据必须真实可核（体脂 / 围度 / 体重），别瞎吹「3 天瘦 10 斤」，"
+            "(b) 每个动作必须给注意事项 + 错误示例，避免伤人，"
+            "(c) 推荐图 / 视频混合 ：动作要视频，复盘要图文，"
+            "(d) 严守医学合规 ：不开药、不诊断、不替代医生建议。"
+        ),
+    ),
+    GoalType(
+        key="fashion",
+        emoji="👗",
+        name="穿搭 · 时尚",
+        description="OOTD / 穿搭技巧 / 单品测评 / 风格分析 / 身材适配",
+        voice_hint=(
+            "真人出镜 + 不同角度实拍。语气：「微胖救星 / 显瘦 10 斤 / 这样穿绝了」。"
+            "正文给身材 / 价格 / 哪里买 / 搭配公式。"
+        ),
+        phase_emphasis="全 4 阶段，强配图（≥ 4 张）",
+        requires_product_context=False,
+        recommended_product_context=True,
+        example_directions=(
+            "微胖 / 高个 / 小个穿搭", "通勤穿搭", "风格教学",
+            "单品平替", "OOTD 周记",
+        ),
+        prompt_addendum=(
+            "穿搭内容 ：(a) 必须给身材数据（身高 / 体重 / 三围之一），不然没说服力，"
+            "(b) 每件单品给价格 + 渠道，平替版本更涨粉，"
+            "(c) 推荐图文形式，≥ 4 张多角度配图，纯文字不出爆款，"
+            "(d) 别用「2024 巴黎流行」这种空头话，给本地可买可穿的真实方案。"
+        ),
+    ),
+    GoalType(
+        key="beauty",
+        emoji="💄",
+        name="美妆 · 护肤",
+        description="化妆教程 / 护肤心得 / 单品测评 / 肤质适配 / 平价好物",
+        voice_hint=(
+            "真人出镜 + before/after。语气：「平价宝藏 / 烂脸自救 / 一支搞定」。"
+            "正文给肤质 + 步骤 + 价格 + 持妆时长。"
+        ),
+        phase_emphasis="全 4 阶段；测评 + before/after 爆款率最高",
+        requires_product_context=False,
+        recommended_product_context=True,
+        example_directions=(
+            "化妆教程", "护肤步骤", "单品测评", "肤质适配",
+            "平替合集 / 翻车避雷",
+        ),
+        prompt_addendum=(
+            "美妆 / 护肤 ：(a) 必须自报肤质 + 痛点（油皮 / 干皮 / 敏感肌 / 闭口 / 痘印），"
+            "(b) 推荐时给「我适合 / 不适合」而非绝对推荐，"
+            "(c) 强烈推荐图文 + 多张实拍（妆前妆后 / 上脸效果），"
+            "(d) 严守合规 ：不夸药效 / 不写「医美级」/ 不替代医生建议。"
+        ),
+    ),
+    GoalType(
+        key="parenting",
+        emoji="👶",
+        name="母婴 · 育儿",
+        description="孕期 / 新生儿 / 早教 / 亲子互动 / 育儿避雷 / 妈妈复盘",
+        voice_hint=(
+            "真情实感 + 真实场景，避免育儿专家腔。"
+            "标题用「N 个月宝宝 / 二胎妈妈 / 别这样做 / 哭着写完」类。"
+            "正文给月龄 / 具体场景 / 走过的弯路。"
+        ),
+        phase_emphasis="情感连接 + 共鸣 > 转化",
+        requires_product_context=False,
+        recommended_product_context=False,
+        example_directions=(
+            "孕期记录", "新生儿日常", "早教方法",
+            "育儿避雷 / 翻车", "亲子互动",
+        ),
+        prompt_addendum=(
+            "母婴内容 ：(a) 必须自报宝宝月龄 + 妈妈身份（一胎 / 二胎 / 全职 / 双职工），"
+            "(b) 严守医学合规 ：不开药、不诊断婴儿症状、强调「不舒服立刻就医」，"
+            "(c) 共鸣类「我也这样过」比建议类「你应该这样」更涨粉，"
+            "(d) 推产品时说自己「踩过的坑」更可信，纯安利容易掉粉。"
+        ),
+    ),
+    GoalType(
+        key="pets",
+        emoji="🐾",
+        name="宠物 · 萌宠",
+        description="宠物日常 / 养宠经验 / 训练 / 宠物用品测评 / 萌宠 vlog",
+        voice_hint=(
+            "宠物视角 + 主人口吻交替，可爱 + 沙雕 + 真实。"
+            "标题用「我家狗 / 这只猫 / 主子又 / 铲屎官血泪」类。"
+            "正文给品种 / 年龄 / 性格 / 具体糗事或经验。"
+        ),
+        phase_emphasis="全 4 阶段，强视觉（短视频爆款率高）",
+        requires_product_context=False,
+        recommended_product_context=False,
+        example_directions=(
+            "宠物日常 vlog", "养宠避雷", "训练教程",
+            "宠物用品测评", "搞笑沙雕段子",
+        ),
+        prompt_addendum=(
+            "宠物内容 ：(a) 必须自报品种 + 年龄 + 性格（柴 / 中华田园犬 / 布偶 等），"
+            "(b) 推荐短视频形式，宠物日常 + 表情 + 反应 = 流量密码，"
+            "(c) 涉及医疗 / 健康一律加「具体情况请咨询兽医」，"
+            "(d) 别用「我家最聪明」这种夸张吹，真实糗事比吹牛更涨粉。"
+        ),
+    ),
+    GoalType(
+        key="home",
+        emoji="🛋️",
+        name="家居 · 装修 · 收纳",
+        description="装修过程 / 家居好物 / 收纳整理 / 改造 / 选品避雷",
+        voice_hint=(
+            "真实预算 + 实拍对比。语气：「N 万搞定 / 后悔买 / 闭眼入 / 全屋」。"
+            "正文给预算 / 户型 / 品牌 / 购买渠道。"
+        ),
+        phase_emphasis="全 4 阶段，强配图（before/after / 多角度）",
+        requires_product_context=False,
+        recommended_product_context=True,
+        example_directions=(
+            "装修日记", "家居好物", "收纳整理",
+            "小户型改造", "踩坑避雷",
+        ),
+        prompt_addendum=(
+            "家居 / 装修 ：(a) 必须给户型 + 面积 + 总预算 + 风格，"
+            "(b) 「后悔系列 / 踩坑系列」比纯安利更易爆，"
+            "(c) 推荐图文 ：before / after / 局部细节 / 全屋俯视，"
+            "(d) 涉及具体品牌 / 师傅给联系方式时要注明「我自费 / 非广告」。"
         ),
     ),
 )
