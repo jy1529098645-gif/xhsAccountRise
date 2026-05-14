@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
-import { fmtRelative, platformLabel } from "../format";
+import { fmtRelative, platformLabel, defaultCycleStartDate, slotDate, topPublishingSlots } from "../format";
 import PlatformPill from "../components/PlatformPill";
 import ProgressTimeline, { Stage as TimelineStage } from "../components/ProgressTimeline";
 import NextStepCard from "../components/NextStepCard";
@@ -140,6 +140,7 @@ function emptyInput(): AccountInputDTO {
     cycle_weeks: 4, posts_per_week: 3,
     personal_strengths: "", constraints: "", platform: "",
     expected_angles: [],
+    cycle_start_date: defaultCycleStartDate(),
   };
 }
 
@@ -332,6 +333,8 @@ export default function Strategy() {
         personal_strengths: r.input.personal_strengths || "",
         constraints: r.input.constraints || "",
         platform: r.input.platform || "",
+        expected_angles: r.input.expected_angles || [],
+        cycle_start_date: r.input.cycle_start_date || defaultCycleStartDate(),
       });
       setLastFailedAction(null);
       setPhase("input");
@@ -801,6 +804,24 @@ function InputForm(props: {
                       textAlign: "center", padding: 6, background: "#fff", borderRadius: 6}}>
           ⇒ 最终会出 <span style={{fontSize: 18}}>{i.cycle_weeks * i.posts_per_week}</span> 篇带初稿正文的内容
         </div>
+        <div style={{marginTop: 10}}>
+          <label>📅 起点日期（Day 1 = 哪天发第一篇）</label>
+          <div className="row" style={{gap: 8, alignItems: "center"}}>
+            <input
+              type="date"
+              value={i.cycle_start_date || defaultCycleStartDate()}
+              onChange={e => set("cycle_start_date", e.target.value)}
+              style={{flex: "0 0 auto"}}
+            />
+            <button type="button" className="ghost" style={{fontSize: 12, padding: "4px 10px"}}
+              onClick={() => set("cycle_start_date", defaultCycleStartDate())}>
+              下个周一
+            </button>
+            <span className="muted" style={{fontSize: 12}}>
+              排期表会显示每篇的真实日期（5/21 周三 等）
+            </span>
+          </div>
+        </div>
       </div>
 
       <div style={{marginBottom: 10}}>
@@ -1159,6 +1180,8 @@ function PackView({pack, onReset}: {pack: StrategyPackDTO; onReset: () => void})
         </div>
       )}
 
+      <TopPublishingSlotsCard />
+
       <div className="card">
         <div className="spread" style={{alignItems: "flex-start", marginBottom: 8}}>
           <div>
@@ -1166,11 +1189,18 @@ function PackView({pack, onReset}: {pack: StrategyPackDTO; onReset: () => void})
             <p className="muted" style={{fontSize: 12, margin: "4px 0 0"}}>
               AI 已经给每一篇写好可发布的 300-600 字初稿。点「出这一篇 →」会把它丢进 Composer，多 Agent 协作出最终发布稿。
             </p>
+            {pack.input.cycle_start_date && (
+              <p className="muted" style={{fontSize: 12, marginTop: 4}}>
+                📅 起点日期 ：<b>{pack.input.cycle_start_date}</b>
+                <span style={{marginLeft: 6, color: "var(--muted)"}}>（每篇的真实日期 + 时段已显示在卡片标签上）</span>
+              </p>
+            )}
           </div>
         </div>
         <div style={{display: "grid", gap: 12}}>
           {schedule.map((s, i) => (
-            <SlotCard key={i} slot={s} idx={i} onCompose={goCompose} />
+            <SlotCard key={i} slot={s} idx={i} onCompose={goCompose}
+              cycleStartDate={pack.input.cycle_start_date} />
           ))}
           {schedule.length === 0 && (
             <div className="muted" style={{padding: 16, background: "#fafafa",
@@ -1346,20 +1376,39 @@ function IterateCard({pack}: {pack: StrategyPackDTO}) {
   );
 }
 
-function SlotCard({slot, idx, onCompose}: {
+function SlotCard({slot, idx, onCompose, cycleStartDate}: {
   slot: any; idx: number;
   onCompose: (s: any, runImmediately: boolean) => void;
+  cycleStartDate?: string;
 }) {
+  // v0.55: compute real calendar date if a cycle anchor is set; falls back
+  // to the relative "W1 · 周三" tag if no anchor.
+  const dateInfo = slotDate(cycleStartDate, slot.week, slot.day_of_week);
   return (
     <div style={{padding: 14, borderRadius: 10, border: "1px solid var(--border)",
                  background: "#fff"}}>
       <div className="row" style={{justifyContent: "space-between", alignItems: "flex-start", gap: 12}}>
         <div style={{flex: 1, minWidth: 0}}>
           <div className="row" style={{gap: 8, marginBottom: 4, flexWrap: "wrap"}}>
-            <span className="tag-pill" style={{background: "var(--primary-soft)", color: "var(--primary)"}}>
-              W{slot.week} · {DOW_LABELS[slot.day_of_week] ?? `D${slot.day_of_week}`}
-            </span>
-            {slot.publish_slot && <span className="tag-pill">{slot.publish_slot}</span>}
+            {dateInfo ? (
+              <span className="tag-pill" style={{
+                background: "var(--primary-soft)", color: "var(--primary)",
+                fontWeight: 600,
+              }}>
+                📅 {dateInfo.display}
+              </span>
+            ) : (
+              <span className="tag-pill" style={{background: "var(--primary-soft)", color: "var(--primary)"}}>
+                W{slot.week} · {DOW_LABELS[slot.day_of_week] ?? `D${slot.day_of_week}`}
+              </span>
+            )}
+            {slot.publish_slot && (
+              <span className="tag-pill"
+                title={slot.publish_rationale || ""}
+                style={slot.publish_rationale ? {borderBottom: "1px dotted #888", cursor: "help"} : undefined}>
+                ⏰ {slot.publish_slot}
+              </span>
+            )}
             <span className="tag-pill" style={{background: INTENT_COLORS[slot.intent] ?? "#f4f4f4"}}>{slot.intent}</span>
             {slot.content_format && (
               <span className="tag-pill" style={{
@@ -1421,6 +1470,72 @@ function SlotCard({slot, idx, onCompose}: {
           )}
         </div>
       )}
+      {slot.publish_rationale && (
+        <div className="muted" style={{
+          marginTop: 8, fontSize: 11.5, padding: "4px 8px",
+          background: "#f5f7fa", borderRadius: 4, borderLeft: "2px solid var(--primary)",
+        }}>
+          ⏰ <b>选这个时段的理由：</b>{slot.publish_rationale}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// v0.55: 「本账号最佳发布时段 Top 5」总览卡 — 从激活库的 DNA 热力图里
+// 取 median_likes 最高的 5 个 (周几, 小时) 格子。让运营在看具体排期前
+// 先建立总体认知，知道「为什么 AI 把这条排在周三 21:00」。
+function TopPublishingSlotsCard() {
+  const [top, setTop] = useState<Array<{label: string; median_likes: number; count: number}>>([]);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      try {
+        const dna: any = await api.dnaLatest();
+        if (cancel) return;
+        const heatmap = (dna?.sections?.timing?.heatmap || []) as any[];
+        setTop(topPublishingSlots(heatmap, 5, 5));
+      } catch (e: any) {
+        if (!cancel) setErr(e.message || String(e));
+      }
+    })();
+    return () => { cancel = true; };
+  }, []);
+
+  if (err || top.length === 0) return null;  // 静默失败 — 没 DNA 就不显示
+  return (
+    <div className="card" style={{
+      background: "linear-gradient(180deg, #fff8e6 0%, #fff 100%)",
+      borderColor: "#fde2a3",
+    }}>
+      <h2 style={{marginTop: 0}}>📊 本账号最佳发布时段 Top 5</h2>
+      <p className="muted" style={{fontSize: 12, marginTop: 2, marginBottom: 12}}>
+        从你激活的语料库的 DNA 热力图里挑出来 — 这 5 个 (周几, 小时) 格子的中位点赞最高。
+        AI 排期会优先把内容塞进这些时段，但也会按「内容类型 vs 时段」做差异化。
+      </p>
+      <div style={{display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8}}>
+        {top.map((cell, i) => (
+          <div key={i} style={{
+            padding: 10, background: "#fff", borderRadius: 8,
+            border: "1px solid #f0d8a0", textAlign: "center",
+          }}>
+            <div style={{fontSize: 11, color: "#a67700", fontWeight: 600}}>
+              #{i + 1}
+            </div>
+            <div style={{fontSize: 14, fontWeight: 700, marginTop: 4}}>
+              {cell.label}
+            </div>
+            <div className="muted" style={{fontSize: 11, marginTop: 4}}>
+              中位赞 <b style={{color: "#333"}}>{Math.round(cell.median_likes)}</b>
+            </div>
+            <div className="muted" style={{fontSize: 10}}>
+              （n={cell.count}）
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

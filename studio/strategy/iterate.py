@@ -308,6 +308,8 @@ async def iterate_strategy(
             outline=[str(x) for x in (s.get("outline") or [])],
             materials_needed=[str(x) for x in (s.get("materials_needed") or [])],
             intent=str(s.get("intent", "")),
+            content_format=str(s.get("content_format", "")),
+            publish_rationale=str(s.get("publish_rationale", "")),
         )
         for _raw in schedule_raw
         for s in [_slot_dict(_raw)]

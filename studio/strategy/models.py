@@ -31,6 +31,11 @@ class AccountInput:
     # the scheduler distributes slots across these angles roughly evenly.
     # Empty = AI picks freely (legacy behaviour).
     expected_angles: list[str] = field(default_factory=list)
+    # v0.55: anchor date for the cycle. ISO 'YYYY-MM-DD'. Empty = frontend
+    # picks "next Monday" as default. Backend doesn't compute on this — the
+    # frontend formats each slot's real date as cycle_start + (week-1)*7 +
+    # day_of_week. Stored here so it survives pack reload.
+    cycle_start_date: str = ""
 
 
 @dataclass
@@ -62,6 +67,11 @@ class TopicSlot:
     body_draft: str = ""               # 300-600-char first-pass body the
                                        # user can tweak then hand to Composer.
     content_format: str = ""           # 图文 / 短视频 / 长视频 / 直播 / 纯文本
+    # v0.55: per-slot timing rationale. Scheduler is told to pick the best
+    # (day, hour) cell from the DNA heatmap that matches this slot's
+    # angle/hook_type characteristics (emotional → late evening, tutorial →
+    # afternoon, etc.), and to explain the choice in one sentence here.
+    publish_rationale: str = ""
 
 
 @dataclass

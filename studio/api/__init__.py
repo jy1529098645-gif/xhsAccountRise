@@ -972,6 +972,10 @@ class StrategyInput(BaseModel):
     # v0.52: user can pre-pick which angles the schedule should cover.
     # Empty = AI picks freely (legacy).
     expected_angles: list[str] = Field(default_factory=list)
+    # v0.55: anchor date for the cycle (ISO 'YYYY-MM-DD'). Empty = frontend
+    # picks the next Monday as default. Backend stores it and includes it in
+    # the pack so the Strategy page can show real calendar dates per slot.
+    cycle_start_date: str = ""
     positioner_spec: str = "openai:gpt-4o"
 
 
@@ -1034,6 +1038,7 @@ async def strategy_propose(req: StrategyInput) -> dict[str, Any]:
         constraints=req.constraints,
         platform=library.normalise_platform(plat),
         expected_angles=_exp_angles,
+        cycle_start_date=req.cycle_start_date,
     )
     try:
         result = await strategy_pipeline.propose(inp, positioner_spec=req.positioner_spec)
@@ -1062,6 +1067,7 @@ async def strategy_propose_stream(req: StrategyInput):
         constraints=req.constraints,
         platform=library.normalise_platform(plat),
         expected_angles=_exp_angles,
+        cycle_start_date=req.cycle_start_date,
     )
     return StreamingResponse(
         strategy_pipeline.propose_stream(inp, positioner_spec=req.positioner_spec),

@@ -392,6 +392,8 @@ _SCHEDULE_SCHEMA = {
                     "week": {"type": "integer"},
                     "day_of_week": {"type": "integer"},
                     "publish_slot": {"type": "string"},
+                    "publish_rationale": {"type": "string"},
+                    "content_format": {"type": "string"},
                 },
             },
         },
@@ -787,6 +789,7 @@ async def _expand_inner(
             materials_needed=[str(x) for x in (s.get("materials_needed") or [])],
             intent=str(s.get("intent", "")),
             content_format=str(s.get("content_format", "")),
+            publish_rationale=str(s.get("publish_rationale", "")),
         )
         for _raw in schedule_raw
         for s in [_to_slot_dict(_raw)]

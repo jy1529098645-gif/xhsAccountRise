@@ -271,6 +271,8 @@ export interface AccountInputDTO {
   platform: string;
   /** v0.52: angles the schedule should distribute slots across. Empty = AI free pick. */
   expected_angles?: string[];
+  /** v0.55: ISO date 'YYYY-MM-DD' for the first day of the cycle. Empty = next Monday. */
+  cycle_start_date?: string;
 }
 
 export interface StrategicDirectionDTO {
@@ -297,6 +299,8 @@ export interface TopicSlotDTO {
   intent: string;
   body_draft?: string;
   content_format?: string;  // 图文 / 短视频 / 长视频 / 直播 / 纯文本
+  /** v0.55: ≤30 字 LLM explanation for why this time-slot suits this slot's content type. */
+  publish_rationale?: string;
 }
 
 export interface WeekThemeDTO {

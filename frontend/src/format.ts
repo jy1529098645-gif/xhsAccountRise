@@ -57,3 +57,92 @@ export function roleName(agentName: string | undefined): string {
   const label = AGENT_ROLE_LABELS[base] ?? base;
   return rest ? `${label}·${rest}` : label;
 }
+
+// ============================================================
+// v0.55: calendar date math for Strategy schedule.
+// Each TopicSlot has (week, day_of_week) — relative coords against the
+// user-chosen cycle_start_date. We compute the actual calendar date for
+// display ("5/21 周三").
+// ============================================================
+const DOW_LABELS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+
+/** Snap a Date to the Monday of its ISO week (Mon=0 ... Sun=6 relative). */
+function snapToMonday(d: Date): Date {
+  const day = d.getDay();           // 0=Sun, 1=Mon, ..., 6=Sat
+  const offsetToMonday = day === 0 ? -6 : 1 - day;
+  const out = new Date(d);
+  out.setDate(out.getDate() + offsetToMonday);
+  out.setHours(0, 0, 0, 0);
+  return out;
+}
+
+/** Return "YYYY-MM-DD" of the next Monday on or after today. */
+export function defaultCycleStartDate(): string {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  // If today IS Monday, treat as the start; otherwise next Monday.
+  const day = today.getDay();
+  const offset = day === 1 ? 0 : (day === 0 ? 1 : (8 - day));
+  const monday = new Date(today);
+  monday.setDate(today.getDate() + offset);
+  return formatDateISO(monday);
+}
+
+export function formatDateISO(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Compute the real calendar date for a slot.
+ *   cycleStartISO: "YYYY-MM-DD" — anchor day (Monday recommended)
+ *   week: 1-based
+ *   dayOfWeek: 0=Mon ... 6=Sun
+ * Returns "M/D (周X)" + actual Date object (for further formatting).
+ */
+export function slotDate(
+  cycleStartISO: string | undefined,
+  week: number,
+  dayOfWeek: number,
+): { date: Date; display: string } | null {
+  if (!cycleStartISO) return null;
+  const start = new Date(cycleStartISO);
+  if (isNaN(start.getTime())) return null;
+  const snapped = snapToMonday(start);
+  const offsetDays = (Math.max(1, week) - 1) * 7 + Math.max(0, Math.min(6, dayOfWeek));
+  const d = new Date(snapped);
+  d.setDate(snapped.getDate() + offsetDays);
+  const m = d.getMonth() + 1;
+  const day = d.getDate();
+  const dow = DOW_LABELS[Math.max(0, Math.min(6, dayOfWeek))];
+  return { date: d, display: `${m}/${day} (${dow})` };
+}
+
+/**
+ * From a DNA heatmap (list of {dow, hour, count, median_likes}), return
+ * the top N cells by median_likes (skipping noise: cells with count < 5).
+ * Used by the global "本账号最佳发布时段 Top N" summary card.
+ */
+export interface HeatmapCell {
+  dow: number;
+  hour: number;
+  count: number;
+  median_likes: number;
+}
+export function topPublishingSlots(
+  heatmap: HeatmapCell[] | undefined,
+  n: number = 5,
+  minCount: number = 5,
+): Array<HeatmapCell & { label: string }> {
+  if (!heatmap || !Array.isArray(heatmap)) return [];
+  const sorted = heatmap
+    .filter(c => (c.count ?? 0) >= minCount && (c.median_likes ?? 0) > 0)
+    .sort((a, b) => (b.median_likes ?? 0) - (a.median_likes ?? 0))
+    .slice(0, n);
+  return sorted.map(c => ({
+    ...c,
+    label: `${DOW_LABELS[c.dow] ?? `周?`} ${String(c.hour).padStart(2, "0")}:00`,
+  }));
+}
