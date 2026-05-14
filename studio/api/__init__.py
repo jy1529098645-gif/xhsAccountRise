@@ -887,12 +887,53 @@ def get_draft(draft_id: str) -> dict[str, Any]:
         c["tags"] = json.loads(c.pop("tags_json") or "[]")
         c["meta"] = json.loads(c.pop("meta_json") or "{}")
         c["critiques"] = crit_by_cand.get(c["candidate_id"], [])
+
+    # v0.53: bundle compliance + rag so DraftDetail.tsx makes one call.
+    with db.connect(read_only=True) as con:
+        comp_rows = list(con.execute(
+            "SELECT check_id, candidate_id, checked_at, severity, hits_json"
+            " FROM studio_compliance_checks WHERE draft_id = ?"
+            " ORDER BY checked_at DESC",
+            (draft_id,),
+        ))
+        var_children = list(con.execute(
+            "SELECT draft_id, generated_at, variant_label,"
+            " json_extract(brief_json,'$.angle') AS angle,"
+            " (SELECT title FROM studio_draft_candidates"
+            "  WHERE candidate_id = studio_drafts.final_candidate_id) AS final_title"
+            " FROM studio_drafts WHERE parent_draft_id = ?"
+            " ORDER BY generated_at DESC",
+            (draft_id,),
+        ))
+    comp_by_cand: dict[str, dict] = {}
+    for r in comp_rows:
+        cid = r["candidate_id"]
+        if cid in comp_by_cand: continue
+        item = dict(r)
+        try: item["hits"] = json.loads(item.pop("hits_json") or "[]")
+        except Exception: item["hits"] = []
+        comp_by_cand[cid] = item
+    for c in cands:
+        c["compliance"] = comp_by_cand.get(c["candidate_id"], {
+            "severity": "pass", "hits": [],
+        })
+    try:
+        rag_payload = json.loads(d_dict.get("rag_json") or "{}")
+    except Exception:
+        rag_payload = {}
+
     return {
         "draft": d_dict | {"brief": json.loads(d["brief_json"])},
         "candidates": cands,
         "trace": trace,
         "plan": notes_payload.get("plan", {}),
         "strategy": notes_payload.get("strategy", {}),
+        "rag": {
+            "refs": rag_payload.get("refs", []),
+            "comments": rag_payload.get("comments", []),
+            "hooks": rag_payload.get("hooks", []),
+        },
+        "variants": [dict(r) for r in var_children],
     }
 
 
@@ -1292,3 +1333,242 @@ def choose_candidate(draft_id: str, candidate_id: str) -> dict[str, Any]:
             (candidate_id, draft_id),
         )
     return {"chosen": candidate_id}
+
+
+# ============================================================================
+# v0.53 — new endpoints: compliance / tracking / variants / provenance /
+# feedback proposals. All gated behind "needs local backend" because they
+# touch the DB.
+# ============================================================================
+
+# ---------------- compliance (hard redline gate) ------------------------
+
+from .. import compliance as _compliance  # noqa: E402
+
+
+class ComplianceCheckRequest(BaseModel):
+    title: str = ""
+    body: str = ""
+    tags: list[str] = Field(default_factory=list)
+    cover_prompt: str = ""
+
+
+@app.post("/api/compliance/check")
+def compliance_check(req: ComplianceCheckRequest) -> dict[str, Any]:
+    return _compliance.check_candidate(req.model_dump())
+
+
+class ComplianceRewriteRequest(BaseModel):
+    text: str
+    where: str = "body"  # 'title' | 'body' — controls which redlines apply
+
+
+@app.post("/api/compliance/rewrite")
+def compliance_rewrite(req: ComplianceRewriteRequest) -> dict[str, Any]:
+    hits = _compliance.check_text(req.text, where=req.where)
+    rewritten = _compliance.rewrite_safe(req.text, hits)
+    return {
+        "original": req.text,
+        "rewritten": rewritten,
+        "hits": [h.to_dict() for h in hits],
+        "changed": rewritten != req.text,
+    }
+
+
+@app.get("/api/compliance/rules")
+def compliance_rules() -> list[dict[str, Any]]:
+    return _compliance.list_redlines()
+
+
+@app.get("/api/drafts/{draft_id}/compliance")
+def get_draft_compliance(draft_id: str) -> dict[str, Any]:
+    """Latest compliance check per candidate, plus an overall draft-level
+    severity for the chosen final."""
+    with db.connect(read_only=True) as con:
+        rows = list(con.execute(
+            "SELECT check_id, candidate_id, checked_at, severity, hits_json,"
+            " rewritten_body, rewritten_title"
+            " FROM studio_compliance_checks WHERE draft_id = ?"
+            " ORDER BY checked_at DESC",
+            (draft_id,),
+        ))
+        d = con.execute(
+            "SELECT final_candidate_id FROM studio_drafts WHERE draft_id = ?",
+            (draft_id,),
+        ).fetchone()
+    final_cid = d["final_candidate_id"] if d else None
+    by_cand: dict[str, dict] = {}
+    for r in rows:
+        cid = r["candidate_id"]
+        if cid in by_cand:
+            continue  # keep latest only
+        item = dict(r)
+        try: item["hits"] = json.loads(item.pop("hits_json") or "[]")
+        except Exception: item["hits"] = []
+        by_cand[cid] = item
+    final_severity = (by_cand.get(final_cid, {}) or {}).get("severity", "pass") if final_cid else "pass"
+    return {
+        "draft_id": draft_id,
+        "final_candidate_id": final_cid,
+        "final_severity": final_severity,
+        "by_candidate": by_cand,
+    }
+
+
+# ---------------- tracking (URL paste → reingest) -----------------------
+
+from .. import tracking as _tracking  # noqa: E402
+
+
+class TrackingRefreshRequest(BaseModel):
+    url: str | None = None  # if omitted, uses draft.published_url
+
+
+@app.post("/api/drafts/{draft_id}/refresh-from-url")
+def tracking_refresh(draft_id: str, req: TrackingRefreshRequest) -> dict[str, Any]:
+    try:
+        return _tracking.refresh_draft(draft_id, force_url=req.url)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.get("/api/drafts/{draft_id}/fetches")
+def tracking_list(draft_id: str, limit: int = 20) -> list[dict[str, Any]]:
+    return _tracking.list_fetches(draft_id, limit=limit)
+
+
+@app.get("/api/tracking/status")
+def tracking_status() -> dict[str, Any]:
+    """Tell the frontend whether auto-refresh is supported in this install."""
+    return {
+        "crawler_available": _tracking.crawler_available(),
+        "hint": (
+            "已就绪：粘贴小红书 URL 即可一键刷新数据。"
+            if _tracking.crawler_available()
+            else "未安装 curl_cffi。pip install curl_cffi 后即可启用自动刷新。"
+        ),
+    }
+
+
+# ---------------- variants (one-click fan-out) --------------------------
+
+from ..agents import variant as _variant  # noqa: E402
+
+
+class VariantSpawnRequest(BaseModel):
+    angles: list[str]
+
+
+@app.post("/api/drafts/{draft_id}/variants")
+async def variants_spawn(draft_id: str, req: VariantSpawnRequest) -> dict[str, Any]:
+    try:
+        return await _variant.spawn_variants(draft_id, req.angles)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/drafts/{draft_id}/variants")
+def variants_list(draft_id: str) -> list[dict[str, Any]]:
+    return _variant.list_variants(draft_id)
+
+
+# ---------------- provenance (RAG refs for this draft) ------------------
+
+@app.get("/api/drafts/{draft_id}/rag")
+def draft_rag(draft_id: str) -> dict[str, Any]:
+    """Pull the persisted Researcher refs/comments/hooks for a draft.
+    Old drafts (before v0.53) have no rag_json — return {refs: [], ...}."""
+    with db.connect(read_only=True) as con:
+        row = con.execute(
+            "SELECT rag_json FROM studio_drafts WHERE draft_id = ?",
+            (draft_id,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "draft not found")
+    payload = {}
+    try:
+        payload = json.loads(row["rag_json"] or "{}")
+    except Exception:
+        payload = {}
+    return {
+        "draft_id": draft_id,
+        "refs": payload.get("refs", []),
+        "comments": payload.get("comments", []),
+        "hooks": payload.get("hooks", []),
+        "has_data": bool(payload),
+    }
+
+
+# ---------------- feedback aggregate (item 7) ---------------------------
+
+from .. import feedback as _feedback  # noqa: E402
+
+
+@app.get("/api/feedback/rollup")
+def feedback_rollup(project_id: str | None = None) -> dict[str, Any]:
+    return _feedback.rollup_for_project(project_id)
+
+
+@app.get("/api/feedback/rollup/pack/{pack_id}")
+def feedback_rollup_pack(pack_id: str) -> dict[str, Any]:
+    return _feedback.rollup_for_pack(pack_id)
+
+
+# ---------------- feedback proposals (item 8 — prompt versioning) -------
+
+class ProposeFromReviewRequest(BaseModel):
+    review_id: str
+    generator_name: str = "title_body_gen"
+    proposer_spec: str = "openai:gpt-4o"
+
+
+@app.post("/api/feedback/propose-from-review")
+async def feedback_propose(req: ProposeFromReviewRequest) -> dict[str, Any]:
+    try:
+        return await _feedback.propose_from_retrospective(
+            req.review_id,
+            generator_name=req.generator_name,
+            proposer_spec=req.proposer_spec,
+        )
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/feedback/proposals")
+def feedback_list_proposals(status: str | None = None,
+                            limit: int = 30) -> list[dict[str, Any]]:
+    return _feedback.list_proposals(status=status, limit=limit)
+
+
+@app.get("/api/feedback/proposals/{proposal_id}")
+def feedback_get_proposal(proposal_id: str) -> dict[str, Any]:
+    p = _feedback.get_proposal(proposal_id)
+    if not p:
+        raise HTTPException(404, "proposal not found")
+    return p
+
+
+class DecideProposalRequest(BaseModel):
+    notes: str = ""
+
+
+@app.post("/api/feedback/proposals/{proposal_id}/approve")
+def feedback_approve(proposal_id: str, req: DecideProposalRequest) -> dict[str, Any]:
+    try:
+        return _feedback.approve_proposal(proposal_id, notes=req.notes)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/feedback/proposals/{proposal_id}/reject")
+def feedback_reject(proposal_id: str, req: DecideProposalRequest) -> dict[str, Any]:
+    try:
+        return _feedback.reject_proposal(proposal_id, notes=req.notes)
+    except LookupError as e:
+        raise HTTPException(404, str(e))

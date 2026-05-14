@@ -164,6 +164,99 @@ export interface DraftDetail {
   trace: any[];
   plan?: ExecutionPlan;
   strategy?: any;
+  /** v0.53: persisted RAG context for the provenance panel. */
+  rag?: {
+    refs: RagRef[];
+    comments: RagComment[];
+    hooks: RagHook[];
+  };
+  /** v0.53: child drafts spawned via variant fan-out. */
+  variants?: VariantChild[];
+}
+
+export interface RagRef {
+  note_id: string;
+  title: string;
+  liked_count: number;
+  collected_count: number;
+  comment_count: number;
+  url?: string;
+  body_excerpt: string;
+}
+
+export interface RagComment {
+  comment_id: string;
+  content: string;
+  like_count: number;
+  note_id?: string;
+}
+
+export interface RagHook {
+  category: string;
+  count: number;
+  median_likes: number;
+  examples: { title: string; liked_count: number }[];
+}
+
+export interface VariantChild {
+  draft_id: string;
+  generated_at: number;
+  variant_label: string | null;
+  angle: string | null;
+  final_title: string | null;
+}
+
+// ---- Compliance (item 1) -----------------------------------------------
+export type ComplianceSeverity = "pass" | "warn" | "block";
+
+export interface ComplianceHit {
+  term: string;
+  rule_id: string;
+  category: string;
+  severity: "block" | "warn";
+  span_start: number;
+  span_end: number;
+  where: string;       // 'title' | 'body' | 'tags' | ...
+  safe_alternative: string;
+  rationale: string;
+}
+
+export interface ComplianceCheck {
+  severity: ComplianceSeverity;
+  hits: ComplianceHit[];
+  hit_count: number;
+  by_severity?: { block: number; warn: number };
+}
+
+// ---- Tracking (item 3) -------------------------------------------------
+export interface TrackingFetchResult {
+  status: "ok" | "no_url" | "no_note_id" | "no_crawler" | "http_err"
+        | "rate_limited" | "no_ssr" | "parse_err";
+  note_id: string | null;
+  likes?: number | null;
+  saves?: number | null;
+  comments?: number | null;
+  shares?: number | null;
+  raw_summary: string;
+  fetch_id?: string;
+  perf_id?: string | null;
+}
+
+// ---- Feedback proposals (item 8) ---------------------------------------
+export interface PromptProposal {
+  proposal_id: string;
+  review_id: string;
+  generator_name: string;
+  parent_version: string;
+  proposed_version: string;
+  diff_summary: string;
+  expected_gain: string;
+  evidence: { signal: string; why_changes_prompt: string }[];
+  created_at: number;
+  status: "pending" | "approved" | "rejected" | "superseded";
+  decided_at?: number | null;
+  decision_notes?: string | null;
+  proposed_prompt?: string;       // populated only via getProposal()
 }
 
 // ---- Account launch strategy ---------------------------------------------

@@ -71,7 +71,10 @@ class DrafterPoolAgent(Agent):
         self.generators = generators
 
     async def run(self, ctx: AgentContext) -> None:
-        system = g_prompts.SYSTEM_TITLE_BODY
+        # v0.53: pick the active prompt version from DB so retrospective-driven
+        # diffs take effect on next run. Falls back to the hardcoded constant
+        # when no version row exists.
+        _version, system = g_prompts.active_title_body_prompt()
         # v0.52: multi-angle. We produce one draft per requested angle. LLMs
         # are cycled round-robin so a single-LLM pool still produces N
         # different-angle candidates (each is a fresh call). For multi-LLM

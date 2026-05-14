@@ -3,6 +3,7 @@ import type {
   Library, Platform, Status,
   AccountInputDTO, StrategicDirectionDTO, StrategyDetail, StrategyListItem, StrategyPackDTO,
   ProjectDTO, InsightReportDTO,
+  ComplianceCheck, ComplianceHit, TrackingFetchResult, PromptProposal,
 } from "./types";
 
 const STATIC_PLATFORMS: Platform[] = [
@@ -479,6 +480,82 @@ export const api = {
       iteration_summary: string; wins_to_double_down: any[]; losses_to_drop: any[];
       pack: StrategyPackDTO;
     }>(`/api/strategy/${packId}/iterate`, body),
+
+  // v0.53 — compliance (hard redline gate) ------------------------------
+  complianceCheck: (body: {
+    title?: string; body?: string; tags?: string[]; cover_prompt?: string;
+  }) => postJson<ComplianceCheck>("/api/compliance/check", body),
+  complianceRewrite: (text: string, where: "title" | "body" = "body") =>
+    postJson<{ original: string; rewritten: string; hits: ComplianceHit[]; changed: boolean }>(
+      "/api/compliance/rewrite", { text, where }),
+  complianceRules: () =>
+    getJson<{ rule_id: string; patterns: string[]; category: string;
+              severity: string; safe_alternative: string; rationale: string }[]>(
+      "/api/compliance/rules").catch(() => []),
+  draftCompliance: (draftId: string) =>
+    getJson<{ draft_id: string; final_candidate_id: string | null;
+              final_severity: "pass" | "warn" | "block";
+              by_candidate: Record<string, { severity: string; hits: ComplianceHit[]; checked_at: number }> }>(
+      `/api/drafts/${draftId}/compliance`),
+
+  // v0.53 — tracking (URL paste → auto-refresh) --------------------------
+  trackingStatus: () =>
+    getJson<{ crawler_available: boolean; hint: string }>("/api/tracking/status").catch(
+      () => ({ crawler_available: false, hint: "未连接后端" })),
+  trackingRefresh: (draftId: string, url?: string) =>
+    postJson<TrackingFetchResult>(`/api/drafts/${draftId}/refresh-from-url`, { url: url ?? null }),
+  trackingHistory: (draftId: string) =>
+    getJson<Array<TrackingFetchResult & { fetched_at: number }>>(`/api/drafts/${draftId}/fetches`).catch(() => []),
+
+  // v0.53 — variants (one-click fan-out) ---------------------------------
+  spawnVariants: (draftId: string, angles: string[]) =>
+    postJson<{
+      parent_draft_id: string; angles_requested: string[];
+      variants: { angle: string; draft_id: string | null;
+                  variant_label: string; compliance: ComplianceCheck | null;
+                  error: string | null }[];
+      succeeded: number; failed: number;
+    }>(`/api/drafts/${draftId}/variants`, { angles }),
+  listVariants: (draftId: string) =>
+    getJson<{ draft_id: string; generated_at: number;
+              variant_label: string | null; angle: string | null;
+              final_title: string | null;
+              published?: number; published_at?: number; published_url?: string;
+              topic?: string;
+              compliance_severity?: "pass" | "warn" | "block" | null }[]>(
+      `/api/drafts/${draftId}/variants`).catch(() => []),
+
+  // v0.53 — provenance (Researcher RAG refs) -----------------------------
+  draftRag: (draftId: string) =>
+    getJson<{ draft_id: string; refs: any[]; comments: any[]; hooks: any[]; has_data: boolean }>(
+      `/api/drafts/${draftId}/rag`),
+
+  // v0.53 — feedback (prompt-version proposals + aggregate rollup) -------
+  feedbackProposeFromReview: (reviewId: string, opts?: { generator_name?: string; proposer_spec?: string }) =>
+    postJson<{
+      skipped: boolean; reason?: string;
+      proposal_id?: string; review_id: string;
+      parent_version?: string; proposed_version?: string;
+      diff_summary?: string; expected_gain?: string;
+      evidence?: any[]; created_at?: number; status?: string;
+    }>("/api/feedback/propose-from-review", {
+      review_id: reviewId,
+      generator_name: opts?.generator_name ?? "title_body_gen",
+      proposer_spec: opts?.proposer_spec ?? "openai:gpt-4o",
+    }),
+  listProposals: (status?: "pending" | "approved" | "rejected") =>
+    getJson<PromptProposal[]>(`/api/feedback/proposals${status ? `?status=${status}` : ""}`).catch(() => []),
+  getProposal: (proposalId: string) =>
+    getJson<PromptProposal>(`/api/feedback/proposals/${proposalId}`),
+  approveProposal: (proposalId: string, notes = "") =>
+    postJson<{ proposal_id: string; status: string; new_active_version: string; decided_at: number }>(
+      `/api/feedback/proposals/${proposalId}/approve`, { notes }),
+  rejectProposal: (proposalId: string, notes = "") =>
+    postJson<{ proposal_id: string; status: string; decided_at: number }>(
+      `/api/feedback/proposals/${proposalId}/reject`, { notes }),
+  feedbackRollup: (projectId?: string) =>
+    getJson<{ project_id: string; drafts: any[] }>(
+      `/api/feedback/rollup${projectId ? `?project_id=${projectId}` : ""}`).catch(() => ({ project_id: "", drafts: [] })),
 
   // Compose -----------------
   compose: (req: Brief & {

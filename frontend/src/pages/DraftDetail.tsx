@@ -3,6 +3,8 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import { fmtTime } from "../format";
 import PlatformPill from "../components/PlatformPill";
+import type { ComplianceHit, RagRef, RagComment, RagHook, VariantChild,
+              TrackingFetchResult } from "../types";
 
 export default function DraftDetail() {
   const { id } = useParams();
@@ -50,6 +52,15 @@ export default function DraftDetail() {
         </p>
       </div>
       <Link to="/drafts">← 全部历史出稿</Link>
+
+      <ComplianceBanner finalCand={finalCand} />
+
+      {d.parent_draft_id && (
+        <div className="banner info" style={{marginTop: 10}}>
+          🔁 这是<b>{d.variant_label || "变体"}</b>，源自{" "}
+          <Link to={`/drafts/${d.parent_draft_id}`}>父稿件 →</Link>
+        </div>
+      )}
 
       <PublishWidget draft={d} finalCand={finalCand} onChanged={reload} />
 
@@ -124,6 +135,15 @@ export default function DraftDetail() {
         <PerformanceWidget draft={d} onChanged={reload} />
       )}
 
+      <VariantFanOutCard
+        draftId={d.draft_id}
+        existing={data.variants ?? []}
+        published={!!d.published}
+        onSpawned={reload}
+      />
+
+      <ProvenancePanel rag={data.rag} />
+
       <div className="card">
         <h2>候选 ({cands.length})</h2>
         <div className="candidate-grid">
@@ -135,7 +155,8 @@ export default function DraftDetail() {
                 ${c.meta?.cost_estimate_usd?.toFixed?.(4) ?? "0"} · {c.meta?.latency_ms ?? 0}ms
               </div>
               <div className="title">{c.title}</div>
-              <div className="body">{c.body}</div>
+              <div className="body">{renderWithHits(c.body, (c.compliance?.hits ?? []).filter((h: ComplianceHit) => h.where === "body"))}</div>
+              <CandidateComplianceLine compliance={c.compliance} />
               <div style={{marginTop: 8}}>
                 {(c.tags ?? []).map((t: string) => <span key={t} className="tag-pill">#{t}</span>)}
               </div>
@@ -347,6 +368,16 @@ function PerformanceWidget({draft, onChanged}: {draft: any; onChanged: () => voi
       <p className="muted" style={{fontSize: 12, margin: "0 0 12px"}}>
         填几条都行，复盘的时候 AI 会自动用最新一条。
       </p>
+
+      <RefreshFromUrl draft={draft} onRefreshed={() => {
+        onChanged();
+        api.listPublishedDrafts().then((rows: any[]) => {
+          const me = rows.find(r => r.draft_id === draft.draft_id);
+          setRecent(me?.performance ?? []);
+        });
+      }} />
+
+
       <div style={{display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8}}>
         <NumIn label="👍 点赞" v={likes} setV={setLikes} />
         <NumIn label="💬 评论" v={comments} setV={setComments} />
@@ -396,6 +427,359 @@ function NumIn({label, v, setV}: {label: string; v: string; setV: (s: string) =>
       <label style={{fontSize: 11, color: "#666", display: "block"}}>{label}</label>
       <input type="number" min="0" value={v} onChange={e => setV(e.target.value)}
         style={{padding: "4px 6px", fontSize: 13, width: "100%"}} />
+    </div>
+  );
+}
+
+// =============================================================
+// v0.53 additions
+// =============================================================
+
+// ---------- Compliance ----------------------------------------
+function ComplianceBanner({finalCand}: {finalCand: any}) {
+  if (!finalCand) return null;
+  const comp = finalCand.compliance;
+  if (!comp || comp.severity === "pass") return null;
+  const isBlock = comp.severity === "block";
+  return (
+    <div className="card" style={{
+      marginTop: 10,
+      borderLeft: `4px solid ${isBlock ? "#d44" : "#e0a800"}`,
+      background: isBlock ? "#fff4f4" : "#fffaf0",
+    }}>
+      <h2 style={{margin: 0, color: isBlock ? "#a33" : "#a67700"}}>
+        {isBlock ? "⛔ 合规闸门：发布前必须改" : "⚠️ 合规闸门：建议修改"}
+      </h2>
+      <p className="muted" style={{fontSize: 12, margin: "6px 0 12px"}}>
+        命中策略报告 6.4 红线词 {comp.hit_count} 处。点开看具体位置 + 一键替换。
+      </p>
+      <ComplianceHitTable hits={comp.hits ?? []} candidateId={finalCand.candidate_id} />
+    </div>
+  );
+}
+
+function ComplianceHitTable({hits, candidateId}: {hits: ComplianceHit[]; candidateId: string}) {
+  const [rewriteState, setRewriteState] = useState<Record<string, string>>({});
+
+  if (hits.length === 0) return null;
+
+  async function rewriteAll(where: "title" | "body", text: string) {
+    try {
+      const r = await api.complianceRewrite(text, where);
+      setRewriteState(prev => ({...prev, [`${candidateId}:${where}`]: r.rewritten}));
+    } catch (e: any) {
+      alert("一键改写失败: " + e.message);
+    }
+  }
+
+  // Group hits by `where`
+  const byWhere: Record<string, ComplianceHit[]> = {};
+  hits.forEach(h => {
+    byWhere[h.where] = byWhere[h.where] ?? [];
+    byWhere[h.where].push(h);
+  });
+
+  return (
+    <div style={{display: "grid", gap: 10}}>
+      {Object.entries(byWhere).map(([where, ws]) => (
+        <div key={where} style={{background: "#fff", padding: 10, borderRadius: 6}}>
+          <div style={{fontSize: 12, fontWeight: 600, marginBottom: 6}}>
+            {where} · {ws.length} 命中
+            {(where === "title" || where === "body") && (
+              <button className="ghost" style={{marginLeft: 8, fontSize: 11, padding: "2px 8px"}}
+                onClick={() => {
+                  const text = window.prompt(`粘贴当前的${where}文本：`);
+                  if (text) rewriteAll(where as any, text);
+                }}>
+                一键改写
+              </button>
+            )}
+          </div>
+          {ws.map((h, i) => (
+            <div key={i} style={{fontSize: 12, padding: "4px 0", borderTop: i > 0 ? "1px dashed #eee" : undefined}}>
+              <span style={{
+                background: h.severity === "block" ? "#fadcdc" : "#fff0c0",
+                color: h.severity === "block" ? "#a33" : "#a67700",
+                padding: "1px 6px", borderRadius: 3, fontWeight: 600,
+              }}>{h.term}</span>
+              <span className="muted" style={{marginLeft: 8}}>{h.rule_id} · {h.category}</span>
+              <div style={{marginTop: 2, color: "#666"}}>
+                → 推荐 <code>{h.safe_alternative}</code>
+              </div>
+              <div className="muted" style={{fontSize: 11, marginTop: 2}}>{h.rationale}</div>
+            </div>
+          ))}
+          {rewriteState[`${candidateId}:${where}`] && (
+            <div style={{marginTop: 8, padding: 8, background: "#f6fff0", borderRadius: 4, fontSize: 12}}>
+              <div className="muted" style={{marginBottom: 4}}>改写后：</div>
+              <code style={{whiteSpace: "pre-wrap"}}>{rewriteState[`${candidateId}:${where}`]}</code>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CandidateComplianceLine({compliance}: {compliance: any}) {
+  if (!compliance || compliance.severity === "pass") return null;
+  const sev = compliance.severity;
+  return (
+    <div style={{
+      marginTop: 6, fontSize: 11,
+      color: sev === "block" ? "#a33" : "#a67700",
+      fontWeight: 600,
+    }}>
+      {sev === "block" ? "⛔" : "⚠️"} 合规 {compliance.hit_count} 处 ({compliance.hits.map((h: ComplianceHit) => h.term).slice(0, 3).join(" / ")})
+    </div>
+  );
+}
+
+// Render body with red highlights on hit spans. Used inside candidate cards.
+function renderWithHits(text: string, hits: ComplianceHit[]) {
+  if (!text || !hits || hits.length === 0) return text;
+  // Sort + merge overlapping spans.
+  const sorted = [...hits].filter(h => h.span_start >= 0 && h.span_end > h.span_start)
+    .sort((a, b) => a.span_start - b.span_start);
+  const parts: any[] = [];
+  let cursor = 0;
+  for (const h of sorted) {
+    if (h.span_start < cursor) continue;  // skip overlap
+    if (h.span_start > cursor) parts.push(text.slice(cursor, h.span_start));
+    parts.push(
+      <mark key={`${h.span_start}-${h.span_end}`}
+        title={`${h.rule_id} → ${h.safe_alternative}`}
+        style={{
+          background: h.severity === "block" ? "#fadcdc" : "#fff0c0",
+          color: h.severity === "block" ? "#a33" : "#a67700",
+          padding: "0 2px", borderRadius: 2,
+        }}>
+        {text.slice(h.span_start, h.span_end)}
+      </mark>
+    );
+    cursor = h.span_end;
+  }
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return parts;
+}
+
+// ---------- Variant fan-out -----------------------------------
+const ALL_ANGLES = ["教程","痛点","故事","工具评测","对比","感悟","数字","种草","建议"];
+
+function VariantFanOutCard({draftId, existing, published, onSpawned}: {
+  draftId: string; existing: VariantChild[]; published: boolean; onSpawned: () => void;
+}) {
+  const [opened, setOpened] = useState(false);
+  const [picked, setPicked] = useState<string[]>(["痛点","故事","数字"]);
+  const [busy, setBusy] = useState(false);
+  const [lastResult, setLastResult] = useState<any>(null);
+
+  function toggle(a: string) {
+    setPicked(prev => prev.includes(a) ? prev.filter(x => x !== a) : [...prev, a]);
+  }
+  async function spawn() {
+    if (picked.length === 0) { alert("至少选一个 angle"); return; }
+    setBusy(true);
+    try {
+      const r = await api.spawnVariants(draftId, picked);
+      setLastResult(r);
+      onSpawned();
+    } catch (e: any) {
+      alert("生成变体失败: " + e.message);
+    } finally { setBusy(false); }
+  }
+
+  const callToAction = published
+    ? "🔁 这篇发了，生成 3 个同主题变体（适合 48h+500 赞快速跟进）"
+    : "🔁 生成同主题变体（不同角度并发出稿）";
+
+  return (
+    <div className="card" style={{marginTop: 10}}>
+      <div className="spread">
+        <h2 style={{margin: 0}}>{callToAction}</h2>
+        <button className="ghost" onClick={() => setOpened(v => !v)}>
+          {opened ? "收起" : "展开 →"}
+        </button>
+      </div>
+
+      {existing.length > 0 && (
+        <div style={{marginTop: 8, fontSize: 12}}>
+          <div className="muted" style={{marginBottom: 4}}>已有 {existing.length} 个变体：</div>
+          <div style={{display: "flex", flexWrap: "wrap", gap: 6}}>
+            {existing.map(v => (
+              <Link key={v.draft_id} to={`/drafts/${v.draft_id}`}
+                className="tag-pill" style={{textDecoration: "none"}}>
+                {v.variant_label || v.angle} · {(v.final_title || "").slice(0, 20)}…
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {opened && (
+        <div style={{marginTop: 12}}>
+          <div className="muted" style={{fontSize: 12, marginBottom: 6}}>
+            勾选要覆盖的 angle（每个 angle 跑一份 fast_mode Compose，约 30-50s × 并发 3）：
+          </div>
+          <div style={{display: "flex", flexWrap: "wrap", gap: 6}}>
+            {ALL_ANGLES.map(a => (
+              <button key={a}
+                className={picked.includes(a) ? "" : "ghost"}
+                style={{fontSize: 12, padding: "4px 10px"}}
+                onClick={() => toggle(a)}>
+                {picked.includes(a) ? "✓ " : ""}{a}
+              </button>
+            ))}
+          </div>
+          <div style={{marginTop: 12}}>
+            <button onClick={spawn} disabled={busy || picked.length === 0}>
+              {busy ? `生成 ${picked.length} 个变体中…` : `🚀 生成 ${picked.length} 个变体`}
+            </button>
+          </div>
+
+          {lastResult && (
+            <div style={{marginTop: 12, fontSize: 12, background: "#f8f8f8", padding: 10, borderRadius: 6}}>
+              成功 <b>{lastResult.succeeded}</b> 失败 <b>{lastResult.failed}</b>
+              <ul style={{marginTop: 6, marginBottom: 0}}>
+                {lastResult.variants.map((v: any, i: number) => (
+                  <li key={i}>
+                    {v.angle}：
+                    {v.draft_id ? <Link to={`/drafts/${v.draft_id}`}>{v.draft_id.slice(0, 8)}… →</Link>
+                      : <span style={{color: "#a33"}}>{v.error}</span>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------- Provenance ----------------------------------------
+function ProvenancePanel({rag}: {rag?: {refs: RagRef[]; comments: RagComment[]; hooks: RagHook[]}}) {
+  if (!rag) return null;
+  const hasAny = (rag.refs?.length ?? 0) > 0 || (rag.comments?.length ?? 0) > 0 || (rag.hooks?.length ?? 0) > 0;
+  if (!hasAny) return null;
+  return (
+    <details className="card" style={{marginTop: 10}}>
+      <summary style={{cursor: "pointer", fontSize: 14, fontWeight: 600}}>
+        📚 这篇稿子参考了什么（{rag.refs.length} 篇爆款 · {rag.comments.length} 条评论 · {rag.hooks.length} 个 hook 模板）
+      </summary>
+      <div style={{marginTop: 10}}>
+        {rag.refs.length > 0 && (
+          <>
+            <h3 style={{margin: "8px 0 4px", fontSize: 13}}>🔥 参考爆款（Researcher 抓的 top-K）</h3>
+            <table className="table">
+              <thead><tr>
+                <th>标题</th><th className="num">点赞</th><th className="num">收藏</th><th className="num">评论</th>
+              </tr></thead>
+              <tbody>
+                {rag.refs.map(r => (
+                  <tr key={r.note_id}>
+                    <td>
+                      {r.url
+                        ? <a href={r.url} target="_blank" rel="noreferrer">{r.title}</a>
+                        : r.title}
+                    </td>
+                    <td className="num">{r.liked_count?.toLocaleString?.() ?? "—"}</td>
+                    <td className="num">{r.collected_count?.toLocaleString?.() ?? "—"}</td>
+                    <td className="num">{r.comment_count?.toLocaleString?.() ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+        {rag.comments.length > 0 && (
+          <>
+            <h3 style={{margin: "12px 0 4px", fontSize: 13}}>💬 用户原话（高赞评论）</h3>
+            <ul style={{marginLeft: 18, fontSize: 12, lineHeight: 1.7}}>
+              {rag.comments.slice(0, 12).map(c => (
+                <li key={c.comment_id}>
+                  <span className="muted" style={{marginRight: 6}}>({c.like_count}👍)</span>
+                  {c.content}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+        {rag.hooks.length > 0 && (
+          <>
+            <h3 style={{margin: "12px 0 4px", fontSize: 13}}>🎣 Hook 模板</h3>
+            <table className="table">
+              <thead><tr>
+                <th>类型</th><th className="num">样本数</th><th className="num">中位赞</th><th>示例</th>
+              </tr></thead>
+              <tbody>
+                {rag.hooks.map(h => (
+                  <tr key={h.category}>
+                    <td><b>{h.category}</b></td>
+                    <td className="num">{h.count}</td>
+                    <td className="num">{Math.round(h.median_likes ?? 0)}</td>
+                    <td className="muted" style={{fontSize: 12}}>
+                      {(h.examples ?? []).map(e => e.title).slice(0, 3).join(" / ")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+      </div>
+    </details>
+  );
+}
+
+// ---------- Tracking refresh button ---------------------------
+function RefreshFromUrl({draft, onRefreshed}: {draft: any; onRefreshed: () => void}) {
+  const [available, setAvailable] = useState<boolean | null>(null);
+  const [hint, setHint] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [lastFetch, setLastFetch] = useState<TrackingFetchResult | null>(null);
+
+  useEffect(() => {
+    api.trackingStatus().then(s => { setAvailable(s.crawler_available); setHint(s.hint); });
+  }, []);
+
+  async function refresh() {
+    if (!draft.published_url) {
+      alert("先在上方填写 published_url");
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await api.trackingRefresh(draft.draft_id);
+      setLastFetch(r);
+      if (r.status === "ok") onRefreshed();
+    } catch (e: any) {
+      alert("刷新失败: " + e.message);
+    } finally { setBusy(false); }
+  }
+
+  if (!draft.published || !draft.published_url) return null;
+
+  return (
+    <div style={{marginBottom: 10, padding: 10, background: "#f0f7fc", borderRadius: 6}}>
+      <div className="spread">
+        <div style={{fontSize: 13}}>
+          <b>🔄 自动从 URL 刷新</b>{" "}
+          <span className="muted" style={{fontSize: 11}}>{hint}</span>
+        </div>
+        <button onClick={refresh} disabled={busy || available === false}
+          className={available === false ? "ghost" : ""}
+          style={{fontSize: 12, padding: "4px 10px"}}>
+          {busy ? "刷新中…" : "刷新"}
+        </button>
+      </div>
+      {lastFetch && (
+        <div style={{marginTop: 6, fontSize: 12}}>
+          状态: <b style={{color: lastFetch.status === "ok" ? "#2a8" : "#a33"}}>
+            {lastFetch.status}
+          </b> · {lastFetch.raw_summary}
+        </div>
+      )}
     </div>
   );
 }

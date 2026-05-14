@@ -78,7 +78,13 @@ def _first(gens: list[Generator]) -> Generator:
     return gens[0]
 
 
-async def run_pipeline(brief: Brief, cfg: PipelineConfig | None = None) -> dict[str, Any]:
+async def run_pipeline(
+    brief: Brief,
+    cfg: PipelineConfig | None = None,
+    *,
+    parent_draft_id: str | None = None,
+    variant_label: str | None = None,
+) -> dict[str, Any]:
     cfg = cfg or PipelineConfig()
     db.apply_migrations(verbose=False)
 
@@ -156,11 +162,17 @@ async def run_pipeline(brief: Brief, cfg: PipelineConfig | None = None) -> dict[
                 ctx.plan = ctx.plan or {"error": repr(e)}
     await asyncio.gather(_run_synth(), _run_planner())
 
-    bundle = _persist(ctx, cfg)
+    bundle = _persist(
+        ctx, cfg,
+        parent_draft_id=parent_draft_id,
+        variant_label=variant_label,
+    )
     return bundle
 
 
-def _persist(ctx: AgentContext, cfg: PipelineConfig) -> dict[str, Any]:
+def _persist(ctx: AgentContext, cfg: PipelineConfig,
+             parent_draft_id: str | None = None,
+             variant_label: str | None = None) -> dict[str, Any]:
     draft_id = uuid.uuid4().hex[:16]
     now = int(time.time())
     lib_id = ctx.library_id or library.active_lib_id()
@@ -170,23 +182,73 @@ def _persist(ctx: AgentContext, cfg: PipelineConfig) -> dict[str, Any]:
         "plan": ctx.plan,
         "strategy": ctx.strategy,
     }
+    # v0.53: persist RAG context so DraftDetail provenance panel can show
+    # "this draft references these specific top-K notes / comments / hooks"
+    # without re-running the retriever.
+    rag_payload = {
+        "refs": [
+            {
+                "note_id": r.get("note_id"),
+                "title": r.get("title"),
+                "liked_count": r.get("liked_count"),
+                "collected_count": r.get("collected_count"),
+                "comment_count": r.get("comment_count"),
+                "url": r.get("url"),
+                "body_excerpt": (r.get("body") or "")[:400],
+            }
+            for r in (ctx.refs or [])
+        ],
+        "comments": [
+            {
+                "comment_id": c.get("comment_id"),
+                "content": (c.get("content") or "")[:300],
+                "like_count": c.get("like_count"),
+                "note_id": c.get("note_id"),
+            }
+            for c in (ctx.comments or [])[:30]
+        ],
+        "hooks": [
+            {
+                "category": h.get("category"),
+                "count": h.get("count"),
+                "median_likes": h.get("median_likes"),
+                "examples": [
+                    {"title": e.get("title"), "liked_count": e.get("liked_count")}
+                    for e in (h.get("examples") or [])[:5]
+                ],
+            }
+            for h in (ctx.hooks or [])
+        ],
+    }
+
+    # Resolve the active prompt version (may have been bumped by an approved
+    # feedback proposal). Falls back to the constant if seed migration hasn't
+    # run yet.
+    try:
+        prompt_version, _ = g_prompts.active_title_body_prompt()
+    except Exception:
+        prompt_version = g_prompts.TITLE_BODY_GEN_VERSION
+
     from .. import project as _project
     pid = _project.active_project_id()
     with db.connect() as con:
         con.execute(
             "INSERT INTO studio_drafts"
             " (draft_id, generated_at, prompt_version, brief_json, status,"
-            "  mode, library_id, final_candidate_id, notes, project_id)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "  mode, library_id, final_candidate_id, notes, project_id,"
+            "  parent_draft_id, variant_label, rag_json)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 draft_id, now,
-                g_prompts.TITLE_BODY_GEN_VERSION,
+                prompt_version,
                 ctx.brief.to_json(),
                 "generated", "multi-agent",
                 lib_id,
                 (ctx.final.candidate_id if ctx.final else None),
                 json.dumps(notes_payload, ensure_ascii=False),
                 pid,
+                parent_draft_id, variant_label,
+                json.dumps(rag_payload, ensure_ascii=False),
             ),
         )
 
@@ -227,6 +289,45 @@ def _persist(ctx: AgentContext, cfg: PipelineConfig) -> dict[str, Any]:
                     ),
                 )
 
+        # v0.53: hard compliance gate. Scan every candidate (incl. synth/
+        # refined) and persist hits so the UI can render a red highlight +
+        # blocker modal before the user marks-published.
+        try:
+            from ..compliance import check_candidate as _check_cand
+        except Exception:
+            _check_cand = None  # defensive
+        if _check_cand is not None:
+            all_cands = list(ctx.drafts)
+            if ctx.refined and ctx.refined not in all_cands:
+                all_cands.append(ctx.refined)
+            if ctx.final and ctx.final not in all_cands:
+                all_cands.append(ctx.final)
+            for c in all_cands:
+                if c is None or c.error:
+                    continue
+                try:
+                    payload = {
+                        "title": c.payload.title,
+                        "body": c.payload.body,
+                        "tags": c.payload.tags,
+                        "cover_prompt": c.payload.cover_prompt,
+                        "self_critique": c.payload.self_critique,
+                    }
+                    result = _check_cand(payload)
+                except Exception:
+                    continue
+                con.execute(
+                    "INSERT INTO studio_compliance_checks"
+                    " (check_id, candidate_id, draft_id, checked_at,"
+                    "  severity, hits_json)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        uuid.uuid4().hex[:16], c.candidate_id, draft_id, now,
+                        result["severity"],
+                        json.dumps(result["hits"], ensure_ascii=False),
+                    ),
+                )
+
         # Traces
         for s in ctx.trace:
             con.execute(
@@ -244,12 +345,32 @@ def _persist(ctx: AgentContext, cfg: PipelineConfig) -> dict[str, Any]:
                 ),
             )
 
+    # Build a compact compliance summary for the return bundle so the
+    # Composer UI can pop a warning modal immediately without a refetch.
+    try:
+        from ..compliance import check_candidate as _check_cand
+        compliance_summary = (
+            _check_cand({
+                "title": ctx.final.payload.title,
+                "body": ctx.final.payload.body,
+                "tags": ctx.final.payload.tags,
+                "cover_prompt": ctx.final.payload.cover_prompt,
+                "self_critique": ctx.final.payload.self_critique,
+            }) if (ctx.final and not ctx.final.error) else {"severity": "pass", "hits": [], "hit_count": 0}
+        )
+    except Exception:
+        compliance_summary = {"severity": "pass", "hits": [], "hit_count": 0}
+
     return {
         "draft_id": draft_id,
         "library_id": lib_id,
+        "parent_draft_id": parent_draft_id,
+        "variant_label": variant_label,
+        "prompt_version": prompt_version,
         "brief": asdict(ctx.brief),
         "strategy": ctx.strategy,
         "plan": ctx.plan,
+        "compliance": compliance_summary,
         "rag": {
             "refs": [
                 {"note_id": r["note_id"], "title": r["title"],

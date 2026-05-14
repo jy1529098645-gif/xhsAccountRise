@@ -11,8 +11,26 @@ from typing import Any
 
 from ..brief import Brief
 
-# ---- versions ---- (bump on substantive change; W4 will persist these)
+# ---- versions ----
+# Hardcoded baseline. studio.feedback.proposals seeds this into
+# studio_prompt_versions on first call and lets retrospective-driven
+# proposals fork newer versions. Compose reads the *active* version at
+# runtime via active_title_body_prompt(); these constants are the
+# fallback when DB has no rows.
 TITLE_BODY_GEN_VERSION = "title_body_gen-1.0.0"
+
+
+def active_title_body_prompt() -> tuple[str, str]:
+    """Return (version, prompt_text) — the active row from
+    studio_prompt_versions, or the hardcoded baseline if the table is empty.
+    Imported lazily to avoid a cycle (feedback → db → ...).
+    """
+    try:
+        from ..feedback.proposals import active_prompt
+        return active_prompt("title_body_gen")
+    except Exception:
+        # Defensive: db not migrated yet, or feedback module imports broken.
+        return TITLE_BODY_GEN_VERSION, SYSTEM_TITLE_BODY
 
 
 SYSTEM_TITLE_BODY = """\

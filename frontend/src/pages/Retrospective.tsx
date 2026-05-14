@@ -524,6 +524,8 @@ function AnalysisView({analysis, reviewId, drafts, onClose}: {
         </>
       )}
 
+      <PromptProposalPanel reviewId={reviewId} />
+
       <NextCyclePicker analysis={analysis} drafts={drafts} />
     </div>
   );
@@ -569,6 +571,181 @@ function NextCyclePicker({analysis, drafts}: {analysis: any; drafts: PublishedDr
         </div>
         <button onClick={goNext}>→ 直接出下一轮</button>
       </div>
+    </div>
+  );
+}
+
+// ============================================================
+// v0.53 — Prompt proposal panel (item 8)
+//
+// After a retrospective completes, the LLM can derive a prompt-diff suggestion
+// based on what worked / what didn't, and queue it for human approval. Once
+// approved, the next Compose run picks up the new active prompt automatically.
+// ============================================================
+function PromptProposalPanel({reviewId}: {reviewId: string | null}) {
+  const [busy, setBusy] = useState(false);
+  const [latest, setLatest] = useState<any>(null);   // latest proposal row for this review
+  const [allPending, setAllPending] = useState<any[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [previewing, setPreviewing] = useState<any>(null);
+
+  useEffect(() => {
+    if (!reviewId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const proposals = await api.listProposals();
+        if (cancelled) return;
+        const forReview = proposals.find((p: any) => p.review_id === reviewId);
+        setLatest(forReview ?? null);
+        setAllPending(proposals.filter((p: any) => p.status === "pending"));
+      } catch {/* ignore */}
+    })();
+    return () => { cancelled = true; };
+  }, [reviewId]);
+
+  async function propose() {
+    if (!reviewId) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await api.feedbackProposeFromReview(reviewId);
+      if (r.skipped) {
+        setErr(`LLM 认为暂不需要改 prompt: ${r.reason}`);
+      } else {
+        setLatest(r as any);
+      }
+      const proposals = await api.listProposals();
+      setAllPending(proposals.filter((p: any) => p.status === "pending"));
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function decide(proposalId: string, action: "approve" | "reject") {
+    setBusy(true);
+    try {
+      if (action === "approve") {
+        const r = await api.approveProposal(proposalId);
+        alert(`✅ 已升级到 ${r.new_active_version} — 下次 Compose 自动用新 prompt。`);
+      } else {
+        await api.rejectProposal(proposalId);
+      }
+      // Reload.
+      const proposals = await api.listProposals();
+      const forReview = proposals.find((p: any) => p.review_id === reviewId);
+      setLatest(forReview ?? null);
+      setAllPending(proposals.filter((p: any) => p.status === "pending"));
+      setPreviewing(null);
+    } catch (e: any) {
+      alert("失败: " + e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadPreview(proposalId: string) {
+    try {
+      const p = await api.getProposal(proposalId);
+      setPreviewing(p);
+    } catch (e: any) {
+      alert("加载 prompt 详情失败: " + e.message);
+    }
+  }
+
+  return (
+    <div style={{marginTop: 16, padding: 14, background: "#f7f9fc",
+                 borderRadius: 8, border: "1px solid #c8d6e5"}}>
+      <div className="spread" style={{alignItems: "flex-start"}}>
+        <div>
+          <h3 style={{margin: 0}}>🔧 据此改 Prompt（自学习闭环）</h3>
+          <div className="muted" style={{fontSize: 12, marginTop: 4}}>
+            让 LLM 看完这轮复盘，提一份对当前出稿 prompt 的最小可行修改建议。
+            <b>人工 approve 才会生效</b>，下次 Compose 自动用新版本。
+          </div>
+        </div>
+        {!latest && (
+          <button onClick={propose} disabled={busy || !reviewId}
+            style={{whiteSpace: "nowrap"}}>
+            {busy ? "🤖 提议中…" : "🪄 生成 Prompt 改进建议"}
+          </button>
+        )}
+      </div>
+
+      {err && (
+        <div className="banner info" style={{marginTop: 10, fontSize: 12}}>{err}</div>
+      )}
+
+      {latest && (
+        <div style={{marginTop: 12, padding: 12, background: "#fff", borderRadius: 6}}>
+          <div className="spread" style={{alignItems: "baseline"}}>
+            <div>
+              <b style={{fontSize: 14}}>
+                {latest.parent_version} → {latest.proposed_version}
+              </b>
+              <span className="muted" style={{fontSize: 11, marginLeft: 8}}>
+                状态 ：{latest.status}
+              </span>
+            </div>
+            {latest.status === "pending" && (
+              <div className="row" style={{gap: 6}}>
+                <button className="ghost" onClick={() => loadPreview(latest.proposal_id)}
+                  style={{fontSize: 12, padding: "4px 10px"}}>查看完整 prompt</button>
+                <button onClick={() => decide(latest.proposal_id, "approve")} disabled={busy}
+                  style={{fontSize: 12, padding: "4px 10px"}}>✓ Approve</button>
+                <button className="ghost" onClick={() => decide(latest.proposal_id, "reject")} disabled={busy}
+                  style={{fontSize: 12, padding: "4px 10px", color: "var(--danger)"}}>✗ Reject</button>
+              </div>
+            )}
+          </div>
+          <div style={{marginTop: 8, fontSize: 13}}>{latest.diff_summary}</div>
+          {latest.expected_gain && (
+            <div style={{marginTop: 6, fontSize: 12, color: "#0a7"}}>
+              📈 <b>预期 ：</b>{latest.expected_gain}
+            </div>
+          )}
+          {latest.evidence?.length > 0 && (
+            <details style={{marginTop: 8, fontSize: 12}}>
+              <summary style={{cursor: "pointer"}}>📚 LLM 引用的复盘证据 ({latest.evidence.length})</summary>
+              <ul style={{marginLeft: 18, marginTop: 4}}>
+                {latest.evidence.map((e: any, i: number) => (
+                  <li key={i} style={{marginBottom: 4}}>
+                    <b>{e.signal}</b> → {e.why_changes_prompt}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+          {previewing && previewing.proposal_id === latest.proposal_id && (
+            <div style={{marginTop: 10, padding: 10, background: "#f0f4f8", borderRadius: 4}}>
+              <div className="muted" style={{fontSize: 11, marginBottom: 4}}>完整新 prompt：</div>
+              <pre style={{whiteSpace: "pre-wrap", fontSize: 11, lineHeight: 1.5, margin: 0}}>
+                {previewing.proposed_prompt}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+
+      {allPending.length > (latest ? 1 : 0) && (
+        <details style={{marginTop: 10, fontSize: 12}}>
+          <summary style={{cursor: "pointer"}}>
+            还有 {allPending.length - (latest ? 1 : 0)} 个未决建议来自其它复盘
+          </summary>
+          <ul style={{marginLeft: 18, marginTop: 4}}>
+            {allPending.filter(p => p.proposal_id !== latest?.proposal_id).map(p => (
+              <li key={p.proposal_id} style={{marginBottom: 4}}>
+                <code>{p.parent_version} → {p.proposed_version}</code> · {p.diff_summary}
+                <button className="ghost" onClick={() => decide(p.proposal_id, "approve")}
+                  disabled={busy} style={{fontSize: 11, marginLeft: 8, padding: "1px 6px"}}>approve</button>
+                <button className="ghost" onClick={() => decide(p.proposal_id, "reject")}
+                  disabled={busy} style={{fontSize: 11, marginLeft: 4, padding: "1px 6px", color: "var(--danger)"}}>reject</button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   );
 }
