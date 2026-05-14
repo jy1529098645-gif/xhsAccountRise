@@ -2,7 +2,7 @@
 
 Two responsibilities:
     aggregate.py — bridge the two performance feeds (pack-level
-                   studio_strategy_performance + per-draft
+                   studio_composer_pack_performance + per-draft
                    studio_draft_performance) into one rollup view, so
                    downstream consumers don't have to know about both.
     proposals.py — turn a retrospective's `next_cycle_recommendations` into

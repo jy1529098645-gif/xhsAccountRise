@@ -263,7 +263,7 @@ def list_all_libraries() -> list[LibraryMeta]:
     return list_libraries(project_id=None)
 
 
-# v0.59.4: each library is a self-contained .db, so studio_strategies +
+# v0.59.4: each library is a self-contained .db, so studio_composer_packs +
 # studio_drafts + all other studio_* tables only exist inside the active
 # library's .db file. If user runs propose in library A then switches active
 # library to B, expand() looking up the pack_id finds nothing → 「strategy
@@ -272,7 +272,7 @@ def list_all_libraries() -> list[LibraryMeta]:
 # This helper scans every known library's .db file for a given pack_id so
 # the strategy endpoints can auto-recover by switching active library.
 def find_pack_lib_id(pack_id: str) -> str | None:
-    """Scan every library's xhs.db for a studio_strategies row matching
+    """Scan every library's xhs.db for a studio_composer_packs row matching
     pack_id. Returns the lib_id that has it, or None if absent.
 
     Quick (1-N small SQLite SELECTs); cheap to call even with 10+ libs.
@@ -291,7 +291,7 @@ def find_pack_lib_id(pack_id: str) -> str | None:
             con = sqlite3.connect(uri, uri=True)
             try:
                 cur = con.execute(
-                    "SELECT 1 FROM studio_strategies WHERE pack_id = ? LIMIT 1",
+                    "SELECT 1 FROM studio_composer_packs WHERE pack_id = ? LIMIT 1",
                     (pack_id,),
                 )
                 if cur.fetchone():
@@ -299,7 +299,7 @@ def find_pack_lib_id(pack_id: str) -> str | None:
             finally:
                 con.close()
         except Exception:
-            # studio_strategies table might not exist yet in this lib
+            # studio_composer_packs table might not exist yet in this lib
             # (pre-v0.40 lib). Skip silently.
             continue
     return None

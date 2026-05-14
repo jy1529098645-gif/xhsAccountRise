@@ -7,7 +7,7 @@ This module:
   2. Asks the LLM to analyse what worked / what didn't.
   3. Outputs a NEW strategy pack for cycle N+1, anchored on the lessons learned.
 
-The new pack is a fresh studio_strategies row, linked to the parent via
+The new pack is a fresh studio_composer_packs row, linked to the parent via
 parent_pack_id + iteration_n.
 """
 from __future__ import annotations
@@ -40,13 +40,13 @@ def save_performance(
     # Resolve library_id from the pack
     with db.connect(read_only=True) as con:
         row = con.execute(
-            "SELECT library_id FROM studio_strategies WHERE pack_id = ?",
+            "SELECT library_id FROM studio_composer_packs WHERE pack_id = ?",
             (pack_id,),
         ).fetchone()
     lib_id = row["library_id"] if row else None
     with db.connect() as con:
         con.execute(
-            "INSERT INTO studio_strategy_performance"
+            "INSERT INTO studio_composer_pack_performance"
             " (feedback_id, pack_id, project_id, library_id, created_at,"
             "  raw_notes, per_slot_json, overall_json)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -71,7 +71,7 @@ def list_performance(pack_id: str) -> list[dict[str, Any]]:
         rows = list(con.execute(
             "SELECT feedback_id, pack_id, created_at, raw_notes,"
             " per_slot_json, overall_json"
-            " FROM studio_strategy_performance"
+            " FROM studio_composer_pack_performance"
             " WHERE pack_id = ? ORDER BY created_at DESC",
             (pack_id,),
         ))
@@ -233,7 +233,7 @@ async def iterate_strategy(
     with db.connect(read_only=True) as con:
         row = con.execute(
             "SELECT input_json, pack_json, library_id, platform, iteration_n"
-            " FROM studio_strategies WHERE pack_id = ?",
+            " FROM studio_composer_packs WHERE pack_id = ?",
             (parent_pack_id,),
         ).fetchone()
     if not row:
@@ -247,7 +247,7 @@ async def iterate_strategy(
     with db.connect(read_only=True) as con:
         fb_row = con.execute(
             "SELECT raw_notes, per_slot_json, overall_json"
-            " FROM studio_strategy_performance WHERE feedback_id = ?",
+            " FROM studio_composer_pack_performance WHERE feedback_id = ?",
             (feedback_id,),
         ).fetchone()
     if not fb_row:
@@ -351,7 +351,7 @@ async def iterate_strategy(
     now = int(time.time())
     with db.connect() as con:
         con.execute(
-            "INSERT INTO studio_strategies"
+            "INSERT INTO studio_composer_packs"
             " (pack_id, library_id, platform, project_id, parent_pack_id, iteration_n,"
             "  status, created_at, updated_at, input_json, directions_json,"
             "  chosen_direction_idx, pack_json, elapsed_s)"

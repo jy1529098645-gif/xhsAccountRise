@@ -8,7 +8,7 @@ and raises CancelRequested, which the caller turns into a 'paused' DB row
 + a 'paused' response shape.
 
 For stages that finished before the cancel, partial state is checkpointed
-into the originating DB row (e.g. studio_strategies.partial_state_json).
+into the originating DB row (e.g. studio_composer_packs.partial_state_json).
 A subsequent retry of the same job (same pack_id / draft_id / etc.) reads
 the partial state and skips already-completed stages — that's the
 'resume' part of the feature.

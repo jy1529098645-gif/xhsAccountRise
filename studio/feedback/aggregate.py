@@ -2,7 +2,7 @@
 draft data even when the pack-level performance row was never explicitly saved.
 
 Why both feeds exist:
-    - studio_strategy_performance (pack-level, manual paste from operator)
+    - studio_composer_pack_performance (pack-level, manual paste from operator)
     - studio_draft_performance    (per-draft, recorded when each post's
                                     metrics come back via UI or tracking/)
 Historically these were independent. Now retrospective.py and iterate.py both
@@ -36,7 +36,7 @@ def rollup_for_pack(pack_id: str) -> dict[str, Any]:
 
     with db.connect(read_only=True) as con:
         prow = con.execute(
-            "SELECT pack_json, library_id FROM studio_strategies WHERE pack_id = ?",
+            "SELECT pack_json, library_id FROM studio_composer_packs WHERE pack_id = ?",
             (pack_id,),
         ).fetchone()
         if not prow or not prow["pack_json"]:
@@ -49,7 +49,7 @@ def rollup_for_pack(pack_id: str) -> dict[str, Any]:
         schedule = pack.get("schedule") or []
 
         explicit = con.execute(
-            "SELECT COUNT(*) FROM studio_strategy_performance WHERE pack_id = ?",
+            "SELECT COUNT(*) FROM studio_composer_pack_performance WHERE pack_id = ?",
             (pack_id,),
         ).fetchone()[0]
 

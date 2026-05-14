@@ -78,11 +78,13 @@ export default function App() {
         </div>
         <ProjectPicker />
         <NavLink to="/reports" className={({isActive}) => isActive ? "active" : ""}>📊 分析报告 <span style={{fontSize: 10, color: "var(--muted)"}}>第 1 步</span></NavLink>
-        <NavLink to="/strategy" className={({isActive}) => isActive ? "active" : ""}>🚀 起号策略 <span style={{fontSize: 10, color: "var(--muted)"}}>第 2 步</span></NavLink>
-        <NavLink to="/composer" className={({isActive}) => isActive ? "active" : ""}>✍️ 出稿 <span style={{fontSize: 10, color: "var(--muted)"}}>第 3 步</span></NavLink>
-        <NavLink to="/retrospective" className={({isActive}) => isActive ? "active" : ""}>📊 复盘 <span style={{fontSize: 10, color: "var(--muted)"}}>第 4 步</span></NavLink>
+        {/* v0.62.5 ：「起号策略」一级入口下沉为「出稿（含 4 步策略 wizard）」+「策略时间线」二级入口。
+            旧 /strategy 一级位置已合并到 /composer。/strategy 现在只看 pack 历史 + 单 pack 大纲。 */}
+        <NavLink to="/composer" className={({isActive}) => isActive ? "active" : ""}>✍️ 出稿 <span style={{fontSize: 10, color: "var(--muted)"}}>第 2 步 · 含起号策略 wizard</span></NavLink>
+        <NavLink to="/retrospective" className={({isActive}) => isActive ? "active" : ""}>📊 复盘 <span style={{fontSize: 10, color: "var(--muted)"}}>第 3 步</span></NavLink>
         <NavLink to="/dashboard" className={({isActive}) => isActive ? "active" : ""}>🗂️ 数据总览</NavLink>
         <RunningJobsIndicator />
+        <NavLink to="/strategy" className={({isActive}) => isActive ? "active" : ""}>📋 策略时间线（pack 浏览）</NavLink>
         <NavLink to="/analysis" className={({isActive}) => isActive ? "active" : ""}>🧬 爆款分析（粗粒度）</NavLink>
         <NavLink to="/drafts" className={({isActive}) => isActive ? "active" : ""}>📝 历史出稿</NavLink>
         <NavLink to="/settings" className={({isActive}) => isActive ? "active" : ""}>⚙️ 设置</NavLink>

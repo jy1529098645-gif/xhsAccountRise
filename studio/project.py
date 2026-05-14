@@ -259,14 +259,14 @@ def hard_delete(project_id: str) -> dict[str, int]:
     # Tables that have a project_id column. Delete by exact match — never
     # cascade across other projects.
     cascading_tables = [
-        "studio_strategies",
+        "studio_composer_packs",
         "studio_drafts",
         "studio_my_posts",
         "studio_dna_artifacts",
         "studio_insight_reports",
         "studio_external_reports",
         "studio_integrated_reports",
-        "studio_strategy_performance",
+        "studio_composer_pack_performance",
         "studio_retrospective_reports",
         "studio_draft_performance",
     ]
@@ -283,7 +283,7 @@ def hard_delete(project_id: str) -> dict[str, int]:
             (project_id,),
         ).fetchall()]
         pack_ids = [r[0] for r in con.execute(
-            "SELECT pack_id FROM studio_strategies WHERE project_id = ?",
+            "SELECT pack_id FROM studio_composer_packs WHERE project_id = ?",
             (project_id,),
         ).fetchall()]
 
@@ -375,7 +375,7 @@ def ensure_bootstrap() -> None:
     #    业务表里的孤儿行，跟全局 studio_projects 无关）
     db.apply_migrations(verbose=False)
     with db.connect() as con:
-        for tbl in ("studio_drafts", "studio_strategies",
+        for tbl in ("studio_drafts", "studio_composer_packs",
                     "studio_my_posts", "studio_dna_artifacts"):
             try:
                 con.execute(

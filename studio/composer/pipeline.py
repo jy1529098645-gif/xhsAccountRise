@@ -199,7 +199,7 @@ async def propose(inp: AccountInput, positioner_spec: str = "openai:gpt-4o") -> 
     pid = _project.active_project_id()
     with db.connect() as con:
         con.execute(
-            "INSERT INTO studio_strategies"
+            "INSERT INTO studio_composer_packs"
             " (pack_id, library_id, platform, created_at, updated_at, status,"
             "  input_json, directions_json, elapsed_s, project_id, goal_type)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -372,7 +372,7 @@ async def propose_stream(
     pid = _project.active_project_id()
     with db.connect() as con:
         con.execute(
-            "INSERT INTO studio_strategies"
+            "INSERT INTO studio_composer_packs"
             " (pack_id, library_id, platform, created_at, updated_at, status,"
             "  input_json, directions_json, elapsed_s, project_id, goal_type)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -532,13 +532,13 @@ async def expand(
     """Phase 2: turn N chosen directions into a full StrategyPack."""
     db.apply_migrations(verbose=False)
     t0 = time.time()
-    # v0.59.4: studio_strategies lives inside the active library's .db file,
+    # v0.59.4: studio_composer_packs lives inside the active library's .db file,
     # so a pack created in lib A becomes invisible once user switches active
     # lib to B. Auto-recover: if not found in active lib, scan all libs.
     with db.connect(read_only=True) as con:
         row = con.execute(
             "SELECT input_json, directions_json, library_id, platform"
-            " FROM studio_strategies WHERE pack_id = ?", (pack_id,),
+            " FROM studio_composer_packs WHERE pack_id = ?", (pack_id,),
         ).fetchone()
     if not row:
         # Search every library for this pack_id; if found, switch active lib
@@ -553,7 +553,7 @@ async def expand(
             with db.connect(read_only=True) as con:
                 row = con.execute(
                     "SELECT input_json, directions_json, library_id, platform"
-                    " FROM studio_strategies WHERE pack_id = ?", (pack_id,),
+                    " FROM studio_composer_packs WHERE pack_id = ?", (pack_id,),
                 ).fetchone()
     if not row:
         raise LookupError(f"strategy pack not found: {pack_id}")
@@ -609,7 +609,7 @@ async def expand(
         try:
             with db.connect() as con:
                 con.execute(
-                    "UPDATE studio_strategies"
+                    "UPDATE studio_composer_packs"
                     " SET partial_state_json = NULL, paused_at_stage = NULL,"
                     " status = 'directions', updated_at = ?"
                     " WHERE pack_id = ?",
@@ -620,7 +620,7 @@ async def expand(
 
     with db.connect(read_only=True) as con:
         cur_row = con.execute(
-            "SELECT status, updated_at FROM studio_strategies WHERE pack_id = ?",
+            "SELECT status, updated_at FROM studio_composer_packs WHERE pack_id = ?",
             (pack_id,),
         ).fetchone()
     if cur_row and cur_row["status"] == "expanding" and not restart:
@@ -638,7 +638,7 @@ async def expand(
     # chosen_direction_idx so old readers still work.
     with db.connect() as con:
         con.execute(
-            "UPDATE studio_strategies"
+            "UPDATE studio_composer_packs"
             " SET status='expanding', chosen_direction_idx=?,"
             " chosen_direction_idxs=?, updated_at=? WHERE pack_id=?",
             (chosen_idxs[0], json.dumps(chosen_idxs),
@@ -666,7 +666,7 @@ async def expand(
         try:
             with db.connect() as con:
                 con.execute(
-                    "UPDATE studio_strategies SET status='paused',"
+                    "UPDATE studio_composer_packs SET status='paused',"
                     " updated_at=? WHERE pack_id=?",
                     (int(time.time()), pack_id),
                 )
@@ -681,7 +681,7 @@ async def expand(
         try:
             with db.connect() as con:
                 con.execute(
-                    "UPDATE studio_strategies SET status='expand_failed',"
+                    "UPDATE studio_composer_packs SET status='expand_failed',"
                     " updated_at=?, trace_json=?"
                     " WHERE pack_id=?",
                     (int(time.time()), json.dumps({"error": repr(e)}), pack_id),
@@ -715,7 +715,7 @@ async def _expand_inner(
                 # Merge into existing partial_state_json so each stage adds
                 # its own chunk (topicgen / scheduler / drafter / resourcer).
                 row = con.execute(
-                    "SELECT partial_state_json FROM studio_strategies WHERE pack_id=?",
+                    "SELECT partial_state_json FROM studio_composer_packs WHERE pack_id=?",
                     (pack_id,),
                 ).fetchone()
                 cur = {}
@@ -724,7 +724,7 @@ async def _expand_inner(
                     except Exception: cur = {}
                 cur[stage] = payload
                 con.execute(
-                    "UPDATE studio_strategies SET partial_state_json=?,"
+                    "UPDATE studio_composer_packs SET partial_state_json=?,"
                     " paused_at_stage=?, updated_at=? WHERE pack_id=?",
                     (json.dumps(cur, ensure_ascii=False), stage, int(time.time()), pack_id),
                 )
@@ -735,7 +735,7 @@ async def _expand_inner(
         try:
             with db.connect(read_only=True) as con:
                 row = con.execute(
-                    "SELECT partial_state_json FROM studio_strategies WHERE pack_id=?",
+                    "SELECT partial_state_json FROM studio_composer_packs WHERE pack_id=?",
                     (pack_id,),
                 ).fetchone()
             if row and row["partial_state_json"]:
@@ -748,7 +748,7 @@ async def _expand_inner(
         try:
             with db.connect() as con:
                 con.execute(
-                    "UPDATE studio_strategies SET partial_state_json=NULL,"
+                    "UPDATE studio_composer_packs SET partial_state_json=NULL,"
                     " paused_at_stage=NULL WHERE pack_id=?", (pack_id,))
         except Exception:
             pass
@@ -1278,7 +1278,7 @@ async def _expand_inner(
 
     with db.connect() as con:
         con.execute(
-            "UPDATE studio_strategies SET status=?, chosen_direction_idx=?,"
+            "UPDATE studio_composer_packs SET status=?, chosen_direction_idx=?,"
             " pack_json=?, updated_at=?, elapsed_s=?,"
             " partial_state_json=NULL, paused_at_stage=NULL"
             " WHERE pack_id=?",

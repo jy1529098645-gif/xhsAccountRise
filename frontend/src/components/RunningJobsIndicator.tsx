@@ -4,9 +4,10 @@ import { useJobsList, cancelJob, clearJob } from "../lib/jobs";
 const KIND_TO_LINK: Record<string, { label: string; to: string; emoji: string }> = {
   compose:        { emoji: "✍️", label: "出稿",   to: "/composer" },
   insight:        { emoji: "📊", label: "分析报告", to: "/reports" },
-  expand:         { emoji: "🚀", label: "起号策略", to: "/strategy" },
-  propose:        { emoji: "🚀", label: "起号策略", to: "/strategy" },
-  autofill:       { emoji: "🪄", label: "拟初稿",   to: "/strategy" },
+  // v0.62.5 ：wizard 全部并入 Composer — 这三类 job 都从 /composer 触发
+  expand:         { emoji: "🚀", label: "起号策略", to: "/composer" },
+  propose:        { emoji: "🚀", label: "起号策略", to: "/composer" },
+  autofill:       { emoji: "🪄", label: "拟初稿",   to: "/composer" },
   retrospective: { emoji: "📊", label: "复盘",     to: "/retrospective" },
   integrate:     { emoji: "🪄", label: "整合报告", to: "/reports" },
 };

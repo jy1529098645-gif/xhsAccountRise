@@ -39,8 +39,8 @@ from ..agents import pipeline as agent_pipeline
 from ..analysis import extract_dna, promote_hooks, render_report
 from ..brief import Brief
 from ..rag import build_index, retrieve
-from ..strategy import pipeline as strategy_pipeline
-from ..strategy.models import AccountInput
+from ..composer import pipeline as strategy_pipeline
+from ..composer.models import AccountInput
 from ..insight import pipeline as insight_pipeline
 from ..insight import external as external_reports
 from .. import retrospective as retro
@@ -1073,7 +1073,7 @@ class StrategyInput(BaseModel):
     # the pack so the Strategy page can show real calendar dates per slot.
     cycle_start_date: str = ""
     # v0.59: 8 大起号目标分类 — 决定 voice / 阶段权重 / 产品上下文必需性。
-    # 见 studio.strategy.goals.GOAL_TYPES。Empty = 通用（兼容旧客户端）。
+    # 见 studio.composer.goals.GOAL_TYPES。Empty = 通用（兼容旧客户端）。
     goal_type: str = ""
     # v0.61.5: 启动阶段倾向 — "" / "auto" = AI 自决；"cold" = 0 粉冷启动；
     # "warm" = 已有粉丝/资源热启动；"hybrid" = 混合渐进。
@@ -1108,12 +1108,14 @@ class StrategyAutofillRequest(BaseModel):
 
 
 # v0.59 ：起号目标分类列表（前端 GoalPicker 用这个）
+@app.get("/api/composer/strategy/goals")
 @app.get("/api/strategy/goals")
 def strategy_goals_list() -> list[dict[str, Any]]:
-    from ..strategy.goals import list_goals_as_dicts
+    from ..composer.goals import list_goals_as_dicts
     return list_goals_as_dicts()
 
 
+@app.post("/api/composer/strategy/autofill")
 @app.post("/api/strategy/autofill")
 async def strategy_autofill(req: StrategyAutofillRequest) -> dict[str, Any]:
     """AI multi-agent debate to produce a starter brief from the DB.
@@ -1122,7 +1124,7 @@ async def strategy_autofill(req: StrategyAutofillRequest) -> dict[str, Any]:
     so the frontend can show the form with intelligent defaults that the user
     can then edit (not the other way around).
     """
-    from ..strategy import autofill as _af
+    from ..composer import autofill as _af
     try:
         return await _af.autofill(
             personal_hint=req.personal_hint,
@@ -1136,6 +1138,7 @@ async def strategy_autofill(req: StrategyAutofillRequest) -> dict[str, Any]:
         raise HTTPException(409, str(e))
 
 
+@app.post("/api/composer/strategy/propose")
 @app.post("/api/strategy/propose")
 async def strategy_propose(req: StrategyInput) -> dict[str, Any]:
     plat = req.platform
@@ -1165,6 +1168,7 @@ async def strategy_propose(req: StrategyInput) -> dict[str, Any]:
     return result
 
 
+@app.post("/api/composer/strategy/propose/stream")
 @app.post("/api/strategy/propose/stream")
 async def strategy_propose_stream(req: StrategyInput):
     """Same as /api/strategy/propose but streams the LLM's output via SSE.
@@ -1197,6 +1201,7 @@ async def strategy_propose_stream(req: StrategyInput):
     )
 
 
+@app.post("/api/composer/strategy/{pack_id}/expand")
 @app.post("/api/strategy/{pack_id}/expand")
 async def strategy_expand(pack_id: str, req: StrategyExpandRequest) -> dict[str, Any]:
     try:
@@ -1221,6 +1226,7 @@ async def strategy_expand(pack_id: str, req: StrategyExpandRequest) -> dict[str,
         raise
 
 
+@app.get("/api/composer/strategy")
 @app.get("/api/strategy")
 def list_strategies(limit: int = 30, all_projects: bool = False) -> list[dict[str, Any]]:
     project.ensure_bootstrap()
@@ -1232,7 +1238,7 @@ def list_strategies(limit: int = 30, all_projects: bool = False) -> list[dict[st
             rows = list(con.execute(
                 "SELECT pack_id, library_id, platform, created_at, updated_at,"
                 " status, input_json, chosen_direction_idx, elapsed_s, project_id"
-                " FROM studio_strategies" + where +
+                " FROM studio_composer_packs" + where +
                 " ORDER BY created_at DESC LIMIT ?",
                 (*args, limit),
             ))
@@ -1249,13 +1255,14 @@ def list_strategies(limit: int = 30, all_projects: bool = False) -> list[dict[st
     return out
 
 
+@app.get("/api/composer/strategy/{pack_id}")
 @app.get("/api/strategy/{pack_id}")
 def get_strategy(pack_id: str) -> dict[str, Any]:
     project.ensure_bootstrap()
     pid = project.active_project_id()
     with db.connect(read_only=True) as con:
         row = con.execute(
-            "SELECT * FROM studio_strategies WHERE pack_id = ?"
+            "SELECT * FROM studio_composer_packs WHERE pack_id = ?"
             " AND (project_id = ? OR project_id IS NULL)",
             (pack_id, pid),
         ).fetchone()
@@ -1271,7 +1278,7 @@ def get_strategy(pack_id: str) -> dict[str, Any]:
             db.apply_migrations(verbose=False)
             with db.connect(read_only=True) as con:
                 row = con.execute(
-                    "SELECT * FROM studio_strategies WHERE pack_id = ?"
+                    "SELECT * FROM studio_composer_packs WHERE pack_id = ?"
                     " AND (project_id = ? OR project_id IS NULL)",
                     (pack_id, pid),
                 ).fetchone()
@@ -1295,13 +1302,14 @@ def get_strategy(pack_id: str) -> dict[str, Any]:
     return d
 
 
+@app.delete("/api/composer/strategy/{pack_id}")
 @app.delete("/api/strategy/{pack_id}")
 def delete_strategy(pack_id: str) -> dict[str, str]:
     project.ensure_bootstrap()
     pid = project.active_project_id()
     with db.connect() as con:
         cur = con.execute(
-            "DELETE FROM studio_strategies WHERE pack_id = ?"
+            "DELETE FROM studio_composer_packs WHERE pack_id = ?"
             " AND (project_id = ? OR project_id IS NULL)",
             (pack_id, pid),
         )
@@ -1318,7 +1326,7 @@ def delete_strategy(pack_id: str) -> dict[str, str]:
             db.apply_migrations(verbose=False)
             with db.connect() as con:
                 cur = con.execute(
-                    "DELETE FROM studio_strategies WHERE pack_id = ?"
+                    "DELETE FROM studio_composer_packs WHERE pack_id = ?"
                     " AND (project_id = ? OR project_id IS NULL)",
                     (pack_id, pid),
                 )
@@ -1437,7 +1445,7 @@ def get_retrospective_review(review_id: str) -> dict[str, Any]:
 
 # ---------------- strategy iteration loop -------------------------------
 
-from ..strategy import iterate as _iterate  # noqa: E402
+from ..composer import iterate as _iterate  # noqa: E402
 
 
 class StrategyPerformancePayload(BaseModel):
@@ -1446,6 +1454,7 @@ class StrategyPerformancePayload(BaseModel):
     overall: dict[str, Any] = Field(default_factory=dict)
 
 
+@app.post("/api/composer/strategy/{pack_id}/performance")
 @app.post("/api/strategy/{pack_id}/performance")
 def save_strategy_performance(pack_id: str, req: StrategyPerformancePayload) -> dict[str, Any]:
     return _iterate.save_performance(
@@ -1456,6 +1465,7 @@ def save_strategy_performance(pack_id: str, req: StrategyPerformancePayload) -> 
     )
 
 
+@app.get("/api/composer/strategy/{pack_id}/performance")
 @app.get("/api/strategy/{pack_id}/performance")
 def list_strategy_performance(pack_id: str) -> list[dict[str, Any]]:
     return _iterate.list_performance(pack_id)
@@ -1466,6 +1476,7 @@ class StrategyIterateRequest(BaseModel):
     iterator_spec: str = "openai:gpt-4o"
 
 
+@app.post("/api/composer/strategy/{pack_id}/iterate")
 @app.post("/api/strategy/{pack_id}/iterate")
 async def iterate_strategy_api(pack_id: str, req: StrategyIterateRequest) -> dict[str, Any]:
     try:
