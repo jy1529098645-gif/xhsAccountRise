@@ -27,7 +27,15 @@ const ANGLES = ["教程", "痛点", "故事", "工具评测", "对比", "感悟"
 // v0.51 → v0.52: persist the user's form state across navigation. Now also
 // stores `angles` (multi-select). `angle` is kept as the primary fallback so
 // existing callers / older saved state still works.
-const COMPOSER_FORM_KEY = "studio.composer.form.v1";
+// v0.61.15 ：按项目作用域。每个项目独立保存 Composer 表单。老 key 一次性
+// 迁移到默认项目。
+const COMPOSER_FORM_KEY_BASE = "studio.composer.form.v1";
+const COMPOSER_FORM_LEGACY_KEY = "studio.composer.form.v1";
+function composerFormKey(): string {
+  let pid = "default";
+  try { pid = localStorage.getItem("studio.activeProjectId") || "default"; } catch { /* ignore */ }
+  return `${COMPOSER_FORM_KEY_BASE}.${pid}`;
+}
 interface ComposerFormState {
   topic: string; angle: string; angles: string[]; length: number;
   cta: "none" | "soft" | "strong";
@@ -39,7 +47,23 @@ const COMPOSER_FORM_DEFAULT: ComposerFormState = {
 };
 function loadComposerForm(): ComposerFormState {
   try {
-    const raw = localStorage.getItem(COMPOSER_FORM_KEY);
+    const k = composerFormKey();
+    let raw = localStorage.getItem(k);
+    if (!raw) {
+      // 一次性 ：default 项目从老 legacy key 继承
+      let pid = "default";
+      try { pid = localStorage.getItem("studio.activeProjectId") || "default"; } catch { /* ignore */ }
+      if (pid === "default") {
+        const legacy = localStorage.getItem(COMPOSER_FORM_LEGACY_KEY);
+        if (legacy && legacy !== "{}") {
+          try {
+            localStorage.setItem(k, legacy);
+            localStorage.removeItem(COMPOSER_FORM_LEGACY_KEY);
+            raw = legacy;
+          } catch { /* quota */ }
+        }
+      }
+    }
     if (!raw) return COMPOSER_FORM_DEFAULT;
     const parsed = JSON.parse(raw) as Partial<ComposerFormState>;
     const merged = { ...COMPOSER_FORM_DEFAULT, ...parsed };
@@ -107,7 +131,7 @@ export default function Composer() {
   // Persist form state on every change so navigation doesn't blow it away.
   useEffect(() => {
     try {
-      localStorage.setItem(COMPOSER_FORM_KEY, JSON.stringify({
+      localStorage.setItem(composerFormKey(), JSON.stringify({
         topic, angle: angles[0] || "教程", angles, length, cta, niche, extra, platform,
       }));
     } catch { /* quota — ignore */ }

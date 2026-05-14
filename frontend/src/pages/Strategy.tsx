@@ -68,8 +68,21 @@ const FORMAT_COLORS: Record<string, { bg: string; fg: string }> = {
   "纯文本":  { bg: "#f3f4f6", fg: "#374151" },
 };
 
-// localStorage key for in-progress brief draft (per project)
-const DRAFT_KEY = "studio.strategy.draftInput";
+// v0.61.15 ：从 localStorage 读 ProjectPicker 写入的 active project id。
+// 用作所有「项目作用域 localStorage 键」的后缀，避免跨项目串数据。
+function currentProjectId(): string {
+  try { return localStorage.getItem("studio.activeProjectId") || "default"; }
+  catch { return "default"; }
+}
+
+// In-progress brief draft — 每个项目独立一份（避免「项目 A 的 goal_type
+// 在项目 B 上还残留」）。老的全局 key 兜底迁移到 default 项目。
+const DRAFT_KEY_BASE = "studio.strategy.draftInput";
+function draftKey(): string {
+  return `${DRAFT_KEY_BASE}.${currentProjectId()}`;
+}
+// 旧版（v0.61.14 及之前）单一 key — 仅用于一次性迁移到 default。
+const LEGACY_DRAFT_KEY = "studio.strategy.draftInput";
 
 // localStorage key for the user's chosen direction per strategy pack.
 // v0.51: persists across navigation so users don't lose their pick when they
@@ -156,10 +169,24 @@ export default function Strategy() {
   // 或者从 packId URL 进来，会被 useEffect 自动调整。
   const [phase, setPhase] = useState<Phase>("goal");
   const [input, setInput] = useState<AccountInputDTO>(() => {
-    // Resume in-progress draft from localStorage if present.
+    // v0.61.15 ：每个项目独立 draft。先尝试当前项目 key；如果空 + legacy
+    // 全局 key 还存在，迁移那份到默认项目（只有 default 项目能继承旧草稿）。
     try {
-      const cached = localStorage.getItem(DRAFT_KEY);
+      const k = draftKey();
+      const cached = localStorage.getItem(k);
       if (cached) return { ...emptyInput(), ...JSON.parse(cached) };
+      const pid = currentProjectId();
+      if (pid === "default") {
+        const legacy = localStorage.getItem(LEGACY_DRAFT_KEY);
+        if (legacy) {
+          // Migrate ：写到新 key，删 legacy
+          try {
+            localStorage.setItem(k, legacy);
+            localStorage.removeItem(LEGACY_DRAFT_KEY);
+          } catch { /* ignore */ }
+          return { ...emptyInput(), ...JSON.parse(legacy) };
+        }
+      }
     } catch { /* ignore */ }
     return emptyInput();
   });
@@ -231,7 +258,7 @@ export default function Strategy() {
         // didn't fill text fields still gets their selection persisted.
         !!trimmed.goal_type;
       if (hasMeaningfulEdit) {
-        localStorage.setItem(DRAFT_KEY, JSON.stringify(trimmed));
+        localStorage.setItem(draftKey(), JSON.stringify(trimmed));
       }
     } catch { /* ignore quota etc. */ }
   }, [input, phase]);
@@ -515,7 +542,7 @@ export default function Strategy() {
       setLastFailedAction(null);
       setPhase("pack");
       navigate(`/strategy/${packId}`, { replace: true });
-      try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+      try { localStorage.removeItem(draftKey()); } catch { /* ignore */ }
       api.listStrategies().then(setHistory).catch(() => {});
     } catch (e: any) {
       // User pressed pause: just stop, don't surface as error.
@@ -543,7 +570,7 @@ export default function Strategy() {
           setLastFailedAction(null);
           setPhase("pack");
           navigate(`/strategy/${packId}`, { replace: true });
-          try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+          try { localStorage.removeItem(draftKey()); } catch { /* ignore */ }
           api.listStrategies().then(setHistory).catch(() => {});
           return;
         }
@@ -580,7 +607,7 @@ export default function Strategy() {
     setChosenIdx(null); setChosenIdxs([]); setPack(null);
     setErr(null); setInfo(null);
     setAutofill(null);
-    try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+    try { localStorage.removeItem(draftKey()); } catch { /* ignore */ }
     setInput(emptyInput());
     if (urlPackId) navigate("/strategy");
   }

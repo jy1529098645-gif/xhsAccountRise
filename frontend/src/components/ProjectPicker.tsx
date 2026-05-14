@@ -15,6 +15,10 @@ export default function ProjectPicker() {
     const r = await api.listProjects();
     setProjects(r.projects);
     setActive(r.active);
+    // v0.61.15 ：把 active 项目 id 同步到 localStorage，其它模块的本地缓存
+    // (Strategy DRAFT / autofill / propose 缓存 / Composer form 等) 按这个
+    // id 拼成项目作用域的 storage key，避免跨项目串数据。
+    try { localStorage.setItem("studio.activeProjectId", r.active); } catch { /* quota */ }
   }
   useEffect(() => { load(); }, []);
 
@@ -22,6 +26,7 @@ export default function ProjectPicker() {
     setBusy(true);
     try {
       await api.activateProject(pid);
+      try { localStorage.setItem("studio.activeProjectId", pid); } catch { /* quota */ }
       // Force a hard reload so every page re-reads its scoped data.
       window.location.reload();
     } catch (e: any) {
@@ -37,6 +42,7 @@ export default function ProjectPicker() {
       const r = await api.createProject(newName.trim(), "", newEmoji);
       setNewName(""); setCreating(false);
       await api.activateProject(r.project_id);
+      try { localStorage.setItem("studio.activeProjectId", r.project_id); } catch { /* quota */ }
       window.location.reload();
     } catch (e: any) {
       alert("创建失败：" + e.message);

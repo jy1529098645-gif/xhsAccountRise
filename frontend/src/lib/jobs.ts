@@ -41,7 +41,17 @@ const _listeners = new Set<() => void>();
 // quit doesn't drop the last compose / autofill / insight output. We only
 // persist the result + meta, not the live Promise/AbortController.
 
-const _LS_KEY = "studio.jobs.done.v1";
+// v0.61.15 ：按项目作用域拼 key。ProjectPicker 把 active project id 写进
+// localStorage.studio.activeProjectId。切项目 → 拿到不同的 jobs 历史，避免
+// 「项目 A 跑过的 autofill 在项目 B 上又自动 hydrate 出来」。
+const _LS_KEY_BASE = "studio.jobs.done.v1";
+function _lsKey(): string {
+  let pid = "default";
+  try { pid = localStorage.getItem("studio.activeProjectId") || "default"; } catch { /* ignore */ }
+  return `${_LS_KEY_BASE}.${pid}`;
+}
+// 旧版（v0.61.14 及之前）单一全局 key — 仅一次性迁到 default。
+const _LS_LEGACY_KEY = "studio.jobs.done.v1";
 const _LS_MAX_ENTRIES = 16;
 const _LS_MAX_RESULT_KB = 256;  // cap each result blob
 
@@ -76,13 +86,29 @@ function _persistDone() {
     }
     // Keep the newest N
     out.sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0));
-    localStorage.setItem(_LS_KEY, JSON.stringify(out.slice(0, _LS_MAX_ENTRIES)));
+    localStorage.setItem(_lsKey(), JSON.stringify(out.slice(0, _LS_MAX_ENTRIES)));
   } catch { /* quota / serialize failure — accept it */ }
 }
 
 function _hydrate() {
   try {
-    const raw = localStorage.getItem(_LS_KEY);
+    let raw = localStorage.getItem(_lsKey());
+    if (!raw) {
+      // 一次性 ：default 项目从 legacy 全局 key 继承（其它项目不继承 —
+      // 否则会跨项目串数据）。
+      let pid = "default";
+      try { pid = localStorage.getItem("studio.activeProjectId") || "default"; } catch { /* ignore */ }
+      if (pid === "default") {
+        const legacy = localStorage.getItem(_LS_LEGACY_KEY);
+        if (legacy && legacy !== "[]" && legacy.length > 2) {
+          try {
+            localStorage.setItem(_lsKey(), legacy);
+            localStorage.removeItem(_LS_LEGACY_KEY);
+            raw = legacy;
+          } catch { /* quota */ }
+        }
+      }
+    }
     if (!raw) return;
     const items: PersistedJob[] = JSON.parse(raw) || [];
     for (const p of items) {
