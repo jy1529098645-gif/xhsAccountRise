@@ -51,26 +51,24 @@ def dna_blurb(dna: dict[str, Any]) -> str:
         for b, d in body_buckets.items()
     ]
 
-    # v0.56: humor / meme / 夸张戏谑 signal — let the LLM see the data and
-    # decide whether this voice is worth using for this corpus. Default
-    # taxonomy (教程/痛点/故事...) has no provision for 段子风, so without
-    # this block the generated drafts will systematically skew toward
-    # 学姐型干货.
+    # v0.56: humor / meme / 夸张戏谑 signal.
+    # v0.60: 提供数据，不写死「X% slot 必须段子风」。让 LLM 看数据 + goal +
+    # 产品类型 自己判断。
     humor = sections.get("humor_signals", {}) or {}
     humor_lines: list[str] = []
     if humor and humor.get("n_notes"):
         prev = humor.get("prevalence", 0)
         lift = humor.get("lift", 0)
         humor_lines.append(
-            f"  · 笑点/梗/夸张元素 覆盖率 ：{prev:.1%}（{humor.get('n_humor', 0)}/{humor.get('n_notes')} 篇高赞）"
+            f"  · 笑点/梗/夸张/沙雕元素 覆盖率 ：{prev:.1%}（{humor.get('n_humor', 0)}/{humor.get('n_notes')} 篇高赞）"
         )
         humor_lines.append(
-            f"  · 笑点笔记均赞 vs 全库均赞 ：{humor.get('humor_avg_likes', 0)} vs"
+            f"  · 笑点笔记均赞 vs 全库 ：{humor.get('humor_avg_likes', 0)} vs"
             f" {humor.get('overall_avg_likes', 0)}（lift {lift:.2f}x）"
         )
         # Top category breakdown
         by_cat = humor.get("by_category", {}) or {}
-        top_cats = sorted(by_cat.items(), key=lambda kv: -kv[1].get("n", 0))[:4]
+        top_cats = sorted(by_cat.items(), key=lambda kv: -kv[1].get("n", 0))[:5]
         if top_cats:
             humor_lines.append("  · 笑点类别分布 ：")
             for c, d in top_cats:
@@ -81,29 +79,30 @@ def dna_blurb(dna: dict[str, Any]) -> str:
         # Top concrete examples — these are what LLM should anchor on
         top_titles = humor.get("top_humor_titles", [])[:5]
         if top_titles:
-            humor_lines.append("  · 经典笑点标题（学习这些套路）：")
+            humor_lines.append("  · 经典笑点标题（学习这些 hook 套路，不是逐字抄）：")
             for t in top_titles:
                 humor_lines.append(
                     f"      · [{t['liked_count']}] {trim(t['title'], 60)}"
                     f"  ← {'/'.join(t['categories'])}"
                 )
-        # 阈值建议：让 LLM 据数据自己决定
-        if prev > 0.25 and lift > 1.05:
+        # v0.60: 不写死 X% 硬比例，只给数据 + 一句话方向
+        if prev > 0.20 and lift > 1.05:
             humor_lines.append(
-                "  · ⚠️ 该库笑点信号强（prevalence>25% 且 lift>1.05），"
-                "建议 30-40% slot 走「段子 / 反讽 / 夸张戏谑」风（合规闸门兜底）"
+                f"  · 💡 该库笑点信号显著（{prev:.1%} 覆盖 / lift {lift:.2f}x）— "
+                "建议大胆混入段子/沙雕/反讽/玩梗 hook，**不要被产品类目的「专业感」voice 框死**。"
+                "排期里看到合适的位置就用，具体几条你定。"
             )
-        elif prev > 0.10 and lift > 1.0:
+        elif prev > 0.10 and lift >= 1.0:
             humor_lines.append(
-                "  · 该库笑点信号中等，可在 15-25% slot 尝试段子风，混搭主流干货"
+                f"  · 该库笑点信号中等（{prev:.1%} 覆盖），可酌情混入段子风，做内容多样化。"
             )
         else:
             humor_lines.append(
-                "  · 该库笑点信号弱，主打干货 / 共鸣 / 教程为佳"
+                f"  · 该库笑点信号偏弱（{prev:.1%} 覆盖），段子风风险较高，主走干货/共鸣即可。"
             )
 
-    # v0.57: content_format distribution — 让 SCHEDULER 知道这个库实际是
-    # 图文/短视频/长视频/纯文本 哪种为主，而不是按 platform 硬塞 70/30。
+    # v0.57: content_format distribution.
+    # v0.60: 给数据 + 一句话方向，不硬约束 X% 比例。
     cf = sections.get("content_format", {}) or {}
     cf_lines: list[str] = []
     if cf and cf.get("n_notes"):
@@ -120,13 +119,11 @@ def dna_blurb(dna: dict[str, Any]) -> str:
         dom_prev = cf.get("dominant_prevalence", 0)
         if dom_prev > 0.8:
             cf_lines.append(
-                f"  · ⚠️ 主形式占比 >80%，排期里 75-85% 用 {cf.get('dominant_format')}，"
-                f"剩下 15-20% 强制次要形式（多样性）"
+                f"  · 💡 主形式 {cf.get('dominant_format')} 占 >80%，建议主力出该形式，"
+                "穿插少量其它形式保持多样化。**具体比例你自己定**。"
             )
-        elif dom_prev > 0.6:
-            cf_lines.append("  · 主形式占 60-80%，按数据大致比例排即可")
         else:
-            cf_lines.append("  · 主形式占比 <60%，完全按数据真实比例排")
+            cf_lines.append("  · 💡 数据呈现的真实形式分布，你据此 + 内容主题选择合适的 content_format。")
 
     parts = []
     if bo_lines: parts.append("【蓝海关键词】\n" + "\n".join(bo_lines))
@@ -214,14 +211,12 @@ TOPICGEN_SYSTEM = """\
 约束：
 - 选题数量 = cycle_weeks × posts_per_week
 - 主题之间有变化，不要 N 个都是同一个角度
-- hook 类型要混搭，不要全部数字型
-- 至少 30% 选题来自 DNA 里的「用户高频询问」（直接回应需求）
+- hook 类型要混搭
+- 30%+ 选题来自 DNA 里的「用户高频询问」（直接回应真实需求 = 拉新最快）
 - 至少 1 个选题用 DNA 里的「蓝海关键词」
-- ⚠️ 笑点权重 ：看 DNA 里【笑点/梗/夸张信号】section：
-    - prevalence > 25% 且 lift > 1.05 → 30-40% 选题走 段子/反讽/夸张戏谑/自嘲/玩梗 风
-    - prevalence 10-25% 且 lift > 1.0 → 15-25% 走段子风
-    - prevalence < 10% 或 lift < 1.0 → 几乎不出段子，0-5% 即可
-    - 段子稿仍要给真干货，标题段子化 + 正文可执行；不写纯沙雕
+- 笑点/沙雕/玩梗 hook：看 DNA 笑点信号 + goal_type 自己判断比例。
+  信号强（prevalence > 20%, lift > 1.05）就大胆混入；弱就少用。
+  不写死 X%，你看数据决定。
 
 输出 JSON：
 {
@@ -243,53 +238,59 @@ TOPICGEN_SYSTEM = """\
 # ---- Scheduler ----------------------------------------------------------
 
 SCHEDULER_SYSTEM = """\
-你是「内容排期师」。把多家 LLM 起草的选题候选融合、去重、排成可执行的周历。
+你是「起号总规划师」。**你不是机械填模板的工具，你是策略大脑**。
+给你一组数据 + 经验规律 + 底线，你的任务是综合判断 + 输出 schedule + 解释你的策略思路。
 
-输入：
-- N 家 LLM 各自产的 topics 列表（合起来可能有 50+ 条候选）
-- 周期 = cycle_weeks 周，每周 posts_per_week 篇
-- 该平台 DNA 的发布时段热力图（如果有）
-- 上一步双 AI 共识报告 + 用户整合 / 上传的外部报告（如有）—— **务必当强参考使用**
+**输入**：
+- N 家 LLM 起草的选题候选（融合用）
+- 周期 = cycle_weeks 周 × posts_per_week 篇
+- 该平台 DNA（标题钩子分布 / 高赞标题 / 笑点信号 / 评论高频询问 / 内容形式真实比例 / 发布时段热力图）
+- 用户外部报告（如有，强参考）
+- 产品上下文（如有）+ 起号目标 goal_type
+- 经验性的 4 阶段规律（拉新 → 专业感 → 沉淀 → 转化）
 
-任务：
-1. 跨家**融合**：取每家最强的选题，能合并的合并，重复的去重，保留覆盖度最广的一批。
-2. **排进时间**：按 4 阶段曲线安排
-   - 第 1 周：拉新（强 hook + 痛点 + 干货）
-   - 第 2 周：建立专业感 + 互动
-   - 第 3 周往后：沉淀 + 转化（产品/服务/私域）
-3. 给每周一个**主题**和**意图**。
-4. 给每个 slot 一个**发布时段建议** + **publish_rationale 解释为什么这个时段**：
-   - 从 DNA 热力图 top 时段里选，但**不要全部塞同一个时段**
-   - 内容类型 vs 时段的匹配（重要 ：这是 per-slot 差异化优势）：
-     · 痛点情绪/共鸣类 → 21:00-23:00（睡前用户最容易共情）
-     · 工具教程/操作类 → 13:00-16:00（午休 / 课间 / 划水时段）
-     · 故事种草/对比测评 → 周末 10:00-12:00（早午饭闲刷）
-     · 干货长文/方法论 → 周二/周四 20:00-22:00（晚饭后认真看时段）
-     · 紧急 DDL/急救类 → 凌晨 2:00-4:00 + 早 9:00-11:00（DDL 战士）
-   - publish_rationale 必须 ≤ 30 字，说清为什么这个时段适合这类内容
-   - 示例 ：「教程类 13-16 点是上班划水黄金期，DNA 热力图本时段中位赞 +40%」
-5. **每篇必须指定 content_format**（图文 / 短视频 / 长视频 / 直播 / 纯文本），按平台特性混搭。
+**你的工作**：
 
-**content_format 配比 — 数据驱动**（v0.57：硬编码 platform 比例已废弃）：
-读 DNA 里的【内容形式分布】section，按真实库的 `by_format` 数据排：
-  · dominant_prevalence > 80% → 主形式占 75-85%，次要形式强制保 15-20%（多样性，避免单一形式疲劳）
-  · 60% < dominant_prevalence ≤ 80% → 大致按数据比例排
-  · dominant_prevalence ≤ 60% → 完全按数据比例排
+1. 跨家融合选题候选，去重、补缺。
 
-⚠️ 关键 ：**不要再按 platform 硬塞 70/30** — 即使是 xhs，AcademiCats 库 99.7% 图文，强行加 30% 短视频会逼运营拍他根本不会拍的视频。
-真实数据说什么形式 work，就用什么。
+2. 写 schedule — 这是你做综合判断的核心：
+   - **节奏**：参考 4 阶段经验规律，但据 DNA / goal_type / 产品类型自己调整。
+     说人话 ：通用规律说「拉新期弱化产品」是因为陌生人不吃硬广，但如果你的产品本身是日常工具 / goal=情感号 / 笑点信号显著，
+     你应该有自己的判断。在 decision_rationale 里说清你为什么这么排。
+   - **角度混搭**：教程 / 痛点 / 故事 / 段子 / 沙雕 / 玩梗 / 科普 等都该有。
+     如果 DNA 笑点信号显著（看上面 humor block），**大胆把段子/沙雕 hook 混入排期** —
+     不要被 "产品/SaaS voice 偏专业" 框死，反差感本身就是该库爆款套路。
+   - **content_format**：参考 DNA 真实分布选，但保多样性（不要 100% 同一格式 → 用户疲劳）。
+     具体比例你定，不强求 X%。
 
-候选 content_format 值 ：图文 / 短视频 / 长视频 / 直播 / 纯文本
+3. 每个 slot 配发布时段 + publish_rationale ≤ 30 字解释 ：
+   - 痛点情绪类 → 21:00-23:00（睡前共情）
+   - 工具教程类 → 13:00-16:00（划水时段）
+   - 故事种草类 → 周末 10:00-12:00
+   - 干货长文 → 周二/周四 20:00-22:00
+   - DDL 急救类 → 凌晨 2-4 + 早 9-11
 
-**混搭策略**：即使 dominant 是 99% 图文也要给 1-2 篇短视频或纯文本，强制多样性，防止账号格式过于单调。**每个 slot 要标明 content_format 字段**。
+4. **decision_rationale 字段（新增 · 1 句话）**：为每个 slot 写一句「为什么排这一周 / 为什么这个角度」。
+   这是你的策略思路可见性。例 ：
+     - 「W1 拉新期，痛点共鸣最快建立信任」
+     - 「W3 系列篇，承接前面 2 篇构成 7 步法第 3 步」
+     - 「DNA 笑点 lift 1.17，这周混 1 篇沙雕反差」
+   不要写空话「为了拉新」，要说清这一篇的具体策略意图。
 
-**重要**：这一步只输出结构（标题/大纲/材料/时段/格式），**不要写正文**。正文会在下一步由专门的写手按 content_format 写不同的格式。
+5. weekly_themes 也给每周一个 main theme + intent。
+
+**绝对底线（不可商量）**：
+- 红线词不许出现（合规闸门会兜底，但你也别故意触）
+- 产品/品牌/工具名 verbatim，绝不编造
+- 不能 100% slot 全产品 / 全同一角度 / 全同一时段（同质化 → 算法降权）
+
+**这一步只输出结构（标题/大纲/材料/时段/格式/理由），不要写正文**。正文由专门写手按 content_format 拼。
 
 最终输出 JSON：
 {
-  "series_thesis": "<一句话主线>",
+  "series_thesis": "<一句话主线 + 你的整体策略思路>",
   "weekly_themes": [
-    {"week": 1, "theme": "...", "intent": "拉新", "notes": "..."}
+    {"week": 1, "theme": "...", "intent": "拉新|互动|转化|沉淀|...", "notes": "..."}
   ],
   "schedule": [
     {
@@ -300,15 +301,16 @@ SCHEDULER_SYSTEM = """\
       "angle": "...", "hook_type": "...",
       "outline": ["...", "...", "..."],
       "materials_needed": ["..."],
-      "intent": "拉新",
+      "intent": "...",
       "content_format": "图文" | "短视频" | "长视频" | "直播" | "纯文本",
-      "publish_rationale": "<≤30 字说明为什么本 slot 选这个时段>",
+      "publish_rationale": "<≤30 字 为什么这个时段>",
+      "decision_rationale": "<≤40 字 为什么排这一周 + 这个角度>",
       "direction_idx": <整数, 0-indexed, 指向用户选的 direction; 单方向场景填 0>
     }
   ]
 }
 
-严格保证 schedule 长度 = cycle_weeks × posts_per_week。如果候选不够就自己补，但要标 [自补] 在 title 末尾。
+严格保证 schedule 长度 = cycle_weeks × posts_per_week。候选不够你自己补，但要标 [自补] 在 title 末尾。
 outline 要 3-6 条，是写手据此扩成正文的「骨架」。
 """
 

@@ -80,6 +80,10 @@ class TopicSlot:
     # (legacy or single-direction pack). The frontend uses this to render
     # color-coded badges in the schedule view so user sees主题分布。
     direction_idx: int = -1
+    # v0.60: AI 的策略思路可见性。LLM 据数据 + 经验规律自己判断后，对每个 slot 解释
+    # 「为什么排这一周 + 为什么这个角度」。≤40 字。让用户看得到 AI 的判断逻辑，
+    # 也方便事后回看校准。Empty = 老 pack 没有该字段（向后兼容）。
+    decision_rationale: str = ""
 
 
 @dataclass

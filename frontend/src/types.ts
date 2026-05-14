@@ -333,6 +333,8 @@ export interface TopicSlotDTO {
   publish_rationale?: string;
   /** v0.59: which user-picked direction this slot belongs to (0-indexed). -1 = legacy / untagged. */
   direction_idx?: number;
+  /** v0.60: AI 一句话解释「为什么这周 + 为什么这角度」(≤40 字). 让用户看见 AI 的策略思路. */
+  decision_rationale?: string;
 }
 
 export interface WeekThemeDTO {

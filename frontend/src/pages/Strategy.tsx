@@ -1741,6 +1741,14 @@ function SlotCard({slot, idx, onCompose, cycleStartDate, chosenDirections}: {
           ⏰ <b>选这个时段的理由：</b>{slot.publish_rationale}
         </div>
       )}
+      {slot.decision_rationale && (
+        <div className="muted" style={{
+          marginTop: 6, fontSize: 11.5, padding: "4px 8px",
+          background: "#fff8e6", borderRadius: 4, borderLeft: "2px solid #f5a623",
+        }}>
+          🧠 <b>AI 排期判断：</b>{slot.decision_rationale}
+        </div>
+      )}
     </div>
   );
 }
