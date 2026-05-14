@@ -713,6 +713,8 @@ export default function Strategy() {
             activeLib={activeLib}
             hasExternalReports={hasExternalReports}
             productContexts={productContexts}
+            currentGoal={goals.find(g => g.key === input.goal_type) ?? null}
+            onChangeGoal={() => setPhase("goal")}
           />
           <ProductContextCard
             contexts={productContexts}
@@ -1802,11 +1804,15 @@ function TopPublishingSlotsCard() {
 }
 
 // v0.58 · 「已接入资料」状态条 — 在 Strategy 第一页顶部明确显示 AI 现在
-// 能读到哪些材料：激活库 + 外部分析报告 + 产品上下文。缺哪个直接给跳转。
-function MaterialsBar({activeLib, hasExternalReports, productContexts}: {
+// 能读到哪些材料：激活库 + 外部分析报告 + 产品上下文 + 当前起号目标。
+// v0.59.6: 加显眼的「当前起号目标」+ 换号入口（之前 GoalPicker 被
+// localStorage cache 后用户找不到入口换）。
+function MaterialsBar({activeLib, hasExternalReports, productContexts, currentGoal, onChangeGoal}: {
   activeLib: Library | null;
   hasExternalReports: boolean;
   productContexts: ProductContextDTO[];
+  currentGoal: GoalTypeDTO | null;
+  onChangeGoal: () => void;
 }) {
   const activeContexts = productContexts.filter(c => c.active === 1);
   const items = [
@@ -1827,12 +1833,40 @@ function MaterialsBar({activeLib, hasExternalReports, productContexts}: {
       ok: activeContexts.length > 0,
       detail: activeContexts.length > 0
         ? `${activeContexts.length} 份激活 · 共 ${activeContexts.reduce((a, c) => a + c.chars, 0).toLocaleString()} 字`
-        : "未上传 — ⚠️ 强烈推荐（避免 AI 编造功能名）",
+        : "未上传（产品/SaaS 必填，其它可选）",
       cta: null, // 表单下面就有上传区，不用跳转
     },
   ];
   return (
     <div className="card" style={{background: "#fafafa", padding: 12}}>
+      {/* 当前起号目标 + 换号入口 — 最显眼 */}
+      <div style={{
+        padding: "8px 12px", marginBottom: 12,
+        background: "var(--primary-soft)", borderRadius: 6,
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        flexWrap: "wrap", gap: 8,
+      }}>
+        <div style={{fontSize: 13}}>
+          🎯 <b>当前起号目标 ：</b>
+          {currentGoal ? (
+            <>
+              <span style={{fontSize: 16, marginLeft: 4}}>{currentGoal.emoji}</span>
+              <b style={{marginLeft: 4}}>{currentGoal.name}</b>
+              <span className="muted" style={{fontSize: 11.5, marginLeft: 8}}>
+                · {currentGoal.phase_emphasis}
+              </span>
+            </>
+          ) : (
+            <span className="muted">未选 — 用通用 voice（建议明确选一个）</span>
+          )}
+        </div>
+        <button className="ghost" onClick={onChangeGoal}
+          style={{fontSize: 12, padding: "4px 12px"}}
+          title="换号类型 — 个人分享/情感/学术/产品/教学 等">
+          {currentGoal ? "🔄 换目标" : "→ 去选目标"}
+        </button>
+      </div>
+
       <div className="muted" style={{fontSize: 12, marginBottom: 8}}>
         📊 <b>AI 现在能读到这些材料</b>（材料越完整，策略越贴合你的产品）
       </div>
