@@ -29,6 +29,11 @@ from ..generators.base import Generator
 
 # ---- DNA context ---------------------------------------------------------
 
+# Memoize the DNA context build — every Insight / Strategy / Compose call
+# rebuilds the same ~14 KB string from the same DNA artifact. Cache keyed
+# on the artifact's version (so it auto-invalidates when DNA is re-extracted).
+_DNA_CONTEXT_CACHE: dict[str, str] = {}
+
 def _build_dna_context(dna: dict[str, Any]) -> str:
     """Compact, prompt-friendly summary of the DNA artifact.
 
@@ -38,6 +43,9 @@ def _build_dna_context(dna: dict[str, Any]) -> str:
     """
     if not dna:
         return "（暂无 DNA 数据，请尽量根据其他线索分析）"
+    cache_key = str(dna.get("version", "")) + ":" + str(dna.get("summary", {}).get("total_notes_analysed", 0))
+    if cache_key and cache_key in _DNA_CONTEXT_CACHE:
+        return _DNA_CONTEXT_CACHE[cache_key]
     s = dna.get("sections", {}) or {}
     summary = dna.get("summary", {}) or {}
     bo = (s.get("keyword_blueocean", {}) or {}).get("rankings", [])[:15]
@@ -161,7 +169,10 @@ def _build_dna_context(dna: dict[str, Any]) -> str:
         parts.append("【原始数据快照（真实数据，请直接看这里下结论）】\n"
                      + "\n".join(sch_lines))
 
-    return "\n\n".join(parts) or "（库里几乎没有可分析的内容，请基于 schema 推测）"
+    result = "\n\n".join(parts) or "（库里几乎没有可分析的内容，请基于 schema 推测）"
+    if cache_key:
+        _DNA_CONTEXT_CACHE[cache_key] = result
+    return result
 
 
 # ---- Prompts ------------------------------------------------------------
@@ -634,6 +645,29 @@ def consensus_summary_for_prompt(consensus: dict[str, Any] | None) -> str:
     return "\n".join(parts)
 
 
+# Memoize the reference block — strategy expand calls this for both the
+# scheduler call AND the body-drafter pool calls. Building the block reads
+# from 3-4 DB tables + concatenates up to 60KB of report text every time.
+# Short TTL (60s) so user-uploaded reports become visible quickly.
+_REF_BLOCK_CACHE: dict[str, tuple[float, str]] = {}
+_REF_BLOCK_TTL = 60.0
+
+def invalidate_ref_block_cache() -> None:
+    """Drop the reference-block cache. Call after a user upload/delete/
+    integrate so the next downstream prompt picks up the change."""
+    _REF_BLOCK_CACHE.clear()
+
+
+def _ref_block_cache_key() -> str:
+    """Cache key includes active project + library so cache doesn't bleed
+    across project switches."""
+    try:
+        from .. import library as _lib
+        return f"{project.active_project_id()}:{_lib.active_lib_id()}"
+    except Exception:
+        return "default"
+
+
 def full_reference_block_for_prompt() -> str:
     """Combined reference block for downstream agents.
 
@@ -651,6 +685,11 @@ def full_reference_block_for_prompt() -> str:
     of integration status. The integrated report is a *summary* layer on
     top, not a *replacement* for the raw material.
     """
+    key = _ref_block_cache_key()
+    now = time.time()
+    cached = _REF_BLOCK_CACHE.get(key)
+    if cached and (now - cached[0]) < _REF_BLOCK_TTL:
+        return cached[1]
     parts: list[str] = []
 
     # Layer 1: tool's own Claude×OpenAI consensus (if any).
@@ -701,7 +740,9 @@ def full_reference_block_for_prompt() -> str:
                     + "\n\n".join(blocks)
                 )
 
-    return "\n\n".join(parts)
+    result = "\n\n".join(parts)
+    _REF_BLOCK_CACHE[key] = (now, result)
+    return result
 
 
 def list_reports(library_id: str | None = None, limit: int = 30) -> list[dict[str, Any]]:

@@ -114,6 +114,13 @@ def save_external_report(
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (report_id, pid, library_id, name, source, format, content, now),
         )
+    # Drop the downstream reference-block cache so the new report is
+    # visible immediately to Strategy/Composer prompts.
+    try:
+        from . import pipeline as _ip
+        _ip.invalidate_ref_block_cache()
+    except Exception:
+        pass
     return {
         "report_id": report_id, "project_id": pid, "library_id": library_id,
         "name": name, "source": source, "format": format,
@@ -161,7 +168,14 @@ def delete_external_report(report_id: str) -> bool:
             " WHERE report_id = ? AND (project_id = ? OR project_id IS NULL)",
             (report_id, pid),
         )
-        return cur.rowcount > 0
+        deleted = cur.rowcount > 0
+    if deleted:
+        try:
+            from . import pipeline as _ip
+            _ip.invalidate_ref_block_cache()
+        except Exception:
+            pass
+    return deleted
 
 
 # ---- Integration via gpt-4o ---------------------------------------------
@@ -306,6 +320,11 @@ async def integrate(
                 " consensus_json=?, elapsed_s=? WHERE integrated_id=?",
                 (json.dumps(consensus, ensure_ascii=False), elapsed, integrated_id),
             )
+        try:
+            from . import pipeline as _ip
+            _ip.invalidate_ref_block_cache()
+        except Exception:
+            pass
         return {
             "integrated_id": integrated_id, "project_id": pid, "library_id": library_id,
             "created_at": now, "status": "completed", "elapsed_s": elapsed,

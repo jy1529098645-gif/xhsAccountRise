@@ -59,6 +59,10 @@ class PipelineConfig:
     # can override to opus via the agent config UI.
     synthesizer_spec: str = "claude:sonnet"
     planner_spec: str = "claude:sonnet"                  # publish schedule, mechanical
+    # Refiner is auto-skipped when drafter pool produced ≤1 candidate (the
+    # default Sonnet-only setup). Set force_refiner=True to always run it
+    # — useful when N>=2 drafters or for high-stakes posts.
+    force_refiner: bool = False
     k_refs: int = 8
     n_comments: int = 15
     top_hooks: int = 6
@@ -127,7 +131,15 @@ async def run_pipeline(brief: Brief, cfg: PipelineConfig | None = None) -> dict[
     await drafter_pool.run(ctx)
     if critic_pool:
         await critic_pool.run(ctx)
-    if refiner:
+    # Auto-skip refiner when drafter pool produced ≤1 draft. With a single
+    # candidate, refiner just rewrites it based on its own critique —
+    # essentially the same work synthesizer does (synth reads draft +
+    # critique and produces final). Saves ~15-25s on the default
+    # single-Sonnet drafter setup.
+    skip_refiner_dynamic = (refiner is not None
+                            and len(ctx.drafts or []) <= 1
+                            and not getattr(cfg, "force_refiner", False))
+    if refiner and not skip_refiner_dynamic:
         await refiner.run(ctx)
 
     # Synthesizer + Planner can run in parallel — neither reads the other's

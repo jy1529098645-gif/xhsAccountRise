@@ -613,7 +613,9 @@ async def _expand_inner(
             + (f"- 需要的素材：{', '.join(slot.materials_needed)}\n" if slot.materials_needed else "")
         )
 
-    BATCH_SIZE = 3  # slots per Sonnet call
+    BATCH_SIZE = 5  # slots per Sonnet call (was 3 — bumped because Sonnet
+                    # handles 5×600 char output cleanly and we want fewer
+                    # round-trips. For 12 slots: 12/5 → 3 batches instead of 4.)
 
     async def _draft_batch(slots_with_idx: list[tuple[int, TopicSlot]]) -> list[tuple[int, str, str | None]]:
         if not slots_with_idx:

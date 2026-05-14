@@ -324,38 +324,76 @@ async def iterate_strategy(
         + (f"\n【参考报告】\n{ref}\n" if ref else "")
     )
 
-    async def _draft_one(idx: int, slot: TopicSlot) -> tuple[int, str]:
-        prompt = (
-            f"{direction_block}\n\n"
-            f"【这一篇的 slot】\n"
+    # Batched body drafter — same architecture as expand (v0.46/v0.48).
+    # 5 slots per call, 12-slot pack runs in ~3 parallel batches.
+    def _slot_block(idx: int, slot: TopicSlot) -> str:
+        return (
+            f"--- slot #{idx} ---\n"
             f"- 标题：{slot.title}\n"
             f"- 备选标题：{', '.join(slot.title_variants[:3])}\n"
             f"- 角度：{slot.angle} · hook 类型：{slot.hook_type} · 意图：{slot.intent}\n"
-            f"- 大纲：\n" + "\n".join(f"  · {o}" for o in slot.outline) + "\n"
+            f"- 大纲：" + " / ".join(slot.outline) + "\n"
             + (f"- 需要的素材：{', '.join(slot.materials_needed)}\n" if slot.materials_needed else "")
-            + "\n请按 system schema 输出 body_draft。"
+        )
+
+    BATCH_SCHEMA = {
+        "type": "object", "required": ["drafts"],
+        "properties": {
+            "drafts": {
+                "type": "array",
+                "items": {
+                    "type": "object", "required": ["idx", "body_draft"],
+                    "properties": {
+                        "idx": {"type": "integer"},
+                        "body_draft": {"type": "string"},
+                    },
+                },
+            },
+        },
+    }
+
+    async def _draft_batch(items: list[tuple[int, TopicSlot]]) -> list[tuple[int, str]]:
+        if not items:
+            return []
+        blocks = "\n\n".join(_slot_block(i, s) for i, s in items)
+        prompt = (
+            f"{direction_block}\n\n"
+            f"【一次性给你 {len(items)} 个 slot，请同时为每个写 body_draft】\n\n"
+            f"{blocks}\n\n"
+            f"按 schema 输出 drafts 数组。每个 body_draft 必须按它自己的 content_format 写。"
+            f" 不同 slot 之间要差异化，不要互相重复。"
         )
         try:
             r = await asyncio.wait_for(
                 call_for_json(
-                    gen, strat_prompts.BODY_DRAFTER_SYSTEM, prompt,
-                    max_tokens=1200,
-                    tool_name="submit_body_draft",
-                    schema={"type": "object", "required": ["body_draft"],
-                            "properties": {"body_draft": {"type": "string"}}},
+                    gen, strat_prompts.BODY_DRAFTER_BATCH_SYSTEM, prompt,
+                    max_tokens=8000,
+                    tool_name="submit_body_draft_batch",
+                    schema=BATCH_SCHEMA,
                 ),
-                timeout=120,
+                timeout=180,
             )
-            return idx, str(r.get("body_draft", "")).strip()
+            drafts = r.get("drafts") or []
+            returned = {int(d.get("idx", -1)): str(d.get("body_draft", "")).strip()
+                        for d in drafts if isinstance(d, dict)}
+            return [(i, returned.get(i, "")) for i, _ in items]
         except Exception:
-            return idx, ""
+            return [(i, "") for i, _ in items]
 
     if new_pack.schedule:
-        results = await asyncio.gather(
-            *[_draft_one(i, s) for i, s in enumerate(new_pack.schedule)]
-        )
-        for idx, draft in results:
-            new_pack.schedule[idx].body_draft = draft
+        BATCH_SIZE = 5
+        batches: list[list[tuple[int, TopicSlot]]] = []
+        cur: list[tuple[int, TopicSlot]] = []
+        for i, s in enumerate(new_pack.schedule):
+            cur.append((i, s))
+            if len(cur) >= BATCH_SIZE:
+                batches.append(cur); cur = []
+        if cur: batches.append(cur)
+        batch_results = await asyncio.gather(*[_draft_batch(b) for b in batches])
+        for batch in batch_results:
+            for idx, draft in batch:
+                if 0 <= idx < len(new_pack.schedule):
+                    new_pack.schedule[idx].body_draft = draft
 
     # Persist.
     iteration_n = int(row["iteration_n"] or 1) + 1
