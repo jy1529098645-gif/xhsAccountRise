@@ -57,12 +57,36 @@ export default function ProjectPicker() {
         <div className="picker-menu">
           <div className="picker-menu-header">切换项目</div>
           {projects.map(p => (
-            <div key={p.project_id} className={`picker-item ${p.active ? "active" : ""}`}
-              onClick={() => p.project_id !== active && switchTo(p.project_id)}>
-              <span style={{fontSize: 14}}>{p.emoji}</span>
-              <span style={{flex: 1}}>{p.name}</span>
-              {p.is_default && <span className="muted" style={{fontSize: 10}}>默认</span>}
-              {p.active && <span style={{color: "var(--primary)"}}>★</span>}
+            <div key={p.project_id} className={`picker-item ${p.active ? "active" : ""}`}>
+              <span style={{flex: 1, display: "flex", gap: 6, alignItems: "center", cursor: "pointer"}}
+                onClick={() => p.project_id !== active && switchTo(p.project_id)}>
+                <span style={{fontSize: 14}}>{p.emoji}</span>
+                <span style={{flex: 1}}>{p.name}</span>
+                {p.is_default && <span className="muted" style={{fontSize: 10}}>默认</span>}
+                {p.active && <span style={{color: "var(--primary)"}}>★</span>}
+              </span>
+              {!p.is_default && (
+                <button
+                  className="ghost"
+                  title="永久删除这个项目和它所有的数据"
+                  style={{padding: "1px 6px", fontSize: 11, opacity: 0.5, color: "var(--danger)"}}
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    const ok = window.confirm(
+                      `永久删除「${p.name}」？\n\n所有数据（策略 / 出稿 / 报告 / 数据指标）都会**不可恢复**地删除。`
+                    );
+                    if (!ok) return;
+                    setBusy(true);
+                    try {
+                      await api.hardDeleteProject(p.project_id);
+                      if (p.active) window.location.reload();
+                      else await load();
+                    } catch (err: any) {
+                      alert("删除失败 ：" + err.message);
+                    } finally { setBusy(false); }
+                  }}
+                >✕</button>
+              )}
             </div>
           ))}
           <div className="picker-divider" />

@@ -7,6 +7,7 @@ import ProgressTimeline, { Stage as TimelineStage } from "../components/Progress
 import NextStepCard from "../components/NextStepCard";
 import { humaniseError, humaniseErrorAsync } from "../errors";
 import { isAborted, cancelBackendJob } from "../api";
+import { startJob, getJob, cancelJob as cancelLocalJob, useJob } from "../lib/jobs";
 import { LLM_CATALOG } from "../catalog";
 import type {
   AccountInputDTO, Library, Platform, StrategicDirectionDTO, StrategyPackDTO,
@@ -141,20 +142,15 @@ export default function Strategy() {
   const [lastFailedAction, setLastFailedAction] = useState<
     { kind: "autofill" } | { kind: "propose" } | { kind: "expand"; idx: number } | null
   >(null);
-  const abortRef = useRef<AbortController | null>(null);
   const activeJobIdRef = useRef<string | null>(null);
   function pauseCurrent() {
-    // Real backend cancel for jobs that support it (expand). Other jobs
-    // get frontend-only abort.
     const jid = activeJobIdRef.current;
-    if (jid) {
-      cancelBackendJob(jid);
-      // Don't abort the fetch — let it return naturally with status='paused'
-      // so resume metadata stays consistent. The cancel-poll loop on backend
-      // detects the flag within ~3-5s.
-    } else {
-      abortRef.current?.abort();
-    }
+    if (!jid) return;
+    // For expand: real backend cancel (drops in-flight LLM calls, saves
+    // checkpoint, so resume picks up). For other jobs: frontend abort
+    // only — backend keeps running but result is ignored.
+    if (jid.startsWith("expand:")) cancelBackendJob(jid);
+    cancelLocalJob(jid);
   }
 
   // Save in-progress input to localStorage as user types.
@@ -243,13 +239,17 @@ export default function Strategy() {
 
   async function runAutofill(extraHints?: { personal?: string; constraints?: string; deep?: boolean }) {
     setPhase("autofilling"); setAutofillErr(null); setInfo(null);
-    abortRef.current = new AbortController();
-    try {
-      const r = await api.autofillStrategy({
+    const job = startJob<any>(
+      "autofill:current", "autofill",
+      (signal) => api.autofillStrategy({
         personal_hint: extraHints?.personal ?? input.personal_strengths ?? "",
         constraints_hint: extraHints?.constraints ?? input.constraints ?? "",
         deep: !!extraHints?.deep,
-      }, abortRef.current.signal);
+      }, signal),
+    );
+    activeJobIdRef.current = "autofill:current";
+    try {
+      const r = await job.promise;
       setAutofill(r);
       setInput({
         positioning: r.input.positioning || "",
@@ -272,7 +272,7 @@ export default function Strategy() {
         setPhase("input");
       }
     } finally {
-      abortRef.current = null;
+      activeJobIdRef.current = null;
     }
   }
 
@@ -284,13 +284,17 @@ export default function Strategy() {
     // user-flow fix: forcing users to write positioning before AI suggests
     // any was illogical.
     setErr(null); setInfo(null); setPhase("loading-propose");
-    abortRef.current = new AbortController();
-    try {
-      const res = await api.proposeStrategy({
+    const proposeJob = startJob<any>(
+      "propose:current", "propose",
+      (signal) => api.proposeStrategy({
         ...input,
         platform: platform,
         positioner_spec: positionerSpec,
-      }, abortRef.current.signal);
+      }, signal),
+    );
+    activeJobIdRef.current = "propose:current";
+    try {
+      const res = await proposeJob.promise;
       setPackId(res.pack_id);
       setDirections(res.directions);
       setLastFailedAction(null);
@@ -308,7 +312,7 @@ export default function Strategy() {
         setPhase("input");
       }
     } finally {
-      abortRef.current = null;
+      activeJobIdRef.current = null;
     }
   }
 
@@ -317,14 +321,18 @@ export default function Strategy() {
     setChosenIdx(idx); setErr(null);
     setInfo("AI 正在生成 N 周完整排期 + 材料清单（约 60-180s）…");
     setPhase("loading-expand");
-    abortRef.current = new AbortController();
     activeJobIdRef.current = `expand:${packId}`;
-    try {
-      const res: any = await api.expandStrategy(packId, idx, {
+    const expandJob = startJob<any>(
+      `expand:${packId}`, "expand",
+      (signal) => api.expandStrategy(packId, idx, {
         topicgen_spec: topicgenSpec,
         scheduler_spec: schedulerSpec,
         resourcer_spec: resourcerSpec,
-      }, abortRef.current.signal);
+      }, signal),
+      { pack_id: packId, idx },
+    );
+    try {
+      const res: any = await expandJob.promise;
       if (res && res.status === "paused") {
         setInfo("⏸ 已暂停。点这个方向「继续等 / 重新点击」会从断点接上 — 已完成的阶段不会重跑。");
         setPhase("directions");
@@ -372,7 +380,7 @@ export default function Strategy() {
       setLastFailedAction({ kind: "expand", idx });
       setPhase("directions");
     } finally {
-      abortRef.current = null;
+      activeJobIdRef.current = null;
       activeJobIdRef.current = null;
     }
   }

@@ -286,6 +286,13 @@ export const api = {
     if (!res.ok) throw new HttpError(res.status, await res.text());
     return res.json();
   },
+  hardDeleteProject: async (projectId: string) => {
+    const backend = backendUrl();
+    if (!backend) throw new HttpError(0, "需要本地后端");
+    const res = await fetch(`${backend}/api/projects/${projectId}?hard=true`, { method: "DELETE" });
+    if (!res.ok) throw new HttpError(res.status, await res.text());
+    return res.json() as Promise<{ deleted: string; rows: Record<string, number> }>;
+  },
   patchProject: async (projectId: string, body: { name?: string; description?: string; emoji?: string }) => {
     const backend = backendUrl();
     if (!backend) throw new HttpError(0, "需要本地后端");

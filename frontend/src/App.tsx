@@ -5,6 +5,7 @@ import { applyTheme } from "./theme";
 import ConnectionBanner from "./components/ConnectionBanner";
 import ErrorBoundary from "./components/ErrorBoundary";
 import ProjectPicker from "./components/ProjectPicker";
+import RunningJobsIndicator from "./components/RunningJobsIndicator";
 import Dashboard from "./pages/Dashboard";
 import Analysis from "./pages/Analysis";
 import Composer from "./pages/Composer";
@@ -82,6 +83,8 @@ export default function App() {
         <NavLink to="/retrospective" className={({isActive}) => isActive ? "active" : ""}>📊 复盘 <span style={{fontSize: 10, color: "var(--muted)"}}>第 4 步</span></NavLink>
         <NavLink to="/dashboard" className={({isActive}) => isActive ? "active" : ""}>🗂️ 数据总览</NavLink>
         <NavLink to="/libraries" className={({isActive}) => isActive ? "active" : ""} style={{fontSize: 13, opacity: 0.7}}>📥 资源库（管理）</NavLink>
+
+        <RunningJobsIndicator />
         <NavLink to="/analysis" className={({isActive}) => isActive ? "active" : ""}>🧬 爆款分析（粗粒度）</NavLink>
         <NavLink to="/drafts" className={({isActive}) => isActive ? "active" : ""}>📝 历史出稿</NavLink>
         <NavLink to="/settings" className={({isActive}) => isActive ? "active" : ""}>⚙️ 设置</NavLink>

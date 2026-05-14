@@ -9,6 +9,7 @@ import ProgressTimeline, { Stage as TimelineStage } from "../components/Progress
 import NextStepCard from "../components/NextStepCard";
 import { humaniseError, humaniseErrorAsync } from "../errors";
 import { isAborted } from "../api";
+import { startJob, getJob, cancelJob, useJob } from "../lib/jobs";
 import type { ComposeBundle, DraftCandidate, Library, Platform } from "../types";
 
 const COMPOSE_STAGES: TimelineStage[] = [
@@ -36,11 +37,25 @@ export default function Composer() {
   const [agentConfig, setAgentConfig] = useState<AgentSelection>(defaultSelection());
   const [showAgentConfig, setShowAgentConfig] = useState(false);
 
-  const [running, setRunning] = useState(false);
   const [bundle, setBundle] = useState<ComposeBundle | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
   const [paused, setPaused] = useState(false);
+
+  // Job tracker survives page navigation — switching to Reports/Strategy
+  // mid-compose no longer drops the result.
+  const COMPOSE_JOB_ID = "compose:current";
+  const composeJob = useJob<ComposeBundle>(COMPOSE_JOB_ID);
+  const running = composeJob?.status === "running";
+
+  // Re-hydrate from the job store on mount (e.g. user navigated away then
+  // back). If the job finished while we were elsewhere, surface its result.
+  useEffect(() => {
+    const j = getJob<ComposeBundle>(COMPOSE_JOB_ID);
+    if (!j) return;
+    if (j.status === "done" && j.result) setBundle(j.result);
+    if (j.status === "failed" && j.error) setErr(j.error);
+    if (j.status === "aborted") setPaused(true);
+  }, []);
 
   useEffect(() => {
     api.platforms().then(setPlatforms).catch(() => {});
@@ -85,23 +100,27 @@ export default function Composer() {
   }, []);
 
   async function run() {
-    setRunning(true); setErr(null); setBundle(null); setPaused(false);
-    abortRef.current = new AbortController();
-    try {
-      const res = await api.compose({
+    setErr(null); setBundle(null); setPaused(false);
+    const job = startJob<ComposeBundle>(
+      COMPOSE_JOB_ID, "compose",
+      (signal) => api.compose({
         topic, angle, target_length: length, cta_strength: cta,
         niche, extra_constraints: extra,
         platform: platform || undefined,
         ...selectionToSpecs(agentConfig),
-      }, abortRef.current.signal);
+      }, signal),
+      { topic },
+    );
+    try {
+      const res = await job.promise;
       setBundle(res);
     } catch (e: any) {
       if (isAborted(e)) { setPaused(true); }
       else { setErr(await humaniseErrorAsync(e)); }
-    } finally { setRunning(false); abortRef.current = null; }
+    }
   }
   function pause() {
-    abortRef.current?.abort();
+    cancelJob(COMPOSE_JOB_ID);
   }
 
   const noBackend = !api.isConnected();

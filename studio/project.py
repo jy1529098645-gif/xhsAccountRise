@@ -178,6 +178,80 @@ def archive(project_id: str) -> None:
         set_active("default")
 
 
+def hard_delete(project_id: str) -> dict[str, int]:
+    """PERMANENTLY delete a project and all its data (drafts, strategies,
+    reports, performance, etc.). Returns counts of rows deleted per table.
+    Refuses to delete the default project."""
+    p = get_project(project_id)
+    if not p:
+        raise ValueError(f"project not found: {project_id}")
+    if p.is_default:
+        raise RuntimeError("cannot delete the default project")
+
+    if active_project_id() == project_id:
+        set_active("default")
+
+    counts: dict[str, int] = {}
+    # Tables that have a project_id column. Delete by exact match — never
+    # cascade across other projects.
+    cascading_tables = [
+        "studio_strategies",
+        "studio_drafts",
+        "studio_my_posts",
+        "studio_dna_artifacts",
+        "studio_insight_reports",
+        "studio_external_reports",
+        "studio_integrated_reports",
+        "studio_strategy_performance",
+        "studio_retrospective_reports",
+        "studio_draft_performance",
+    ]
+    with db.connect() as con:
+        # First snapshot draft_ids in this project so we can drop their
+        # candidates + critiques + traces too (those tables don't carry
+        # project_id directly).
+        draft_ids = [r[0] for r in con.execute(
+            "SELECT draft_id FROM studio_drafts WHERE project_id = ?",
+            (project_id,),
+        ).fetchall()]
+        pack_ids = [r[0] for r in con.execute(
+            "SELECT pack_id FROM studio_strategies WHERE project_id = ?",
+            (project_id,),
+        ).fetchall()]
+
+        # Cascade through draft children
+        if draft_ids:
+            qmarks = ",".join("?" * len(draft_ids))
+            counts["draft_candidates"] = con.execute(
+                f"DELETE FROM studio_draft_candidates WHERE draft_id IN ({qmarks})",
+                draft_ids,
+            ).rowcount
+            counts["critiques"] = con.execute(
+                f"DELETE FROM studio_critiques WHERE draft_id IN ({qmarks})",
+                draft_ids,
+            ).rowcount
+            counts["agent_traces"] = con.execute(
+                f"DELETE FROM studio_agent_traces WHERE draft_id IN ({qmarks})",
+                draft_ids,
+            ).rowcount
+
+        for table in cascading_tables:
+            try:
+                cur = con.execute(
+                    f"DELETE FROM {table} WHERE project_id = ?", (project_id,),
+                )
+                counts[table] = cur.rowcount
+            except Exception:
+                # Table might not exist on older DBs — skip.
+                counts[table] = 0
+
+        # Finally, drop the project row itself.
+        con.execute("DELETE FROM studio_projects WHERE project_id = ?", (project_id,))
+        counts["studio_projects"] = 1
+
+    return counts
+
+
 def ensure_bootstrap() -> None:
     """Boot-time: create default project + assign legacy rows."""
     db.apply_migrations(verbose=False)

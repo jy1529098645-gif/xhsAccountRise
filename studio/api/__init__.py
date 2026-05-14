@@ -178,12 +178,19 @@ def patch_project(project_id: str, req: ProjectInput) -> dict[str, Any]:
 
 
 @app.delete("/api/projects/{project_id}")
-def archive_project(project_id: str) -> dict[str, str]:
+def delete_project(project_id: str, hard: bool = False) -> dict[str, Any]:
+    """Default behaviour: soft-archive (project hidden but data retained).
+    Pass ?hard=true to PERMANENTLY remove the project + all its data
+    (drafts, strategies, reports, performance, etc.). Refuses to remove
+    the default project. Returns per-table delete counts when hard."""
     try:
+        if hard:
+            counts = project.hard_delete(project_id)
+            return {"deleted": project_id, "hard": True, "rows": counts}
         project.archive(project_id)
+        return {"archived": project_id, "hard": False}
     except (ValueError, RuntimeError) as e:
         raise HTTPException(400, str(e))
-    return {"archived": project_id}
 
 
 # ---------------- library ------------------------
