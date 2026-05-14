@@ -263,6 +263,48 @@ def list_all_libraries() -> list[LibraryMeta]:
     return list_libraries(project_id=None)
 
 
+# v0.59.4: each library is a self-contained .db, so studio_strategies +
+# studio_drafts + all other studio_* tables only exist inside the active
+# library's .db file. If user runs propose in library A then switches active
+# library to B, expand() looking up the pack_id finds nothing → 「strategy
+# pack not found: 42bd...」 error。
+#
+# This helper scans every known library's .db file for a given pack_id so
+# the strategy endpoints can auto-recover by switching active library.
+def find_pack_lib_id(pack_id: str) -> str | None:
+    """Scan every library's xhs.db for a studio_strategies row matching
+    pack_id. Returns the lib_id that has it, or None if absent.
+
+    Quick (1-N small SQLite SELECTs); cheap to call even with 10+ libs.
+    """
+    import sqlite3
+    if not LIBRARIES_DIR.exists():
+        return None
+    for entry in sorted(LIBRARIES_DIR.iterdir()):
+        if not entry.is_dir():
+            continue
+        db_path = entry / "xhs.db"
+        if not db_path.exists():
+            continue
+        try:
+            uri = f"file:{db_path.as_posix()}?mode=ro"
+            con = sqlite3.connect(uri, uri=True)
+            try:
+                cur = con.execute(
+                    "SELECT 1 FROM studio_strategies WHERE pack_id = ? LIMIT 1",
+                    (pack_id,),
+                )
+                if cur.fetchone():
+                    return entry.name
+            finally:
+                con.close()
+        except Exception:
+            # studio_strategies table might not exist yet in this lib
+            # (pre-v0.40 lib). Skip silently.
+            continue
+    return None
+
+
 def get_meta(lib_id: str) -> LibraryMeta | None:
     p = LIBRARIES_DIR / lib_id / "meta.json"
     if not p.exists():

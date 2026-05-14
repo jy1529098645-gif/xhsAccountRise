@@ -1153,6 +1153,22 @@ def get_strategy(pack_id: str) -> dict[str, Any]:
             " AND (project_id = ? OR project_id IS NULL)",
             (pack_id, pid),
         ).fetchone()
+    # v0.59.4: pack lives inside the active library's .db. If user switched
+    # active lib since creation, scan all libs and switch back.
+    if not row:
+        pack_lib_id = library.find_pack_lib_id(pack_id)
+        if pack_lib_id:
+            try:
+                library.set_active(pack_lib_id)
+            except Exception:
+                pass
+            db.apply_migrations(verbose=False)
+            with db.connect(read_only=True) as con:
+                row = con.execute(
+                    "SELECT * FROM studio_strategies WHERE pack_id = ?"
+                    " AND (project_id = ? OR project_id IS NULL)",
+                    (pack_id, pid),
+                ).fetchone()
     if not row:
         raise HTTPException(404, "strategy pack not found in current project")
     d = dict(row)
@@ -1183,8 +1199,26 @@ def delete_strategy(pack_id: str) -> dict[str, str]:
             " AND (project_id = ? OR project_id IS NULL)",
             (pack_id, pid),
         )
-        if cur.rowcount == 0:
-            raise HTTPException(404, "not found in current project")
+        deleted = cur.rowcount > 0
+    # v0.59.4: pack lives in active lib's .db. If not found here, search
+    # all libs and delete from the one that has it.
+    if not deleted:
+        pack_lib_id = library.find_pack_lib_id(pack_id)
+        if pack_lib_id:
+            try:
+                library.set_active(pack_lib_id)
+            except Exception:
+                pass
+            db.apply_migrations(verbose=False)
+            with db.connect() as con:
+                cur = con.execute(
+                    "DELETE FROM studio_strategies WHERE pack_id = ?"
+                    " AND (project_id = ? OR project_id IS NULL)",
+                    (pack_id, pid),
+                )
+                deleted = cur.rowcount > 0
+    if not deleted:
+        raise HTTPException(404, "not found in current project")
     return {"deleted": pack_id}
 
 

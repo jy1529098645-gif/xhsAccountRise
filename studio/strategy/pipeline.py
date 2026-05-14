@@ -540,11 +540,29 @@ async def expand(
     """Phase 2: turn N chosen directions into a full StrategyPack."""
     db.apply_migrations(verbose=False)
     t0 = time.time()
+    # v0.59.4: studio_strategies lives inside the active library's .db file,
+    # so a pack created in lib A becomes invisible once user switches active
+    # lib to B. Auto-recover: if not found in active lib, scan all libs.
     with db.connect(read_only=True) as con:
         row = con.execute(
             "SELECT input_json, directions_json, library_id, platform"
             " FROM studio_strategies WHERE pack_id = ?", (pack_id,),
         ).fetchone()
+    if not row:
+        # Search every library for this pack_id; if found, switch active lib
+        # to it so the rest of expand reads/writes the correct DB.
+        pack_lib_id = library.find_pack_lib_id(pack_id)
+        if pack_lib_id:
+            try:
+                library.set_active(pack_lib_id)
+            except Exception:
+                pass  # best-effort; if can't switch, raise as before
+            db.apply_migrations(verbose=False)
+            with db.connect(read_only=True) as con:
+                row = con.execute(
+                    "SELECT input_json, directions_json, library_id, platform"
+                    " FROM studio_strategies WHERE pack_id = ?", (pack_id,),
+                ).fetchone()
     if not row:
         raise LookupError(f"strategy pack not found: {pack_id}")
     inp_data = json.loads(row["input_json"])
