@@ -1,0 +1,29 @@
+# Railway one-click deploy: https://docs.railway.app/reference/config-as-code
+#
+# Usage:
+#   1. https://railway.app/new → Deploy from GitHub Repo → 选 xhsAccountRise (main)
+#   2. Railway 自动读 Dockerfile + 这个 railway.toml 开始 build。
+#   3. Settings → Variables 加 3 个 LLM key ：
+#        ANTHROPIC_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY
+#   4. Settings → Volumes → Add Volume → mount path = /app/data
+#        （SQLite + libraries 持久化，不会因重新部署丢数据）
+#   5. Settings → Networking → Generate Domain → 拿到 xxx.up.railway.app
+#   6. 团队群里发这个 URL，完事。
+#
+# 自动部署 ：以后 git push main → Railway 自动 rebuild + redeploy，
+# URL 永远不变。
+
+[build]
+  builder = "DOCKERFILE"
+  dockerfilePath = "Dockerfile"
+
+[deploy]
+  # 健康检查 — 容器 healthy 才路由流量
+  healthcheckPath = "/api/health"
+  healthcheckTimeout = 30
+  # 出错时 always 重启
+  restartPolicyType = "ON_FAILURE"
+  restartPolicyMaxRetries = 3
+
+  # 启动命令交给 Dockerfile 的 CMD（已经处理 $PORT 注入 + 跑 migration）
+  # startCommand = ""  # 留空 = 用 Dockerfile CMD
