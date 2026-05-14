@@ -249,19 +249,25 @@ export default function Strategy() {
       .then(([ext, integ]) => setHasExternalReports(ext.length > 0 || integ.length > 0))
       .catch(() => {});
     reloadProductContexts();
-    api.listStrategyGoals().then(setGoals).catch(() => {});
-    // v0.59: if cached draft already has goal_type set, skip the goal picker
-    setPhase(prev => {
-      if (prev !== "goal") return prev;
-      try {
-        const cached = localStorage.getItem(DRAFT_KEY);
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (parsed?.goal_type) return "input";
-        }
-      } catch { /* ignore */ }
-      return "goal";
+    api.listStrategyGoals().then(gs => {
+      setGoals(gs);
+      if (gs.length === 0) {
+        // 后端没返回目标列表 — 前端体验非常糟糕（卡在「加载中…」），
+        // 退化到 input 阶段让用户能继续。控制台告诉开发者发生了啥。
+        // eslint-disable-next-line no-console
+        console.warn("[Strategy] /api/strategy/goals returned empty — falling back to input phase.");
+        setPhase("input");
+      }
+    }).catch(err => {
+      // eslint-disable-next-line no-console
+      console.error("[Strategy] failed to load goals:", err);
+      setPhase("input"); // 同上，避免卡在加载中
     });
+    // v0.61.2: 不再据 localStorage cache 自动跳过 GoalPicker。
+    // 旧逻辑 ：if (cached.goal_type) phase = "input" → 用户每次进 /strategy
+    // 都被踢到 input，看不到 8 大目标卡片，反复抱怨「没有起号类型供选择」。
+    // 新逻辑 ：永远从 goal phase 开始；缓存的 goal_type 会让对应卡片高亮
+    // = 「已选 · 进入下一步 →」，用户再点一下就跳到 input，想换也直接换。
 
     // Read prefill from sessionStorage if user clicked a 'use this →' opp
     // on the Reports page. Wipe immediately so refresh doesn't re-prefill.
