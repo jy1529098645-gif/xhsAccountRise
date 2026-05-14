@@ -248,11 +248,8 @@ async def integrate(
     *,
     library_id: str | None = None,
     include_consensus_report_id: str | None = None,
-    # Default v0.50: Claude Sonnet (was openai:gpt-4o). On the same long
-    # context, Sonnet is ~30-50% faster, comparable on the union/integration
-    # task, and avoids the OpenAI rate-limit retries that occasionally
-    # extended runs to 60s+.
-    model_spec: str = "claude:sonnet",
+    # v0.51: defaulted back to gpt-4o (Claude too expensive for daily use).
+    model_spec: str = "openai:gpt-4o",
 ) -> dict[str, Any]:
     """Fuse external reports + (optionally) one tool-generated consensus.
 

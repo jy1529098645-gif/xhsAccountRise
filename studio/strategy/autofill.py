@@ -162,13 +162,15 @@ async def autofill(
     # 10-15 s with identical structure (the moderator step was over-engineered
     # for what's effectively a templated form). 'deep' kwarg restores the
     # old behaviour for users who want it.
-    spec: str = "claude:sonnet",
+    spec: str = "openai:gpt-4o",
     deep: bool = False,
     # back-compat kwargs (deprecated; callers can still pass them but only
-    # the deep=True path uses them)
-    claude_spec: str = "claude:sonnet",
-    openai_spec: str = "openai",
-    moderator_spec: str = "claude:sonnet",
+    # the deep=True path uses them). v0.51: dual-side is gpt-4o + deepseek
+    # (kwarg names retained for API back-compat — they no longer reflect the
+    # underlying provider).
+    claude_spec: str = "openai:gpt-4o",
+    openai_spec: str = "deepseek",
+    moderator_spec: str = "openai:gpt-4o",
 ) -> dict[str, Any]:
     """Quickly draft a starter AccountInput.
 

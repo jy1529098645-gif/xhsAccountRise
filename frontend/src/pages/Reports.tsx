@@ -196,7 +196,7 @@ export default function Reports() {
         source_ids: ids,
         library_id: selectedLibId || null,
         include_consensus_report_id: ownLatest,
-        model_spec: "claude:sonnet",
+        model_spec: "openai:gpt-4o",
       }, integrateAbortRef.current.signal);
       setInfo(`✓ GPT-4o 整合完成（${r.elapsed_s}s）· 整合报告已生成。`);
       await load();

@@ -592,12 +592,14 @@ class ComposeRequest(BaseModel):
     niche: str = ""
     extra_constraints: str = ""
     platform: str | None = None  # auto-inherit from active library if None
-    strategist_spec: str = "claude:sonnet"
-    drafter_spec: str = "claude:sonnet"
-    critic_spec: str = "claude:sonnet"
-    refiner_spec: str = "claude:sonnet"
-    synthesizer_spec: str = "claude:sonnet"
-    planner_spec: str = "claude:sonnet"
+    # v0.51: Claude defaults dropped — too expensive. Reasoning roles → gpt-4o,
+    # mechanical roles → deepseek. Users can override via the advanced UI.
+    strategist_spec: str = "openai:gpt-4o"
+    drafter_spec: str = "openai:gpt-4o"
+    critic_spec: str = "deepseek"
+    refiner_spec: str = "openai:gpt-4o"
+    synthesizer_spec: str = "openai:gpt-4o"
+    planner_spec: str = "deepseek"
     skip_strategist: bool = False
     skip_critics: bool = False
     skip_refiner: bool = False
@@ -759,7 +761,7 @@ class IntegrationRequest(BaseModel):
     source_ids: list[str]
     library_id: str | None = None
     include_consensus_report_id: str | None = None
-    model_spec: str = "claude:sonnet"
+    model_spec: str = "openai:gpt-4o"
 
 
 @app.post("/api/external_reports/integrate")
@@ -912,25 +914,27 @@ class StrategyInput(BaseModel):
     personal_strengths: str = ""
     constraints: str = ""
     platform: str | None = None
-    positioner_spec: str = "claude:sonnet"
+    positioner_spec: str = "openai:gpt-4o"
 
 
 class StrategyExpandRequest(BaseModel):
     chosen_direction_idx: int = Field(ge=0)
-    topicgen_spec: str = "claude:sonnet,openai"
-    scheduler_spec: str = "claude:sonnet"
-    resourcer_spec: str = "claude:sonnet"
-    drafter_spec: str = "claude:haiku"  # was sonnet — Haiku is 3-5× faster on short drafts
+    # v0.51: topic creativity gets gpt-4o + deepseek diversity; scheduling
+    # (reasoning) → gpt-4o; resource compilation + body draft (volume) → deepseek.
+    topicgen_spec: str = "openai:gpt-4o,deepseek"
+    scheduler_spec: str = "openai:gpt-4o"
+    resourcer_spec: str = "deepseek"
+    drafter_spec: str = "deepseek"
     restart: bool = False  # cancel any in-flight expand for this pack + restart fresh
 
 
 class StrategyAutofillRequest(BaseModel):
     personal_hint: str = ""
     constraints_hint: str = ""
-    deep: bool = False  # default = 1 Sonnet call (~15s); deep=true = dual-AI debate (~50s)
-    claude_spec: str = "claude:sonnet"
-    openai_spec: str = "openai"
-    moderator_spec: str = "claude:sonnet"
+    deep: bool = False  # default = 1 gpt-4o call (~10-15s); deep=true = dual-AI debate (~50s)
+    claude_spec: str = "openai:gpt-4o"  # API kwarg name kept for back-compat
+    openai_spec: str = "deepseek"       # API kwarg name kept for back-compat
+    moderator_spec: str = "openai:gpt-4o"
 
 
 @app.post("/api/strategy/autofill")
@@ -1169,7 +1173,7 @@ def list_published_drafts(library_id: str | None = None) -> list[dict[str, Any]]
 class RetroAnalyzeRequest(BaseModel):
     draft_ids: list[str] | None = None
     library_id: str | None = None
-    model_spec: str = "claude:sonnet"
+    model_spec: str = "openai:gpt-4o"
 
 
 @app.post("/api/retrospective/analyze")
@@ -1225,7 +1229,7 @@ def list_strategy_performance(pack_id: str) -> list[dict[str, Any]]:
 
 class StrategyIterateRequest(BaseModel):
     feedback_id: str
-    iterator_spec: str = "claude:sonnet"
+    iterator_spec: str = "openai:gpt-4o"
 
 
 @app.post("/api/strategy/{pack_id}/iterate")

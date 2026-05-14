@@ -42,10 +42,27 @@ interface ReviewRow {
   error: string | null;
 }
 
+// v0.51: persist the user's draft selections so navigating away + back
+// keeps the checkbox state.
+const SELECTED_IDS_KEY = "studio.retro.selectedIds.v1";
+function loadSelectedIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(SELECTED_IDS_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw) as string[];
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch { return new Set(); }
+}
+function saveSelectedIds(ids: Set<string>): void {
+  try {
+    localStorage.setItem(SELECTED_IDS_KEY, JSON.stringify(Array.from(ids)));
+  } catch { /* quota — ignore */ }
+}
+
 export default function Retrospective() {
   const [drafts, setDrafts] = useState<PublishedDraft[]>([]);
   const [reviews, setReviews] = useState<ReviewRow[]>([]);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => loadSelectedIds());
   const [analyzing, setAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<any | null>(null);
   const [latestReviewId, setLatestReviewId] = useState<string | null>(null);
@@ -80,13 +97,19 @@ export default function Retrospective() {
     setSelectedIds(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
+      saveSelectedIds(next);
       return next;
     });
   }
   function selectAll() {
-    setSelectedIds(new Set(drafts.map(d => d.draft_id)));
+    const next = new Set(drafts.map(d => d.draft_id));
+    saveSelectedIds(next);
+    setSelectedIds(next);
   }
-  function clearSel() { setSelectedIds(new Set()); }
+  function clearSel() {
+    saveSelectedIds(new Set());
+    setSelectedIds(new Set());
+  }
 
   async function runAnalyze() {
     if (selectedIds.size === 0) {
@@ -98,7 +121,7 @@ export default function Retrospective() {
       RETRO_JOB_ID, "retrospective",
       (signal) => api.runRetrospective({
         draft_ids: Array.from(selectedIds),
-        model_spec: "claude:sonnet",
+        model_spec: "openai:gpt-4o",
       }, signal),
     );
     try {

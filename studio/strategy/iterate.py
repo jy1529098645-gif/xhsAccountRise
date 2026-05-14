@@ -201,7 +201,7 @@ async def iterate_strategy(
     parent_pack_id: str,
     feedback_id: str,
     *,
-    iterator_spec: str = "claude:sonnet",
+    iterator_spec: str = "openai:gpt-4o",
 ) -> dict[str, Any]:
     """Build a new strategy pack from a parent + performance feedback."""
     db.apply_migrations(verbose=False)

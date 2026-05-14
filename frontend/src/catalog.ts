@@ -40,16 +40,16 @@ export const AGENT_ROLES: AgentRoleSpec[] = [
     description: "先给整体方向：用什么 hook、开头怎么钩、结构骨架、避坑点",
     rationale: "一锤定音，避免下面各家 AI 各写各的散架",
     whatItProduces: "策略 (hook 类型 / 开头钩子 / 结构 / 避坑)",
-    defaultIds: ["claude:opus"],
+    defaultIds: ["openai"],
     canSkip: true,
   },
   {
     id: "drafter", label: "起草团",
     multi: true,
     description: "多家 AI 并发起草，每家产一份候选",
-    rationale: "跨模型多样性。Claude 严谨 / DeepSeek 下沉感 / GPT 想法跳",
+    rationale: "跨模型多样性。GPT 想法跳 / DeepSeek 下沉感 / Claude 严谨",
     whatItProduces: "N 份候选稿件",
-    defaultIds: ["claude:opus", "deepseek", "openai"],
+    defaultIds: ["openai"],
     canSkip: false,
   },
   {
@@ -58,7 +58,7 @@ export const AGENT_ROLES: AgentRoleSpec[] = [
     description: "跨家给每份候选打 5 维分（hook / 语言 / 转发 / 品牌 / 结构）",
     rationale: "刻意挑跟起草不同的家来审，避免 AI 自夸偏差",
     whatItProduces: "每份候选的评分 + 风险点 + 改进建议",
-    defaultIds: ["claude:sonnet", "deepseek"],
+    defaultIds: ["deepseek"],
     canSkip: true,
   },
   {
@@ -67,7 +67,7 @@ export const AGENT_ROLES: AgentRoleSpec[] = [
     description: "拿评分最高的候选 + 审稿团反馈 → 重写",
     rationale: "针对性修缺陷，但保持原 hook 类型不偏题",
     whatItProduces: "改稿后的候选",
-    defaultIds: ["claude:opus"],
+    defaultIds: ["openai"],
     canSkip: true,
   },
   {
@@ -76,7 +76,7 @@ export const AGENT_ROLES: AgentRoleSpec[] = [
     description: "看完所有候选 + 评分 + 改稿 → 综合各家优点写最终稿",
     rationale: "★ 核心步骤 ★ 取 A 的标题、B 的金句、C 的结构融合成一篇",
     whatItProduces: "最终融合稿 (含 rationale：从哪家取的什么)",
-    defaultIds: ["claude:opus"],
+    defaultIds: ["openai"],
     canSkip: true,
   },
   {
@@ -85,14 +85,40 @@ export const AGENT_ROLES: AgentRoleSpec[] = [
     description: "结合最终稿 + 历史发布时段热力图 + 评论原话",
     rationale: "不止给内容，还给「什么时候发、接下来发什么、评论怎么运营」",
     whatItProduces: "执行计划 (发布时段 / 后续选题 / 互动话术)",
-    defaultIds: ["claude:opus"],
+    defaultIds: ["deepseek"],
     canSkip: true,
   },
 ];
 
 // "省钱预设" — same agents but all switched to cheaper models.
+// v0.51: default is now GPT-4o + DeepSeek (Claude removed from defaults due
+// to cost). Claude presets remain available for users who want them.
 export const COST_PRESETS: Record<string, Record<AgentRoleId, string[]>> = {
-  "默认 (Opus 全开 ★ 质量最高)": {
+  "默认 (4o + DeepSeek ★ 性价比最高)": {
+    strategist: ["openai"],
+    drafter: ["openai"],
+    critic: ["deepseek"],
+    refiner: ["openai"],
+    synthesizer: ["openai"],
+    planner: ["deepseek"],
+  },
+  "极致省钱 (全 DeepSeek)": {
+    strategist: ["deepseek"],
+    drafter: ["deepseek"],
+    critic: ["deepseek"],
+    refiner: ["deepseek"],
+    synthesizer: ["deepseek"],
+    planner: ["deepseek"],
+  },
+  "多样性 (4o + DeepSeek 起草)": {
+    strategist: ["openai"],
+    drafter: ["openai", "deepseek"],
+    critic: ["deepseek"],
+    refiner: ["openai"],
+    synthesizer: ["openai"],
+    planner: ["deepseek"],
+  },
+  "Claude 全开 (Opus 顶配 · 贵)": {
     strategist: ["claude:opus"],
     drafter: ["claude:opus", "deepseek", "openai"],
     critic: ["claude:sonnet", "deepseek"],
@@ -100,29 +126,13 @@ export const COST_PRESETS: Record<string, Record<AgentRoleId, string[]>> = {
     synthesizer: ["claude:opus"],
     planner: ["claude:opus"],
   },
-  "省钱 (混 Sonnet+DeepSeek)": {
+  "Claude 省钱 (Sonnet 全开)": {
     strategist: ["claude:sonnet"],
     drafter: ["claude:sonnet", "deepseek"],
     critic: ["claude:haiku", "deepseek"],
     refiner: ["claude:sonnet"],
     synthesizer: ["claude:sonnet"],
     planner: ["claude:sonnet"],
-  },
-  "极致省钱 (全 Haiku/DeepSeek)": {
-    strategist: ["claude:haiku"],
-    drafter: ["claude:haiku", "deepseek"],
-    critic: ["claude:haiku"],
-    refiner: ["claude:haiku"],
-    synthesizer: ["claude:haiku"],
-    planner: ["claude:haiku"],
-  },
-  "最强阵容 (含 reasoner)": {
-    strategist: ["deepseek:reasoner"],
-    drafter: ["claude:opus", "deepseek", "openai"],
-    critic: ["claude:opus", "deepseek:reasoner"],
-    refiner: ["claude:opus"],
-    synthesizer: ["claude:opus"],
-    planner: ["claude:opus"],
   },
 };
 

@@ -250,7 +250,7 @@ async def analyze(
     draft_ids: list[str] | None = None,
     *,
     library_id: str | None = None,
-    model_spec: str = "claude:sonnet",
+    model_spec: str = "openai:gpt-4o",
 ) -> dict[str, Any]:
     """Run a retrospective analysis across published drafts + their perf.
 

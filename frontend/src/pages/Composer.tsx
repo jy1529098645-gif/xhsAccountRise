@@ -24,14 +24,35 @@ const COMPOSE_STAGES: TimelineStage[] = [
 
 const ANGLES = ["教程", "痛点", "故事", "工具评测", "对比", "感悟", "数字", "种草", "建议"];
 
+// v0.51: persist the user's form state across navigation. Switching to
+// Strategy / Reports and back should not blow away what they typed.
+const COMPOSER_FORM_KEY = "studio.composer.form.v1";
+interface ComposerFormState {
+  topic: string; angle: string; length: number;
+  cta: "none" | "soft" | "strong";
+  niche: string; extra: string; platform: string;
+}
+const COMPOSER_FORM_DEFAULT: ComposerFormState = {
+  topic: "降AI率技巧", angle: "教程", length: 600, cta: "soft",
+  niche: "", extra: "", platform: "",
+};
+function loadComposerForm(): ComposerFormState {
+  try {
+    const raw = localStorage.getItem(COMPOSER_FORM_KEY);
+    if (!raw) return COMPOSER_FORM_DEFAULT;
+    return { ...COMPOSER_FORM_DEFAULT, ...JSON.parse(raw) };
+  } catch { return COMPOSER_FORM_DEFAULT; }
+}
+
 export default function Composer() {
-  const [topic, setTopic] = useState("降AI率技巧");
-  const [angle, setAngle] = useState("教程");
-  const [length, setLength] = useState(600);
-  const [cta, setCta] = useState<"none" | "soft" | "strong">("soft");
-  const [niche, setNiche] = useState("");
-  const [extra, setExtra] = useState("");
-  const [platform, setPlatform] = useState<string>("");
+  const initialForm = useRef(loadComposerForm()).current;
+  const [topic, setTopic] = useState(initialForm.topic);
+  const [angle, setAngle] = useState(initialForm.angle);
+  const [length, setLength] = useState(initialForm.length);
+  const [cta, setCta] = useState<"none" | "soft" | "strong">(initialForm.cta);
+  const [niche, setNiche] = useState(initialForm.niche);
+  const [extra, setExtra] = useState(initialForm.extra);
+  const [platform, setPlatform] = useState<string>(initialForm.platform);
   const [platforms, setPlatforms] = useState<Platform[]>([]);
   const [activeLib, setActiveLib] = useState<Library | null>(null);
   const [hasExternalReports, setHasExternalReports] = useState<boolean>(false);
@@ -65,6 +86,15 @@ export default function Composer() {
       .then(([ext, integ]) => setHasExternalReports(ext.length > 0 || integ.length > 0))
       .catch(() => {});
   }, []);
+
+  // Persist form state on every change so navigation doesn't blow it away.
+  useEffect(() => {
+    try {
+      localStorage.setItem(COMPOSER_FORM_KEY, JSON.stringify({
+        topic, angle, length, cta, niche, extra, platform,
+      }));
+    } catch { /* quota — ignore */ }
+  }, [topic, angle, length, cta, niche, extra, platform]);
 
   // ---- Pre-fill from Strategy "出这一篇 →" navigation ---------------------
   // Reads sessionStorage instead of location.state. The old location.state

@@ -80,7 +80,7 @@ _DIRECTIONS_SCHEMA = {
 }
 
 
-async def propose(inp: AccountInput, positioner_spec: str = "claude:sonnet") -> dict[str, Any]:
+async def propose(inp: AccountInput, positioner_spec: str = "openai:gpt-4o") -> dict[str, Any]:
     """Phase 1: propose strategic directions. Persists a 'directions' pack."""
     db.apply_migrations(verbose=False)
     pack_id = uuid.uuid4().hex[:16]
@@ -169,7 +169,7 @@ async def propose(inp: AccountInput, positioner_spec: str = "claude:sonnet") -> 
 
 async def propose_stream(
     inp: AccountInput,
-    positioner_spec: str = "claude:sonnet",
+    positioner_spec: str = "openai:gpt-4o",
 ):
     """Async generator yielding SSE-formatted bytes ('event: ...\\ndata: ...\\n\\n').
 
@@ -179,6 +179,24 @@ async def propose_stream(
       - 'complete' {pack_id, directions, elapsed_s}  done; full structured result
       - 'error'    {message}           irrecoverable failure
     """
+    # Streaming text deltas only work with the Anthropic SDK currently. For
+    # OpenAI / DeepSeek specs, fall back to the blocking propose() and emit a
+    # single 'complete' event — the frontend treats that the same as a
+    # finished stream. This keeps the /api/strategy/propose/stream endpoint
+    # usable with any LLM family even if the user can't see incremental text.
+    if not positioner_spec.lower().startswith("claude"):
+        try:
+            result = await propose(inp, positioner_spec=positioner_spec)
+        except Exception as e:
+            yield f"event: error\ndata: {json.dumps({'message': repr(e)}, ensure_ascii=False)}\n\n".encode()
+            return
+        yield (
+            f"event: complete\ndata: "
+            + json.dumps(result, ensure_ascii=False)
+            + "\n\n"
+        ).encode("utf-8")
+        return
+
     db.apply_migrations(verbose=False)
     pack_id = uuid.uuid4().hex[:16]
     t0 = time.time()
@@ -393,18 +411,14 @@ _RESOURCES_SCHEMA = {
 async def expand(
     pack_id: str,
     chosen_idx: int,
-    # Topic generation: dropped DeepSeek by default — it was 30-80s slow and
-    # blocked the pool's gather(). Sonnet + OpenAI is plenty for variety.
-    topicgen_spec: str = "claude:sonnet,openai",
-    # Scheduler is mechanical (merge + arrange); Sonnet is plenty.
-    scheduler_spec: str = "claude:sonnet",
-    # Resourcer aggregates lists; Sonnet handles it.
-    resourcer_spec: str = "claude:sonnet",
-    # Per-slot body drafts (300-600 chars). v0.50: switched Sonnet → Haiku.
-    # Haiku is ~3-5× faster and on a focused 600-char xhs draft with a clear
-    # outline + reference report, the quality gap is small. Drops body
-    # drafter pool wall time from ~25-35s to ~8-15s.
-    drafter_spec: str = "claude:haiku",
+    # v0.51: Claude defaults dropped. Topic creativity → gpt-4o + deepseek
+    # for diversity. Scheduler (planning reasoning) → gpt-4o. Resourcer +
+    # body drafter (volume / mechanical) → deepseek. Net cost ≈ 1/5 vs
+    # Sonnet, latency similar or faster.
+    topicgen_spec: str = "openai:gpt-4o,deepseek",
+    scheduler_spec: str = "openai:gpt-4o",
+    resourcer_spec: str = "deepseek",
+    drafter_spec: str = "deepseek",
     # If True, cancel any in-flight expand for the same pack_id and start
     # fresh. Without this, the idempotency guard would 409 the duplicate
     # POST. Useful when user clicked the direction again because the
@@ -668,19 +682,21 @@ async def _expand_inner(
                 sched_parsed["_error"] = f"L2: {e!r}"
 
         if not (sched_parsed.get("schedule") or []):
-            # L3: cross-family fallback (OpenAI). When Sonnet keeps returning
-            # empty, it's often a tool_use schema quirk specific to that model.
+            # L3: cross-family fallback (DeepSeek). Primary is now gpt-4o,
+            # so DeepSeek is the cross-family option when an empty result
+            # suggests a model-specific tool_use quirk rather than a prompt
+            # problem.
             try:
-                fallback_gen = registry.build("openai")[0]
-                async def _openai_fallback(user_payload: str):
+                fallback_gen = registry.build("deepseek")[0]
+                async def _ds_fallback(user_payload: str):
                     return await _call_json(
                         fallback_gen, prompts.SCHEDULER_SYSTEM, user_payload,
                         max_tokens=8000, tool_name="submit_schedule",
                         schema=_SCHEDULE_SCHEMA,
                     )
-                sched_parsed = await _openai_fallback(short_user)
+                sched_parsed = await _ds_fallback(short_user)
             except Exception as e:
-                sched_parsed["_error"] = f"L3 (openai fallback): {e!r}"
+                sched_parsed["_error"] = f"L3 (deepseek fallback): {e!r}"
 
         # L4: still nothing → synthesize a minimal schedule client-side from
         # the topic-gen pool's output so the user gets *something* usable.

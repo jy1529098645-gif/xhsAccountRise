@@ -42,23 +42,15 @@ from .synthesizer import SynthesizerAgent
 
 @dataclass
 class PipelineConfig:
-    # LLM tiers — Opus reserved ONLY for the final consumer-facing fusion.
-    # Everything else is fast-mid (Sonnet / cheaper). Pre-rebalance the
-    # average compose call burned ~6× Opus calls; now it's 1.
-    strategist_spec: str = "claude:sonnet"               # strategic planning
-    # Drafter pool: dropped OpenAI for default. One strong Sonnet draft is
-    # better than two mediocre ones with random LLM-specific quirks. User
-    # can add openai/deepseek via the advanced agent config if they want
-    # candidate diversity.
-    drafter_spec: str = "claude:sonnet"                  # single Sonnet draft
-    critic_spec: str = "claude:sonnet"                   # one critic is enough signal
-    refiner_spec: str = "claude:sonnet"                  # rewrite on feedback
-    # Synthesizer downgraded Opus → Sonnet. Sonnet 4.6 produces final
-    # synthesized drafts indistinguishable from Opus 4.7 for 600-char xhs
-    # posts; the 2× cost + 3× latency isn't worth it. Heavy-handed users
-    # can override to opus via the agent config UI.
-    synthesizer_spec: str = "claude:sonnet"
-    planner_spec: str = "claude:sonnet"                  # publish schedule, mechanical
+    # v0.51: Claude defaults dropped — too expensive for daily volume.
+    # Reasoning/quality roles → gpt-4o; mechanical/volume roles → deepseek.
+    # Users can still override any role via the advanced agent config UI.
+    strategist_spec: str = "openai:gpt-4o"               # strategic planning
+    drafter_spec: str = "openai:gpt-4o"                  # consumer-facing post body
+    critic_spec: str = "deepseek"                        # cheap judgment is enough
+    refiner_spec: str = "openai:gpt-4o"                  # rewrite on critique
+    synthesizer_spec: str = "openai:gpt-4o"              # final fusion (user-facing)
+    planner_spec: str = "deepseek"                       # publish schedule, mechanical
     # Refiner is auto-skipped when drafter pool produced ≤1 candidate (the
     # default Sonnet-only setup). Set force_refiner=True to always run it
     # — useful when N>=2 drafters or for high-stakes posts.

@@ -48,32 +48,29 @@ def _build_dna_context(dna: dict[str, Any]) -> str:
         return _DNA_CONTEXT_CACHE[cache_key]
     s = dna.get("sections", {}) or {}
     summary = dna.get("summary", {}) or {}
-    # Trimmed v0.50: top counts cut roughly in half. The downstream LLMs
-    # don't need 15 blue-ocean keywords to make decisions — 10 is fine.
-    # Net DNA context shrinks 14KB → ~8KB → ~3K input tokens saved per call.
-    bo = (s.get("keyword_blueocean", {}) or {}).get("rankings", [])[:10]   # was 15
+    bo = (s.get("keyword_blueocean", {}) or {}).get("rankings", [])[:15]
     hook_dist = (s.get("titles", {}) or {}).get("primary_distribution", {})
-    top_titles = (s.get("titles", {}) or {}).get("top_titles", [])[:8]      # was 15
+    top_titles = (s.get("titles", {}) or {}).get("top_titles", [])[:15]
     body_buckets = (s.get("body_and_shape", {}) or {}).get("by_body_length", {})
     timing = (s.get("timing", {}) or {}).get("heatmap", [])
-    tags = (s.get("tags", {}) or {}).get("top_tags", [])[:10]               # was 20
+    tags = (s.get("tags", {}) or {}).get("top_tags", [])[:20]
     cd = (s.get("comment_demand", {}) or {}).get("by_pattern", {})
     top_perf = s.get("top_performers", {}) or {}
 
-    def t(x: str, n: int = 70) -> str:                                      # was 90
+    def t(x: str, n: int = 90) -> str:
         x = (x or "").replace("\n", " ")
         return x[:n] + ("…" if len(x) > n else "")
 
     parts: list[str] = []
     parts.append(f"【DNA 版本】v{dna.get('version', '?')}, 分析 {summary.get('total_notes_analysed', 0)} 篇笔记")
 
-    parts.append("【蓝海关键词 top 10】\n" + "\n".join(
-        f"  · #{i+1} {b['keyword']}: n={b['note_count']}, avg={int(b['avg_likes'])}, p90={int(b['p90_likes'])}"
+    parts.append("【蓝海关键词 top 15】\n" + "\n".join(
+        f"  · #{i+1} {b['keyword']}: n={b['note_count']}, avg_likes={int(b['avg_likes'])}, p90={int(b['p90_likes'])}, score={b['blue_ocean_score']:.0f}"
         for i, b in enumerate(bo)
     ))
 
-    parts.append("【hook 类型分布】\n" + "\n".join(
-        f"  · {k}: {v}" for k, v in sorted(hook_dist.items(), key=lambda kv: -kv[1])[:6]   # was 10
+    parts.append("【hook 类型分布 (主导)】\n" + "\n".join(
+        f"  · {k}: {v}" for k, v in sorted(hook_dist.items(), key=lambda kv: -kv[1])[:10]
     ))
 
     parts.append("【Top 标题样本】\n" + "\n".join(
@@ -82,7 +79,7 @@ def _build_dna_context(dna: dict[str, Any]) -> str:
 
     if body_buckets:
         parts.append("【字数 vs 互动】\n" + "\n".join(
-            f"  · {k}: n={v.get('count', 0)}, median={int((v.get('likes') or {}).get('median', 0))}"
+            f"  · {k}: n={v.get('count', 0)}, median_likes={int((v.get('likes') or {}).get('median', 0))}"
             for k, v in body_buckets.items()
         ))
 
@@ -92,15 +89,15 @@ def _build_dna_context(dna: dict[str, Any]) -> str:
         if valid:
             valid.sort(key=lambda c: c.get("median_likes", 0), reverse=True)
             dow = ["一", "二", "三", "四", "五", "六", "日"]
-            parts.append("【高互动时段 top 5】\n" + "\n".join(   # was 8
+            parts.append("【高互动发布时段 top 8】\n" + "\n".join(
                 f"  · 周{dow[c['dow']]} {c['hour']:02d}:00 — median {int(c['median_likes'])} (n={c['count']})"
-                for c in valid[:5]
+                for c in valid[:8]
             ))
 
     if tags:
         parts.append("【高表现 tags】\n" + "\n".join(
-            f"  · {tg['tag']} (n={tg['count']}, avg={int(tg['avg_likes'])})"
-            for tg in tags[:10]                                  # was 15
+            f"  · {tg['tag']} (n={tg['count']}, avg_likes={int(tg['avg_likes'])})"
+            for tg in tags[:15]
         ))
 
     if cd:
@@ -108,15 +105,15 @@ def _build_dna_context(dna: dict[str, Any]) -> str:
         for label, items in cd.items():
             if not items:
                 continue
-            sample = "、".join(t((it.get("phrase") or ""), 18) for it in items[:4])  # was 5/22
+            sample = "、".join(t((it.get("phrase") or ""), 22) for it in items[:5])
             lines.append(f"  · 「{label}」: {sample}")
         if lines:
-            parts.append("【用户高频询问】\n" + "\n".join(lines))
+            parts.append("【用户高频询问 (评论挖掘)】\n" + "\n".join(lines))
 
     if top_perf.get("top_collect_rate"):
-        parts.append("【高收藏率笔记】\n" + "\n".join(
+        parts.append("【高收藏率笔记 (干货信号)】\n" + "\n".join(
             f"  · rate={x.get('collect_rate', 0):.2f}: {t(x.get('title', ''))}"
-            for x in top_perf["top_collect_rate"][:5]          # was 8
+            for x in top_perf["top_collect_rate"][:8]
         ))
 
     # ---- Raw-content snapshot ------------------------------------------
@@ -375,7 +372,7 @@ async def run(library_id: str, *,
               # Pass mode='deep' for full Opus + critique pipeline ~200-250s.
               mode: str = "fast",
               claude_spec: str | None = None,
-              openai_spec: str = "openai",
+              openai_spec: str = "openai:gpt-4o",
               moderator_spec: str | None = None) -> dict[str, Any]:
     """End-to-end run. Persists into studio_insight_reports and returns the
     full record.
@@ -388,10 +385,13 @@ async def run(library_id: str, *,
                       the deliverable (e.g. selling analysis to a client).
     """
     deep = (mode == "deep")
+    # v0.51: fast mode swapped Sonnet → gpt-4o (cost). Deep mode keeps Opus
+    # because deep is the explicit "high-stakes investment" path where Opus
+    # quality is the whole point.
     if claude_spec is None:
-        claude_spec = "claude:opus" if deep else "claude:sonnet"
+        claude_spec = "claude:opus" if deep else "openai:gpt-4o"
     if moderator_spec is None:
-        moderator_spec = "claude:opus" if deep else "claude:sonnet"
+        moderator_spec = "claude:opus" if deep else "openai:gpt-4o"
     db.apply_migrations(verbose=False)
     project.ensure_bootstrap()
 

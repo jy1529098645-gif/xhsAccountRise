@@ -68,6 +68,38 @@ const FORMAT_COLORS: Record<string, { bg: string; fg: string }> = {
 // localStorage key for in-progress brief draft (per project)
 const DRAFT_KEY = "studio.strategy.draftInput";
 
+// localStorage key for the user's chosen direction per strategy pack.
+// v0.51: persists across navigation so users don't lose their pick when they
+// switch modules then come back. Keyed by pack_id so each strategy has its
+// own pick.
+const CHOSEN_IDX_KEY = "studio.strategy.chosenIdxByPack.v1";
+
+function loadChosenIdxFor(packId: string): number | null {
+  try {
+    const raw = localStorage.getItem(CHOSEN_IDX_KEY);
+    if (!raw) return null;
+    const map = JSON.parse(raw) as Record<string, number>;
+    const v = map[packId];
+    return typeof v === "number" ? v : null;
+  } catch { return null; }
+}
+
+function saveChosenIdxFor(packId: string, idx: number): void {
+  try {
+    const raw = localStorage.getItem(CHOSEN_IDX_KEY);
+    const map = raw ? JSON.parse(raw) as Record<string, number> : {};
+    map[packId] = idx;
+    // Keep map size bounded (most recent 50 packs).
+    const entries = Object.entries(map);
+    if (entries.length > 50) {
+      const trimmed = Object.fromEntries(entries.slice(-50));
+      localStorage.setItem(CHOSEN_IDX_KEY, JSON.stringify(trimmed));
+    } else {
+      localStorage.setItem(CHOSEN_IDX_KEY, JSON.stringify(map));
+    }
+  } catch { /* ignore quota */ }
+}
+
 /** Poll a pack until status leaves 'expanding'. Returns the StrategyDetail
  * on success ('expanded'), null if it stayed 'expanding' past the timeout
  * or transitioned to 'expand_failed'.
@@ -134,10 +166,10 @@ export default function Strategy() {
   const [err, setErr] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [positionerSpec, setPositionerSpec] = useState("claude:opus");
-  const [topicgenSpec, setTopicgenSpec] = useState("claude:opus,deepseek,openai");
-  const [schedulerSpec, setSchedulerSpec] = useState("claude:opus");
-  const [resourcerSpec, setResourcerSpec] = useState("claude:opus");
+  const [positionerSpec, setPositionerSpec] = useState("openai");
+  const [topicgenSpec, setTopicgenSpec] = useState("openai,deepseek");
+  const [schedulerSpec, setSchedulerSpec] = useState("openai");
+  const [resourcerSpec, setResourcerSpec] = useState("deepseek");
   const [autofill, setAutofill] = useState<AutofillResult | null>(null);
   const [autofillErr, setAutofillErr] = useState<string | null>(null);
   const [proposeSeen, setProposeSeen] = useState<number>(0);  // SSE progress: how many directions visible so far
@@ -214,6 +246,9 @@ export default function Strategy() {
       setPackId(pr.result.pack_id);
       setDirections(pr.result.directions || []);
       if (pr.result.directions?.length) setPhase("directions");
+      // Also restore the user's previously-chosen direction if any.
+      const cachedIdx = loadChosenIdxFor(pr.result.pack_id);
+      if (cachedIdx !== null) setChosenIdx(cachedIdx);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -242,6 +277,18 @@ export default function Strategy() {
       setPhase("input");
       try {
         const d = await api.getStrategy(urlPackId);
+        // Server-side chosen_direction_idx wins over the local cache when
+        // present (it reflects what was actually expanded). Falls back to
+        // the local cache for direction-only packs the user hadn't
+        // yet expanded before navigating away.
+        const serverIdx = (d as any).chosen_direction_idx;
+        const cachedIdx = loadChosenIdxFor(urlPackId);
+        const restoredIdx = (typeof serverIdx === "number" && serverIdx >= 0)
+          ? serverIdx
+          : cachedIdx;
+        if (restoredIdx !== null && restoredIdx !== undefined) {
+          setChosenIdx(restoredIdx);
+        }
         if (d.pack) {
           setPack(d.pack);
           setPackId(urlPackId);
@@ -350,6 +397,7 @@ export default function Strategy() {
   async function pickDirection(idx: number, restart: boolean = false) {
     if (!packId) return;
     setChosenIdx(idx); setErr(null);
+    saveChosenIdxFor(packId, idx);
     // If a job for this pack is already running locally, cancel it before
     // starting a new one (the backend restart=true also handles this on
     // its side; we do both for snappy UX).
@@ -1096,7 +1144,7 @@ function PackView({pack, onReset}: {pack: StrategyPackDTO; onReset: () => void})
           {schedule.length === 0 && (
             <div className="muted" style={{padding: 16, background: "#fafafa",
                                             borderRadius: 8, fontSize: 13}}>
-              ⚠️ 这次 AI 没有排出任何 slot（可能是 Sonnet 一次性输出超长被截）。
+              ⚠️ 这次 AI 没有排出任何 slot（可能是模型一次性输出超长被截）。
               点上面「新建策略」重新跑一次，或者去 设置 切到 claude:opus 重试。
             </div>
           )}
@@ -1175,7 +1223,7 @@ function IterateCard({pack}: {pack: StrategyPackDTO}) {
       setHistory(prev => [r, ...prev]);
       setIterating(true);
       const out = await api.iterateStrategy(pack.pack_id, {
-        feedback_id: r.feedback_id, iterator_spec: "claude:opus",
+        feedback_id: r.feedback_id, iterator_spec: "openai",
       });
       setInfo(`✓ 下一轮策略已生成（迭代 #${out.iteration_n}）。即将跳转…`);
       setTimeout(() => navigate(`/strategy/${out.pack_id}`), 800);
