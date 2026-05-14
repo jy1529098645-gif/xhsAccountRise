@@ -55,7 +55,9 @@ export default function ProjectPicker() {
       </button>
       {open && (
         <div className="picker-menu">
-          <div className="picker-menu-header">切换项目</div>
+          <div className="picker-menu-header">
+            切换项目 · 共 {projects.length} 个
+          </div>
           {projects.map(p => (
             <div key={p.project_id} className={`picker-item ${p.active ? "active" : ""}`}>
               <span style={{flex: 1, display: "flex", gap: 6, alignItems: "center", cursor: "pointer"}}

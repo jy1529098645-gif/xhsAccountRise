@@ -156,6 +156,71 @@ def create_project(req: ProjectInput) -> dict[str, Any]:
     }
 
 
+# v0.61.4: 调试端点 — 当用户抱怨「项目没显示全」时，可以打开
+# /api/projects/diagnostic 看清楚 ：全局 db 有哪些 + 每个 per-lib .db 里
+# 还分别藏着哪些项目行 + 哪些没被合并到全局。
+@app.get("/api/projects/diagnostic")
+def projects_diagnostic() -> dict[str, Any]:
+    import sqlite3
+    from .. import config
+    project.ensure_bootstrap()
+    global_db = config.DATA_DIR / "projects.db"
+    global_rows: list[dict[str, Any]] = []
+    try:
+        con = sqlite3.connect(f"file:{global_db.as_posix()}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        for r in con.execute(
+            "SELECT project_id, name, emoji, is_default, archived"
+            " FROM studio_projects ORDER BY created_at"
+        ):
+            global_rows.append({
+                "project_id": r["project_id"], "name": r["name"],
+                "emoji": r["emoji"], "is_default": bool(r["is_default"]),
+                "archived": bool(r["archived"]),
+            })
+        con.close()
+    except Exception as e:
+        global_rows = [{"_error": repr(e)}]
+    per_lib: dict[str, Any] = {}
+    libs_dir = config.DATA_DIR / "libraries"
+    if libs_dir.exists():
+        for lib_dir in libs_dir.iterdir():
+            if not lib_dir.is_dir():
+                continue
+            db_file = lib_dir / "xhs.db"
+            if not db_file.exists():
+                continue
+            try:
+                con = sqlite3.connect(f"file:{db_file.as_posix()}?mode=ro", uri=True)
+                con.row_factory = sqlite3.Row
+                has = con.execute(
+                    "SELECT name FROM sqlite_master"
+                    " WHERE type='table' AND name='studio_projects'"
+                ).fetchone()
+                if not has:
+                    per_lib[lib_dir.name] = {"has_table": False, "rows": []}
+                else:
+                    rs = con.execute(
+                        "SELECT project_id, name FROM studio_projects ORDER BY created_at"
+                    ).fetchall()
+                    per_lib[lib_dir.name] = {
+                        "has_table": True,
+                        "rows": [
+                            {"project_id": r["project_id"], "name": r["name"]}
+                            for r in rs
+                        ],
+                    }
+                con.close()
+            except Exception as e:
+                per_lib[lib_dir.name] = {"error": repr(e)}
+    return {
+        "global_db_path": str(global_db),
+        "global_rows": global_rows,
+        "per_lib_dbs": per_lib,
+        "active_project_id": project.active_project_id(),
+    }
+
+
 @app.post("/api/projects/{project_id}/activate")
 def activate_project(project_id: str) -> dict[str, str]:
     try:

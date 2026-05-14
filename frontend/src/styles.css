@@ -327,7 +327,8 @@ textarea { resize: vertical; min-height: 100px; font-size: 14px; }
   position: absolute; left: 0; right: 0; top: calc(100% + 4px);
   background: #fff; border: 1px solid var(--border); border-radius: 8px;
   box-shadow: 0 4px 18px rgba(0,0,0,0.08); padding: 6px; z-index: 50;
-  max-height: 360px; overflow: auto;
+  /* v0.61.4: 360 → 70vh，避免项目数多时下面的被滚动条藏住 */
+  max-height: 70vh; overflow: auto;
 }
 .picker-menu-header { font-size: 10.5px; color: var(--muted); padding: 4px 8px;
   text-transform: uppercase; letter-spacing: 0.05em; }

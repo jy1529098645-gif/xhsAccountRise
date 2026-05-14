@@ -121,6 +121,14 @@ def _alloc_id(hint: str | None) -> str:
 
 
 def list_projects(include_archived: bool = False) -> list[Project]:
+    # v0.61.4 ：每次 list 都重新 union 一遍 per-library .db 里的 studio_projects。
+    # 用户反馈 ：v0.61.3 之后还是有「创建过的项目没显示全」。
+    # 原因 ：迁移只在 ensure_bootstrap（进程启动时）跑一遍 — 启动后用户在不同
+    # library 上下文里又创建新项目时，新的 orphan 行还是会留在 per-lib .db 里
+    # 没进全局 db。每次 list 跑一遍 migration 才能彻底保证「所有 .db 里见过
+    # 的项目」都汇总到全局 db 里。成本 ：扫 N 个 .db 的 sqlite header，
+    # 微秒级，且 INSERT OR IGNORE 幂等不重复写。
+    _migrate_per_library_projects_into_global()
     with _gconn(read_only=True) as con:
         if include_archived:
             rows = list(con.execute(
@@ -353,17 +361,20 @@ def ensure_bootstrap() -> None:
 
 def _migrate_per_library_projects_into_global() -> None:
     """扫所有 data/libraries/*/xhs.db 里的 studio_projects，把行 union 到
-    data/projects.db。INSERT OR IGNORE 保证幂等。"""
+    data/projects.db。INSERT OR IGNORE 保证幂等。每次 list_projects 调一次。"""
     libraries_dir = config.DATA_DIR / "libraries"
     if not libraries_dir.exists():
         return
     rows_to_insert: list[tuple] = []
+    scanned = 0
+    per_lib_counts: dict[str, int] = {}
     for lib_dir in libraries_dir.iterdir():
         if not lib_dir.is_dir():
             continue
         per_lib_db = lib_dir / "xhs.db"
         if not per_lib_db.exists():
             continue
+        scanned += 1
         try:
             uri = f"file:{per_lib_db.as_posix()}?mode=ro"
             con = sqlite3.connect(uri, uri=True)
@@ -375,12 +386,14 @@ def _migrate_per_library_projects_into_global() -> None:
                     " WHERE type='table' AND name='studio_projects'"
                 ).fetchone()
                 if not has_table:
+                    per_lib_counts[lib_dir.name] = -1  # no table
                     continue
                 rows = con.execute(
                     "SELECT project_id, name, description, emoji,"
                     " created_at, updated_at, is_default, archived"
                     " FROM studio_projects"
                 ).fetchall()
+                per_lib_counts[lib_dir.name] = len(rows)
                 for r in rows:
                     rows_to_insert.append((
                         r["project_id"], r["name"], r["description"], r["emoji"],
@@ -389,16 +402,35 @@ def _migrate_per_library_projects_into_global() -> None:
                     ))
             finally:
                 con.close()
-        except Exception:
+        except Exception as e:
             # 单个库出错不阻塞整体迁移
+            per_lib_counts[lib_dir.name] = -2  # error
+            import logging
+            logging.getLogger(__name__).warning(
+                "projects migration skipped %s due to %r", lib_dir.name, e
+            )
             continue
     if not rows_to_insert:
         return
     with _gconn() as con:
+        before = con.execute(
+            "SELECT COUNT(*) FROM studio_projects"
+        ).fetchone()[0]
         con.executemany(
             "INSERT OR IGNORE INTO studio_projects"
             " (project_id, name, description, emoji,"
             "  created_at, updated_at, is_default, archived)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             rows_to_insert,
+        )
+        after = con.execute(
+            "SELECT COUNT(*) FROM studio_projects"
+        ).fetchone()[0]
+    if after > before:
+        # 新行被合并进来 — 让用户/开发者在 console 看见。
+        import logging
+        logging.getLogger(__name__).info(
+            "projects migration: %d new rows union'd from per-lib .dbs"
+            " (scanned %d libs, per-lib row counts: %s)",
+            after - before, scanned, per_lib_counts,
         )
