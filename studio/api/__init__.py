@@ -43,6 +43,7 @@ from ..strategy.models import AccountInput
 from ..insight import pipeline as insight_pipeline
 from ..insight import external as external_reports
 from .. import retrospective as retro
+from .. import jobs as job_registry
 
 load_dotenv(dotenv_path=config.REPO_ROOT / ".env", override=True)
 
@@ -1043,6 +1044,23 @@ def delete_strategy(pack_id: str) -> dict[str, str]:
         if cur.rowcount == 0:
             raise HTTPException(404, "not found in current project")
     return {"deleted": pack_id}
+
+
+# ---------------- pause / cancel running jobs --------------------
+
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job(job_id: str) -> dict[str, Any]:
+    """Cooperatively cancel a running pipeline. The pipeline detects the
+    cancel flag at the next stage boundary, saves partial state, and the
+    in-flight LLM call (if any) is aborted via the underlying asyncio.Task
+    cancellation. Subsequent calls with the same primary key (pack_id /
+    draft_id / etc.) resume from where it left off."""
+    return job_registry.cancel(job_id)
+
+
+@app.get("/api/jobs")
+def list_running_jobs() -> list[dict[str, Any]]:
+    return job_registry.list_jobs()
 
 
 # ---------------- retrospective (复盘) endpoints --------------------

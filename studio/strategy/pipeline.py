@@ -278,10 +278,29 @@ async def expand(
             (chosen_idx, int(time.time()), pack_id),
         )
 
+    from .. import jobs
+    job_id = f"expand:{pack_id}"
     try:
-        return await _expand_inner(pack_id, chosen_idx, chosen, inp, lib_id, platform,
-                                    topicgen_spec, scheduler_spec, resourcer_spec,
-                                    drafter_spec, t0)
+        async with jobs.tracked(job_id, kind="expand", label=chosen.name):
+            return await _expand_inner(pack_id, chosen_idx, chosen, inp, lib_id, platform,
+                                        topicgen_spec, scheduler_spec, resourcer_spec,
+                                        drafter_spec, t0, job_id=job_id)
+    except (jobs.CancelRequested, asyncio.CancelledError):
+        # User pressed pause. partial_state_json was already checkpointed
+        # by _expand_inner at each stage boundary.
+        try:
+            with db.connect() as con:
+                con.execute(
+                    "UPDATE studio_strategies SET status='paused',"
+                    " updated_at=? WHERE pack_id=?",
+                    (int(time.time()), pack_id),
+                )
+        except Exception:
+            pass
+        return {
+            "pack_id": pack_id, "status": "paused",
+            "message": "expand 已暂停。点恢复继续会从断点接上。",
+        }
     except Exception as e:
         # Any uncaught failure → mark pack so frontend stops polling.
         try:
@@ -301,8 +320,60 @@ async def _expand_inner(
     pack_id: str, chosen_idx: int, chosen: StrategicDirection,
     inp: AccountInput, lib_id: str, platform: str,
     topicgen_spec: str, scheduler_spec: str, resourcer_spec: str,
-    drafter_spec: str, t0: float,
+    drafter_spec: str, t0: float, job_id: str | None = None,
 ) -> dict[str, Any]:
+    from .. import jobs
+
+    def _check_cancel():
+        if job_id:
+            jobs.check(job_id)
+
+    def _save_checkpoint(stage: str, payload: dict[str, Any]) -> None:
+        try:
+            with db.connect() as con:
+                # Merge into existing partial_state_json so each stage adds
+                # its own chunk (topicgen / scheduler / drafter / resourcer).
+                row = con.execute(
+                    "SELECT partial_state_json FROM studio_strategies WHERE pack_id=?",
+                    (pack_id,),
+                ).fetchone()
+                cur = {}
+                if row and row["partial_state_json"]:
+                    try: cur = json.loads(row["partial_state_json"])
+                    except Exception: cur = {}
+                cur[stage] = payload
+                con.execute(
+                    "UPDATE studio_strategies SET partial_state_json=?,"
+                    " paused_at_stage=?, updated_at=? WHERE pack_id=?",
+                    (json.dumps(cur, ensure_ascii=False), stage, int(time.time()), pack_id),
+                )
+        except Exception:
+            pass
+
+    def _load_checkpoints() -> dict[str, Any]:
+        try:
+            with db.connect(read_only=True) as con:
+                row = con.execute(
+                    "SELECT partial_state_json FROM studio_strategies WHERE pack_id=?",
+                    (pack_id,),
+                ).fetchone()
+            if row and row["partial_state_json"]:
+                return json.loads(row["partial_state_json"]) or {}
+        except Exception:
+            pass
+        return {}
+
+    def _clear_checkpoints():
+        try:
+            with db.connect() as con:
+                con.execute(
+                    "UPDATE studio_strategies SET partial_state_json=NULL,"
+                    " paused_at_stage=NULL WHERE pack_id=?", (pack_id,))
+        except Exception:
+            pass
+
+    saved = _load_checkpoints()
+
     dna = _latest_dna_payload()
     topic_count = inp.cycle_weeks * inp.posts_per_week
 
@@ -338,7 +409,14 @@ async def _expand_inner(
         except Exception as e:
             return {"_error": str(e), "_llm": g.model}
 
-    topic_results = await asyncio.gather(*(_one_topicgen(g) for g in topicgens))
+    # Resume: skip topicgen if we already have its results checkpointed.
+    if "topicgen" in saved:
+        topic_results = saved["topicgen"]
+    else:
+        _check_cancel()
+        topic_results = await asyncio.gather(*(_one_topicgen(g) for g in topicgens))
+        _save_checkpoint("topicgen", topic_results)
+        _check_cancel()
 
     # Collate all topics with a source-llm tag for visibility.
     all_topics: list[dict[str, Any]] = []
@@ -371,28 +449,35 @@ async def _expand_inner(
             schema=_SCHEDULE_SCHEMA,
         )
 
-    try:
-        # Scheduler only outputs structure. Body drafts come later from a
-        # parallel pool — see v0.29 / v0.30 commits for why we split this.
-        sched_parsed = await _try_scheduler(sched_user)
-        # Sonnet sometimes returns {"schedule": []} when its tool_use call
-        # hits truncation or a content-quirk. Retry once with a shorter
-        # prompt (drop the topic candidates pool, keep direction + count).
-        if not (sched_parsed.get("schedule") or []):
-            short_user = (
-                f"【已选定方向】{chosen.name} — {chosen.positioning_statement}\n"
-                f"【受众】{chosen.target_audience}\n"
-                f"【运营】{inp.cycle_weeks} 周 × {inp.posts_per_week} 篇/周 = 共 {topic_count} 篇\n\n"
-                f"请直接基于这个方向 + 周期编排出 {topic_count} 篇排期。"
-                f" 不需要再读候选选题池 — 自己写 {topic_count} 个差异化标题就行。"
-                f" 严格按 system schema 输出 schedule（长度 = {topic_count}）+ weekly_themes。"
-            )
-            try:
-                sched_parsed = await _try_scheduler(short_user, max_tokens=8000)
-            except Exception as e:
-                sched_parsed["_error"] = f"retry failed: {e!r}"
-    except Exception as e:
-        sched_parsed = {"_error": str(e)}
+    # Resume: skip scheduler if already done.
+    if "scheduler" in saved:
+        sched_parsed = saved["scheduler"]
+    else:
+        try:
+            _check_cancel()
+            # Scheduler only outputs structure. Body drafts come later from a
+            # parallel pool — see v0.29 / v0.30 commits for why we split this.
+            sched_parsed = await _try_scheduler(sched_user)
+            # Sonnet sometimes returns {"schedule": []} when its tool_use call
+            # hits truncation or a content-quirk. Retry once with a shorter
+            # prompt (drop the topic candidates pool, keep direction + count).
+            if not (sched_parsed.get("schedule") or []):
+                short_user = (
+                    f"【已选定方向】{chosen.name} — {chosen.positioning_statement}\n"
+                    f"【受众】{chosen.target_audience}\n"
+                    f"【运营】{inp.cycle_weeks} 周 × {inp.posts_per_week} 篇/周 = 共 {topic_count} 篇\n\n"
+                    f"请直接基于这个方向 + 周期编排出 {topic_count} 篇排期。"
+                    f" 不需要再读候选选题池 — 自己写 {topic_count} 个差异化标题就行。"
+                    f" 严格按 system schema 输出 schedule（长度 = {topic_count}）+ weekly_themes。"
+                )
+                try:
+                    sched_parsed = await _try_scheduler(short_user, max_tokens=8000)
+                except Exception as e:
+                    sched_parsed["_error"] = f"retry failed: {e!r}"
+        except Exception as e:
+            sched_parsed = {"_error": str(e)}
+        _save_checkpoint("scheduler", sched_parsed)
+        _check_cancel()
 
     weekly_themes_raw = sched_parsed.get("weekly_themes") or []
     schedule_raw = sched_parsed.get("schedule") or []
@@ -434,6 +519,7 @@ async def _expand_inner(
             outline=[str(x) for x in (s.get("outline") or [])],
             materials_needed=[str(x) for x in (s.get("materials_needed") or [])],
             intent=str(s.get("intent", "")),
+            content_format=str(s.get("content_format", "")),
         )
         for _raw in schedule_raw
         for s in [_to_slot_dict(_raw)]
@@ -457,15 +543,17 @@ async def _expand_inner(
     )
 
     async def _draft_one(slot_idx: int, slot: TopicSlot) -> tuple[int, str, str | None]:
+        fmt = slot.content_format or ("图文" if platform == "xiaohongshu" else "短视频" if platform in ("douyin","kuaishou") else "图文")
         slot_prompt = (
             f"{direction_block}\n\n"
             f"【这一篇的 slot】\n"
             f"- 标题：{slot.title}\n"
             f"- 备选标题：{', '.join(slot.title_variants[:3])}\n"
             f"- 角度：{slot.angle} · hook 类型：{slot.hook_type} · 意图：{slot.intent}\n"
+            f"- **content_format：{fmt}** ← 必须按这个格式写！图文 vs 短视频脚本 vs 长视频章节差别很大\n"
             f"- 大纲：\n" + "\n".join(f"  · {o}" for o in slot.outline) + "\n"
             + (f"- 需要的素材：{', '.join(slot.materials_needed)}\n" if slot.materials_needed else "")
-            + "\n请按 system 给的 schema 输出这一篇的 body_draft。"
+            + f"\n请按 system 给的 {fmt} 格式输出 body_draft（**不要混淆格式**）。"
         )
         # Two-shot retry: bursts of N parallel Sonnet calls sometimes return
         # empty body_draft (rate-limit / throttle / SDK quirk). Retry once
@@ -492,7 +580,18 @@ async def _expand_inner(
         return slot_idx, "", last_err
 
     drafter_errors: list[str] = []
-    if schedule:
+    # Resume: skip body-drafter pool if already done; merge cached body_drafts
+    # back into the in-memory schedule.
+    if "drafter" in saved and isinstance(saved["drafter"], list):
+        cached = {item.get("idx"): item for item in saved["drafter"] if isinstance(item, dict)}
+        for i, slot in enumerate(schedule):
+            entry = cached.get(i)
+            if entry and entry.get("body"):
+                slot.body_draft = entry["body"]
+            elif entry and entry.get("err"):
+                drafter_errors.append(f"slot #{i + 1} ({slot.title[:40]}): {entry['err']}")
+    elif schedule:
+        _check_cancel()
         draft_results = await asyncio.gather(
             *[_draft_one(i, s) for i, s in enumerate(schedule)]
         )
@@ -500,6 +599,10 @@ async def _expand_inner(
             schedule[idx].body_draft = draft
             if err:
                 drafter_errors.append(f"slot #{idx + 1} ({schedule[idx].title[:40]}): {err}")
+        _save_checkpoint("drafter", [
+            {"idx": idx, "body": d, "err": e} for idx, d, e in draft_results
+        ])
+        _check_cancel()
 
     # --- Resourcer: consolidate ---
     schedule_summary = "\n".join(
@@ -513,13 +616,18 @@ async def _expand_inner(
         f"请按 system 输出 materials_checklist + risks_and_mitigations + success_metrics。"
     )
     resourcer_gen = registry.build(resourcer_spec)[0]
-    try:
-        res_parsed = await _call_json(
-            resourcer_gen, prompts.RESOURCER_SYSTEM, res_user,
-            max_tokens=2048, tool_name="submit_resources", schema=_RESOURCES_SCHEMA,
-        )
-    except Exception as e:
-        res_parsed = {"_error": str(e)}
+    if "resourcer" in saved:
+        res_parsed = saved["resourcer"]
+    else:
+        try:
+            _check_cancel()
+            res_parsed = await _call_json(
+                resourcer_gen, prompts.RESOURCER_SYSTEM, res_user,
+                max_tokens=2048, tool_name="submit_resources", schema=_RESOURCES_SCHEMA,
+            )
+        except Exception as e:
+            res_parsed = {"_error": str(e)}
+        _save_checkpoint("resourcer", res_parsed)
 
     # Defensive coercion. Sonnet's tool_use occasionally returns these
     # list fields as a single JSON-encoded string (e.g. '["a","b"]'). If we
@@ -558,7 +666,8 @@ async def _expand_inner(
     with db.connect() as con:
         con.execute(
             "UPDATE studio_strategies SET status=?, chosen_direction_idx=?,"
-            " pack_json=?, updated_at=?, elapsed_s=?"
+            " pack_json=?, updated_at=?, elapsed_s=?,"
+            " partial_state_json=NULL, paused_at_stage=NULL"
             " WHERE pack_id=?",
             ("expanded", chosen_idx, pack_json_str, now, elapsed_total, pack_id),
         )

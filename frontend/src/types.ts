@@ -197,6 +197,7 @@ export interface TopicSlotDTO {
   materials_needed: string[];
   intent: string;
   body_draft?: string;
+  content_format?: string;  // 图文 / 短视频 / 长视频 / 直播 / 纯文本
 }
 
 export interface WeekThemeDTO {

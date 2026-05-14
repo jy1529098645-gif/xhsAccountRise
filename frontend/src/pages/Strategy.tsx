@@ -6,7 +6,7 @@ import PlatformPill from "../components/PlatformPill";
 import ProgressTimeline, { Stage as TimelineStage } from "../components/ProgressTimeline";
 import NextStepCard from "../components/NextStepCard";
 import { humaniseError, humaniseErrorAsync } from "../errors";
-import { isAborted } from "../api";
+import { isAborted, cancelBackendJob } from "../api";
 import { LLM_CATALOG } from "../catalog";
 import type {
   AccountInputDTO, Library, Platform, StrategicDirectionDTO, StrategyPackDTO,
@@ -51,6 +51,17 @@ interface AutofillResult {
 const DOW_LABELS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 const INTENT_COLORS: Record<string, string> = {
   "拉新": "#fff5f5", "互动": "#fff8e6", "转化": "#fdecea", "沉淀": "#f0fafe",
+};
+
+const FORMAT_ICONS: Record<string, string> = {
+  "图文": "🖼️", "短视频": "🎬", "长视频": "🎞️", "直播": "📡", "纯文本": "📝",
+};
+const FORMAT_COLORS: Record<string, { bg: string; fg: string }> = {
+  "图文":    { bg: "#fef3c7", fg: "#92400e" },
+  "短视频":  { bg: "#dbeafe", fg: "#1e3a8a" },
+  "长视频":  { bg: "#e0e7ff", fg: "#3730a3" },
+  "直播":    { bg: "#fce7f3", fg: "#9d174d" },
+  "纯文本":  { bg: "#f3f4f6", fg: "#374151" },
 };
 
 // localStorage key for in-progress brief draft (per project)
@@ -131,9 +142,19 @@ export default function Strategy() {
     { kind: "autofill" } | { kind: "propose" } | { kind: "expand"; idx: number } | null
   >(null);
   const abortRef = useRef<AbortController | null>(null);
+  const activeJobIdRef = useRef<string | null>(null);
   function pauseCurrent() {
-    abortRef.current?.abort();
-    abortRef.current = null;
+    // Real backend cancel for jobs that support it (expand). Other jobs
+    // get frontend-only abort.
+    const jid = activeJobIdRef.current;
+    if (jid) {
+      cancelBackendJob(jid);
+      // Don't abort the fetch — let it return naturally with status='paused'
+      // so resume metadata stays consistent. The cancel-poll loop on backend
+      // detects the flag within ~3-5s.
+    } else {
+      abortRef.current?.abort();
+    }
   }
 
   // Save in-progress input to localStorage as user types.
@@ -294,12 +315,18 @@ export default function Strategy() {
     setInfo("AI 正在生成 N 周完整排期 + 材料清单（约 60-180s）…");
     setPhase("loading-expand");
     abortRef.current = new AbortController();
+    activeJobIdRef.current = `expand:${packId}`;
     try {
-      const res = await api.expandStrategy(packId, idx, {
+      const res: any = await api.expandStrategy(packId, idx, {
         topicgen_spec: topicgenSpec,
         scheduler_spec: schedulerSpec,
         resourcer_spec: resourcerSpec,
       }, abortRef.current.signal);
+      if (res && res.status === "paused") {
+        setInfo("⏸ 已暂停。点这个方向「继续等 / 重新点击」会从断点接上 — 已完成的阶段不会重跑。");
+        setPhase("directions");
+        return;
+      }
       setPack(res.pack);
       setInfo(null);
       setLastFailedAction(null);
@@ -343,6 +370,7 @@ export default function Strategy() {
       setPhase("directions");
     } finally {
       abortRef.current = null;
+      activeJobIdRef.current = null;
     }
   }
 
@@ -894,6 +922,7 @@ function PackView({pack, onReset}: {pack: StrategyPackDTO; onReset: () => void})
       cta_strength: "soft" as const,
       niche: pack.chosen_direction?.positioning_statement || "",
       extra_constraints: [
+        slot.content_format ? `内容形式 ：${slot.content_format}（按此格式写！图文/短视频脚本/长视频章节差别很大）` : "",
         slot.intent ? `意图 ：${slot.intent}` : "",
         slot.hook_type ? `hook_type: ${slot.hook_type}` : "",
         slot.outline?.length ? "大纲：" + slot.outline.join(" / ") : "",
@@ -1153,6 +1182,15 @@ function SlotCard({slot, idx, onCompose}: {
             </span>
             {slot.publish_slot && <span className="tag-pill">{slot.publish_slot}</span>}
             <span className="tag-pill" style={{background: INTENT_COLORS[slot.intent] ?? "#f4f4f4"}}>{slot.intent}</span>
+            {slot.content_format && (
+              <span className="tag-pill" style={{
+                background: FORMAT_COLORS[slot.content_format]?.bg ?? "#eef2ff",
+                color: FORMAT_COLORS[slot.content_format]?.fg ?? "#4338ca",
+                fontWeight: 600,
+              }}>
+                {FORMAT_ICONS[slot.content_format] ?? "📄"} {slot.content_format}
+              </span>
+            )}
             {slot.angle && <span className="tag-pill">{slot.angle}</span>}
             {slot.hook_type && <span className="tag-pill">{slot.hook_type}</span>}
             <span className="muted" style={{fontSize: 11}}>#{idx + 1}</span>

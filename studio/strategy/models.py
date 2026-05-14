@@ -57,6 +57,7 @@ class TopicSlot:
     intent: str = ""                   # 拉新 / 互动 / 转化 / 沉淀
     body_draft: str = ""               # 300-600-char first-pass body the
                                        # user can tweak then hand to Composer.
+    content_format: str = ""           # 图文 / 短视频 / 长视频 / 直播 / 纯文本
 
 
 @dataclass

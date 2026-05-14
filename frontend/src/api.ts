@@ -93,6 +93,20 @@ export function isAborted(e: unknown): boolean {
   return /aborted|AbortError/i.test(msg);
 }
 
+/** Backend-side cancel: tells the running pipeline to stop at the next
+ * stage boundary (which actually kills the in-flight LLM call too). The
+ * pipeline saves partial state so the next start picks up from where it
+ * left off. Doesn't throw — best-effort. */
+export async function cancelBackendJob(jobId: string): Promise<void> {
+  const backend = backendUrl();
+  if (!backend) return;
+  try {
+    await fetch(`${backend}/api/jobs/${encodeURIComponent(jobId)}/cancel`, {
+      method: "POST",
+    });
+  } catch { /* ignore — frontend abort already happened */ }
+}
+
 interface StrategyProposeResult {
   pack_id: string;
   directions: StrategicDirectionDTO[];
