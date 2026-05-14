@@ -593,10 +593,10 @@ class ComposeRequest(BaseModel):
     extra_constraints: str = ""
     platform: str | None = None  # auto-inherit from active library if None
     strategist_spec: str = "claude:sonnet"
-    drafter_spec: str = "claude:sonnet,openai"
+    drafter_spec: str = "claude:sonnet"
     critic_spec: str = "claude:sonnet"
     refiner_spec: str = "claude:sonnet"
-    synthesizer_spec: str = "claude:opus"
+    synthesizer_spec: str = "claude:sonnet"
     planner_spec: str = "claude:sonnet"
     skip_strategist: bool = False
     skip_critics: bool = False

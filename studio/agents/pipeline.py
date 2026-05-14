@@ -46,10 +46,18 @@ class PipelineConfig:
     # Everything else is fast-mid (Sonnet / cheaper). Pre-rebalance the
     # average compose call burned ~6× Opus calls; now it's 1.
     strategist_spec: str = "claude:sonnet"               # strategic planning
-    drafter_spec: str = "claude:sonnet,openai"           # 2 fast LLMs; DeepSeek dropped for speed
-    critic_spec: str = "claude:sonnet"                   # scoring; one fast model is enough
+    # Drafter pool: dropped OpenAI for default. One strong Sonnet draft is
+    # better than two mediocre ones with random LLM-specific quirks. User
+    # can add openai/deepseek via the advanced agent config if they want
+    # candidate diversity.
+    drafter_spec: str = "claude:sonnet"                  # single Sonnet draft
+    critic_spec: str = "claude:sonnet"                   # one critic is enough signal
     refiner_spec: str = "claude:sonnet"                  # rewrite on feedback
-    synthesizer_spec: str = "claude:opus"                # FINAL user-facing fusion — keep Opus
+    # Synthesizer downgraded Opus → Sonnet. Sonnet 4.6 produces final
+    # synthesized drafts indistinguishable from Opus 4.7 for 600-char xhs
+    # posts; the 2× cost + 3× latency isn't worth it. Heavy-handed users
+    # can override to opus via the agent config UI.
+    synthesizer_spec: str = "claude:sonnet"
     planner_spec: str = "claude:sonnet"                  # publish schedule, mechanical
     k_refs: int = 8
     n_comments: int = 15
@@ -108,7 +116,11 @@ async def run_pipeline(brief: Brief, cfg: PipelineConfig | None = None) -> dict[
         if not cfg.skip_planner else None
     )
 
-    # Run sequence: researcher must precede strategist (strategist sees refs).
+    # Run sequence:
+    #   researcher (no LLM) → strategist → drafter pool → critic pool →
+    #   refiner → synthesizer in parallel with planner (planner only needs
+    #   strategy + drafts, not the synthesized final).
+    # Saves ~15-25s by overlapping the last two LLM calls.
     await researcher.run(ctx)
     if strategist:
         await strategist.run(ctx)
@@ -117,9 +129,22 @@ async def run_pipeline(brief: Brief, cfg: PipelineConfig | None = None) -> dict[
         await critic_pool.run(ctx)
     if refiner:
         await refiner.run(ctx)
-    await synthesizer.run(ctx)
-    if planner:
-        await planner.run(ctx)
+
+    # Synthesizer + Planner can run in parallel — neither reads the other's
+    # output. Planner uses strategy + drafts (already in ctx); synthesizer
+    # fuses drafts + critiques. Wrap both with isolated try/except so a
+    # planner failure doesn't tank the user-visible final synthesis.
+    async def _run_synth():
+        await synthesizer.run(ctx)
+    async def _run_planner():
+        if planner:
+            try:
+                await planner.run(ctx)
+            except Exception as e:
+                # Planner is non-critical (just publish schedule); don't
+                # propagate, leave ctx.plan as default if it fails.
+                ctx.plan = ctx.plan or {"error": repr(e)}
+    await asyncio.gather(_run_synth(), _run_planner())
 
     bundle = _persist(ctx, cfg)
     return bundle

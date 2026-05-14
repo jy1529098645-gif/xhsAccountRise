@@ -125,6 +125,7 @@ export default function Strategy() {
   });
   const [activeLib, setActiveLib] = useState<Library | null>(null);
   const [platforms, setPlatforms] = useState<Platform[]>([]);
+  const [hasExternalReports, setHasExternalReports] = useState<boolean>(false);
   const [packId, setPackId] = useState<string | null>(null);
   const [directions, setDirections] = useState<StrategicDirectionDTO[]>([]);
   const [chosenIdx, setChosenIdx] = useState<number | null>(null);
@@ -172,6 +173,11 @@ export default function Strategy() {
     api.libraries().then(ls => setActiveLib(ls.find(l => l.active) ?? null)).catch(() => {});
     api.platforms().then(setPlatforms).catch(() => {});
     api.listStrategies().then(setHistory).catch(() => {});
+    // Check if user has external reports OR integrated reports — those count
+    // as "reference material" too, so we shouldn't nag about missing DB.
+    Promise.all([api.listExternalReports(), api.listIntegratedReports()])
+      .then(([ext, integ]) => setHasExternalReports(ext.length > 0 || integ.length > 0))
+      .catch(() => {});
 
     // Read prefill from sessionStorage if user clicked a 'use this →' opp
     // on the Reports page. Wipe immediately so refresh doesn't re-prefill.
@@ -451,11 +457,18 @@ export default function Strategy() {
       {!api.isConnected() && (
         <div className="banner warn">本地后端没起来 — 看顶部黄条复制命令启动。</div>
       )}
-      {!activeLib && api.isConnected() && (
+      {!activeLib && !hasExternalReports && api.isConnected() && (
         <div className="banner info">
-          <b>建议先有数据库再做策略</b>，AI 才能基于真实爆款数据给方向。
-          没库的话也能做（用平台默认风格），但效果会差一截。
-          <Link to="/libraries" style={{marginLeft: 8}}>去上传 →</Link>
+          <b>建议先给 AI 一些参考材料</b>。
+          你可以 ：(a) 上传一个数据库（小红书爬取的 .db） → AI 自动出 DNA + 共识报告，或者
+          (b) <Link to="/reports">📊 分析报告</Link> 页底部直接**上传你已有的外部分析报告**
+          （PDF / TXT / MD / 任何格式），AI 会直接当强参考使用。
+          完全不传也能跑，但效果会差。
+        </div>
+      )}
+      {!activeLib && hasExternalReports && api.isConnected() && (
+        <div className="banner info" style={{background: "var(--ok-soft)"}}>
+          ✓ 检测到你已上传外部分析报告，AI 会基于这些报告出策略（无需数据库）。
         </div>
       )}
       {err && (
@@ -676,29 +689,41 @@ function InputForm(props: {
           placeholder="比如：赶 ddl 的留学生 / 文科类毕业班学生 / 想做 AI 副业的应届生" />
       </FieldWithRationale>
 
-      <div className="row" style={{gap: 12, marginBottom: 4}}>
-        <FieldWithRationale label="运营周期"
-          rationale={props.fieldRationale.cycle_weeks}
-          onAlt={(v) => set("cycle_weeks", Number(v))}
-          style={{flex: 1}}>
-          <select value={i.cycle_weeks} onChange={e => set("cycle_weeks", Number(e.target.value))}>
-            <option value={2}>2 周（冲短期）</option>
-            <option value={4}>4 周（推荐起步）</option>
-            <option value={8}>8 周（中长期）</option>
-            <option value={12}>12 周（深耕）</option>
-          </select>
-        </FieldWithRationale>
-        <FieldWithRationale label="每周更新"
-          rationale={props.fieldRationale.posts_per_week}
-          onAlt={(v) => set("posts_per_week", Number(v))}
-          style={{flex: 1}}>
-          <select value={i.posts_per_week} onChange={e => set("posts_per_week", Number(e.target.value))}>
-            <option value={2}>2 篇 / 周（轻量）</option>
-            <option value={3}>3 篇 / 周（推荐）</option>
-            <option value={5}>5 篇 / 周（高产）</option>
-            <option value={7}>每天一篇</option>
-          </select>
-        </FieldWithRationale>
+      <div style={{padding: 12, background: "var(--primary-soft)", borderRadius: 8,
+                   marginBottom: 12, border: "1px solid var(--primary)"}}>
+        <div className="muted" style={{fontSize: 12, marginBottom: 8}}>
+          ⭐ 下面这两项决定**最终会出多少篇初稿** ：周期 × 每周篇数 = 总篇数
+        </div>
+        <div className="row" style={{gap: 12}}>
+          <FieldWithRationale label="运营周期"
+            rationale={props.fieldRationale.cycle_weeks}
+            onAlt={(v) => set("cycle_weeks", Number(v))}
+            style={{flex: 1}}>
+            <select value={i.cycle_weeks} onChange={e => set("cycle_weeks", Number(e.target.value))}>
+              <option value={1}>1 周（试水）</option>
+              <option value={2}>2 周（冲短期）</option>
+              <option value={4}>4 周（推荐起步）</option>
+              <option value={8}>8 周（中长期）</option>
+              <option value={12}>12 周（深耕）</option>
+            </select>
+          </FieldWithRationale>
+          <FieldWithRationale label="每周更新"
+            rationale={props.fieldRationale.posts_per_week}
+            onAlt={(v) => set("posts_per_week", Number(v))}
+            style={{flex: 1}}>
+            <select value={i.posts_per_week} onChange={e => set("posts_per_week", Number(e.target.value))}>
+              <option value={1}>1 篇 / 周（试水）</option>
+              <option value={2}>2 篇 / 周（轻量）</option>
+              <option value={3}>3 篇 / 周（推荐）</option>
+              <option value={5}>5 篇 / 周（高产）</option>
+              <option value={7}>每天一篇</option>
+            </select>
+          </FieldWithRationale>
+        </div>
+        <div style={{marginTop: 10, fontSize: 14, fontWeight: 600, color: "var(--primary)",
+                      textAlign: "center", padding: 6, background: "#fff", borderRadius: 6}}>
+          ⇒ 最终会出 <span style={{fontSize: 18}}>{i.cycle_weeks * i.posts_per_week}</span> 篇带初稿正文的内容
+        </div>
       </div>
 
       <div style={{marginBottom: 10}}>

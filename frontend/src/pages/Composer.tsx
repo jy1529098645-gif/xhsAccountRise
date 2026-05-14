@@ -34,6 +34,7 @@ export default function Composer() {
   const [platform, setPlatform] = useState<string>("");
   const [platforms, setPlatforms] = useState<Platform[]>([]);
   const [activeLib, setActiveLib] = useState<Library | null>(null);
+  const [hasExternalReports, setHasExternalReports] = useState<boolean>(false);
   const [agentConfig, setAgentConfig] = useState<AgentSelection>(defaultSelection());
   const [showAgentConfig, setShowAgentConfig] = useState(false);
 
@@ -60,6 +61,9 @@ export default function Composer() {
   useEffect(() => {
     api.platforms().then(setPlatforms).catch(() => {});
     api.libraries().then(ls => setActiveLib(ls.find(l => l.active) ?? null)).catch(() => {});
+    Promise.all([api.listExternalReports(), api.listIntegratedReports()])
+      .then(([ext, integ]) => setHasExternalReports(ext.length > 0 || integ.length > 0))
+      .catch(() => {});
   }, []);
 
   // ---- Pre-fill from Strategy "出这一篇 →" navigation ---------------------
@@ -137,9 +141,11 @@ export default function Composer() {
           ⚠️ 本地后端没起来。看顶部黄色 banner 复制命令启动。
         </div>
       )}
-      {!noBackend && !activeLib && (
+      {!noBackend && !activeLib && !hasExternalReports && (
         <div className="banner info">
-          <b>还没有数据库。</b> 去 <Link to="/libraries">📥 资源库</Link> 拖一个 .db 进来（10 秒就好），再回这里出稿。
+          <b>还没有参考材料</b>。可以 ：(a) 去 <Link to="/reports">📊 分析报告</Link>
+          上传 .db 让 AI 自动出共识，或 (b) 在该页底部上传你已有的外部分析报告（PDF/TXT/MD）。
+          完全不传也能跑，但效果会差。
         </div>
       )}
       {prefillNote && (
@@ -308,36 +314,44 @@ function ComposeResult({bundle}: {bundle: ComposeBundle}) {
         </div>
       )}
 
-      <div className="card">
-        <h2>⏱ AI 时间线</h2>
-        <div className="trace-list">
-          {bundle.trace.map((s, i) => (
-            <div key={i} className={`step ${s.error ? "err" : ""}`}>
-              <span>#{s.step_index}</span>
-              <span className="agent">{roleName(s.agent_name)}</span>
-              <span>{s.error || s.output_summary}</span>
-              <span style={{textAlign: "right"}}>{s.latency_ms}ms</span>
-            </div>
-          ))}
+      {Array.isArray(bundle.trace) && bundle.trace.length > 0 && (
+        <div className="card">
+          <h2>⏱ AI 时间线</h2>
+          <div className="trace-list">
+            {bundle.trace.map((s, i) => (
+              <div key={i} className={`step ${s.error ? "err" : ""}`}>
+                <span>#{s.step_index}</span>
+                <span className="agent">{roleName(s.agent_name)}</span>
+                <span>{s.error || s.output_summary}</span>
+                <span style={{textAlign: "right"}}>{s.latency_ms}ms</span>
+              </div>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
-      <div className="card">
-        <h2>📚 参考爆款 ({bundle.rag.refs.length})</h2>
-        <ol>
-          {bundle.rag.refs.slice(0, 5).map(r => (
-            <li key={r.note_id}>[{fmtLikes(r.likes)} likes] {r.title}</li>
-          ))}
-        </ol>
-        <p className="muted" style={{fontSize: 12}}>+ {bundle.rag.comments_count} 条用户原话评论 + {bundle.rag.hooks.length} 个 hook 模板</p>
-      </div>
-
-      <div className="card">
-        <h2>📝 N 份候选 (起草团 + 审稿团)</h2>
-        <div className="candidate-grid">
-          {bundle.drafts.map(c => <Candidate key={c.candidate_id} c={c} />)}
+      {bundle.rag && Array.isArray(bundle.rag.refs) && bundle.rag.refs.length > 0 && (
+        <div className="card">
+          <h2>📚 参考爆款 ({bundle.rag.refs.length})</h2>
+          <ol>
+            {bundle.rag.refs.slice(0, 5).map(r => (
+              <li key={r.note_id}>[{fmtLikes(r.likes)} likes] {r.title}</li>
+            ))}
+          </ol>
+          <p className="muted" style={{fontSize: 12}}>
+            + {bundle.rag.comments_count ?? 0} 条用户原话评论 + {(bundle.rag.hooks?.length ?? 0)} 个 hook 模板
+          </p>
         </div>
-      </div>
+      )}
+
+      {Array.isArray(bundle.drafts) && bundle.drafts.length > 0 && (
+        <div className="card">
+          <h2>📝 {bundle.drafts.length} 份候选 (起草团 + 审稿团)</h2>
+          <div className="candidate-grid">
+            {bundle.drafts.map(c => <Candidate key={c.candidate_id} c={c} />)}
+          </div>
+        </div>
+      )}
 
       {bundle.refined && (
         <div className="card">
