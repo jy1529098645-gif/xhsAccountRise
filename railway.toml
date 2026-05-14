@@ -24,6 +24,10 @@
   # 出错时 always 重启
   restartPolicyType = "ON_FAILURE"
   restartPolicyMaxRetries = 3
+  # v0.61.28 ：零停机部署 — 新容器 healthy 后才停老容器
+  # 默认 "STOP_FIRST" 会先停旧的，导致 30s-2min 的 502 窗口。
+  # OVERLAP = 新旧并行直到新的 healthcheck 通过，老的才退场。
+  overlapSeconds = 60
 
   # 启动命令交给 Dockerfile 的 CMD（已经处理 $PORT 注入 + 跑 migration）
   # startCommand = ""  # 留空 = 用 Dockerfile CMD
