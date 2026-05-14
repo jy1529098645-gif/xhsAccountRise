@@ -485,6 +485,52 @@ function AnalysisView({analysis, reviewId, drafts, onClose}: {
           </ul>
         </>
       )}
+
+      <NextCyclePicker analysis={analysis} drafts={drafts} />
+    </div>
+  );
+}
+
+// Pick a parent pack from the published drafts + jump to Strategy with
+// the retrospective findings threaded as the brief prefill. Skips having
+// to manually re-fill the form for the next cycle.
+function NextCyclePicker({analysis, drafts}: {analysis: any; drafts: PublishedDraft[]}) {
+  const navigate = useNavigate();
+  const rec = analysis.next_cycle_recommendations || {};
+  function goNext() {
+    try {
+      // Build a free-form constraints string out of the recommendations so
+      // the next cycle's positioner sees the wins/losses up front.
+      const ddl: string[] = rec.double_down_on || [];
+      const drop: string[] = rec.drop || [];
+      const newTry: string[] = rec.new_to_try || [];
+      const lines: string[] = [];
+      if (ddl.length) lines.push("【加大投入】" + ddl.join("； "));
+      if (drop.length) lines.push("【砍掉】" + drop.join("； "));
+      if (newTry.length) lines.push("【新机会】" + newTry.join("； "));
+      const constraints = lines.join("\n");
+      sessionStorage.setItem("strategy.briefPrefill", JSON.stringify({
+        positioning: "",
+        target_audience: "",
+        personal_strengths: "",
+        constraints,
+        note: `从复盘报告带入：上一轮 ${drafts.length} 篇的 wins/losses 已塞进「附加约束」，AI 会据此调整方向。`,
+      }));
+    } catch { /* ignore */ }
+    navigate("/strategy");
+  }
+  return (
+    <div style={{marginTop: 16, padding: 14, background: "var(--primary-soft)",
+                 borderRadius: 8, border: "1px solid var(--primary)"}}>
+      <div className="spread" style={{alignItems: "center"}}>
+        <div>
+          <b>🚀 据此出下一轮策略</b>
+          <div className="muted" style={{fontSize: 12, marginTop: 4}}>
+            把 wins / losses / 新机会 自动写进下一轮的「附加约束」，AI 会按这些调整方向。
+          </div>
+        </div>
+        <button onClick={goNext}>→ 直接出下一轮</button>
+      </div>
     </div>
   );
 }

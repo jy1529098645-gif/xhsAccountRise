@@ -97,7 +97,13 @@ async def propose(inp: AccountInput, positioner_spec: str = "claude:sonnet") -> 
         f"{report_block}\n"
         f"【该平台爆款 DNA】\n{prompts.dna_blurb(dna)}\n\n"
         f"输出 8-12 个差异化的账号定位方向（宁多勿少 ；用户需要足够的选项来挑）。"
-        + ("\n**优先采纳上面所有「分析 / 整合报告」中提到的方向和机会作为候选**（包括用户自己上传的外部报告整合稿，如有）。"
+        + ("\n\n⭐⭐⭐ **核心约束** ⭐⭐⭐\n"
+           "用户上传的外部报告是这个任务的**最强参考**，不是参考之一。请仔细阅读上面每一份报告的「关键论点 / 数据 / 案例 / 建议方向」，每一个独到观点都要在你的方向候选里找到落地点。\n"
+           "  - 报告里推荐的具体方向 → 你必须有对应的候选，不要泛化\n"
+           "  - 报告里引用的数字 / 用户原话 → 在 why_works 里照搬，不要重新概括\n"
+           "  - 报告之间互相矛盾的点 → **保留两种方向作为不同候选**，不要折中\n"
+           "  - 报告里的独到观点（只有一份提到）→ 必须出对应方向，不要因为「另一份没提」就丢\n"
+           "8-12 个方向里，至少有 70% 要能直接溯源到上传的报告内容。"
            if report_ctx else "")
     )
     gen = registry.build(positioner_spec)[0]
@@ -394,7 +400,10 @@ async def _expand_inner(
         f"【用户运营约束】\n{prompts.input_blurb(inp)}\n\n"
         f"【该平台 DNA】\n{prompts.dna_blurb(dna)}\n\n"
         f"请输出 {max(topic_count, 12)} 个候选选题。"
-        + ("\n**所有上面分析 / 整合报告里提到的内容机会都必须覆盖到选题里。**"
+        + ("\n\n⭐ **强约束** ：上面用户上传的原始报告里写的选题方向 / 案例 / 数字 / hook，"
+           "每一个都必须能在你的候选选题里找到对应。如果报告点名「适合做 X 选题」、「Y 角度爆过 Z 赞」，"
+           "你的列表里就要有 X 和 Y 的具体落地版本。不要因为「我觉得这条不算亮点」就丢。\n"
+           "选题里至少 60% 要能直接溯源到上传报告的具体内容（标题/角度/案例/数据点）。"
            if report_ctx else "")
     )
     topicgens = registry.build(topicgen_spec)
@@ -454,29 +463,78 @@ async def _expand_inner(
     if "scheduler" in saved:
         sched_parsed = saved["scheduler"]
     else:
+        # Three-level scheduler fallback chain so we never end up with empty
+        # schedule (the '0 篇' bug recurring users see):
+        #   1. Sonnet with full candidate pool
+        #   2. Sonnet with minimal prompt (just direction + count)
+        #   3. Different LLM (OpenAI gpt-4o) with minimal prompt
+        # Each level kicks in only if the previous returned schedule=[].
+        sched_parsed: dict[str, Any] = {}
+        _check_cancel()
         try:
-            _check_cancel()
-            # Scheduler only outputs structure. Body drafts come later from a
-            # parallel pool — see v0.29 / v0.30 commits for why we split this.
             sched_parsed = await _try_scheduler(sched_user)
-            # Sonnet sometimes returns {"schedule": []} when its tool_use call
-            # hits truncation or a content-quirk. Retry once with a shorter
-            # prompt (drop the topic candidates pool, keep direction + count).
-            if not (sched_parsed.get("schedule") or []):
-                short_user = (
-                    f"【已选定方向】{chosen.name} — {chosen.positioning_statement}\n"
-                    f"【受众】{chosen.target_audience}\n"
-                    f"【运营】{inp.cycle_weeks} 周 × {inp.posts_per_week} 篇/周 = 共 {topic_count} 篇\n\n"
-                    f"请直接基于这个方向 + 周期编排出 {topic_count} 篇排期。"
-                    f" 不需要再读候选选题池 — 自己写 {topic_count} 个差异化标题就行。"
-                    f" 严格按 system schema 输出 schedule（长度 = {topic_count}）+ weekly_themes。"
-                )
-                try:
-                    sched_parsed = await _try_scheduler(short_user, max_tokens=8000)
-                except Exception as e:
-                    sched_parsed["_error"] = f"retry failed: {e!r}"
         except Exception as e:
-            sched_parsed = {"_error": str(e)}
+            sched_parsed = {"_error": f"L1: {e!r}"}
+
+        if not (sched_parsed.get("schedule") or []):
+            # L2: simpler prompt with same model
+            short_user = (
+                f"【已选定方向】{chosen.name} — {chosen.positioning_statement}\n"
+                f"【受众】{chosen.target_audience}\n"
+                f"【运营】{inp.cycle_weeks} 周 × {inp.posts_per_week} 篇/周 = 共 {topic_count} 篇\n\n"
+                f"请直接基于这个方向 + 周期编排出 {topic_count} 篇排期。"
+                f" 不需要再读候选选题池 — 自己写 {topic_count} 个差异化标题就行。"
+                f" 严格按 system schema 输出 schedule（长度 = {topic_count}）+ weekly_themes。"
+            )
+            try:
+                sched_parsed = await _try_scheduler(short_user, max_tokens=8000)
+            except Exception as e:
+                sched_parsed["_error"] = f"L2: {e!r}"
+
+        if not (sched_parsed.get("schedule") or []):
+            # L3: cross-family fallback (OpenAI). When Sonnet keeps returning
+            # empty, it's often a tool_use schema quirk specific to that model.
+            try:
+                fallback_gen = registry.build("openai")[0]
+                async def _openai_fallback(user_payload: str):
+                    return await _call_json(
+                        fallback_gen, prompts.SCHEDULER_SYSTEM, user_payload,
+                        max_tokens=8000, tool_name="submit_schedule",
+                        schema=_SCHEDULE_SCHEMA,
+                    )
+                sched_parsed = await _openai_fallback(short_user)
+            except Exception as e:
+                sched_parsed["_error"] = f"L3 (openai fallback): {e!r}"
+
+        # L4: still nothing → synthesize a minimal schedule client-side from
+        # the topic-gen pool's output so the user gets *something* usable.
+        if not (sched_parsed.get("schedule") or []) and all_topics:
+            picked = all_topics[:topic_count] or []
+            synthetic = []
+            for i, t in enumerate(picked):
+                week = (i // inp.posts_per_week) + 1
+                synthetic.append({
+                    "week": week, "day_of_week": (i % 7),
+                    "publish_slot": "",
+                    "title": str(t.get("title") or t.get("name") or f"待补 #{i+1}") + " [自补]",
+                    "title_variants": [str(x) for x in (t.get("title_variants") or [])],
+                    "angle": str(t.get("angle", "")),
+                    "hook_type": str(t.get("hook_type", "")),
+                    "outline": [str(x) for x in (t.get("outline") or [])],
+                    "materials_needed": [str(x) for x in (t.get("materials_needed") or [])],
+                    "intent": str(t.get("intent", "")),
+                    "content_format": str(t.get("content_format", "")),
+                })
+            sched_parsed = {
+                "series_thesis": f"基于 {chosen.name} 的紧急自补排期",
+                "weekly_themes": [
+                    {"week": w, "theme": f"第 {w} 周", "intent": "", "notes": ""}
+                    for w in range(1, inp.cycle_weeks + 1)
+                ],
+                "schedule": synthetic,
+                "_warning": "scheduler LLM fell through 3 levels; synthesized from topic pool",
+            }
+
         _save_checkpoint("scheduler", sched_parsed)
         _check_cancel()
 

@@ -119,21 +119,15 @@ export default function InsightReport() {
         </div>
       )}
 
-      {/* Consensus opportunities */}
+      {/* Consensus opportunities — clickable to pre-fill Strategy brief */}
       {c.consensus_opportunities?.length > 0 && (
         <div className="card">
-          <h2>🚀 内容机会</h2>
+          <h2>🚀 内容机会 · 点击直接出策略</h2>
+          <p className="muted" style={{fontSize: 12, marginTop: 0, marginBottom: 10}}>
+            点任一条 → 跳到「起号策略」并把这条作为初步定位预填，AI 会基于此再推 8-12 个具体方向。
+          </p>
           {c.consensus_opportunities.map((o: any, i: number) => (
-            <div key={i} style={{padding: "10px 12px", marginBottom: 8,
-                                  background: "var(--primary-soft)", borderRadius: 6}}>
-              <div style={{fontWeight: 600}}>{o.opportunity}</div>
-              <div style={{fontSize: 12, marginTop: 4}}>
-                <span className="muted"><b>因为：</b>{o.why}</span>
-              </div>
-              <div style={{fontSize: 12, marginTop: 4}}>
-                <b style={{color: "var(--primary)"}}>切入方式：</b>{o.suggested_angle}
-              </div>
-            </div>
+            <OpportunityCard key={i} opp={o} />
           ))}
         </div>
       )}
@@ -561,6 +555,50 @@ function MiniLaunchModeBadge({mode, accentColor}: {mode: any; accentColor: strin
           · {String(mode.rationale).slice(0, 56)}{String(mode.rationale).length > 56 ? "…" : ""}
         </span>
       )}
+    </div>
+  );
+}
+
+function OpportunityCard({opp}: {opp: any}) {
+  const navigate = useNavigate();
+  function pickIt() {
+    // Stash a strategy brief prefill in sessionStorage and jump to /strategy.
+    // Strategy.tsx reads this on mount.
+    try {
+      sessionStorage.setItem("strategy.briefPrefill", JSON.stringify({
+        positioning: String(opp.opportunity || "").slice(0, 80),
+        target_audience: "",
+        personal_strengths: "",
+        constraints: String(opp.suggested_angle || ""),
+        note: `从分析报告带入 ：${opp.opportunity} (${opp.why || ""})`,
+      }));
+    } catch { /* fall through */ }
+    navigate("/strategy");
+  }
+  return (
+    <div onClick={pickIt} style={{padding: "10px 12px", marginBottom: 8,
+                          background: "var(--primary-soft)", borderRadius: 6,
+                          cursor: "pointer", border: "1px solid transparent",
+                          transition: "border-color 0.15s"}}
+         onMouseEnter={e => (e.currentTarget.style.borderColor = "var(--primary)")}
+         onMouseLeave={e => (e.currentTarget.style.borderColor = "transparent")}>
+      <div className="row" style={{justifyContent: "space-between", alignItems: "flex-start"}}>
+        <div style={{flex: 1}}>
+          <div style={{fontWeight: 600}}>{opp.opportunity}</div>
+          {opp.why && (
+            <div style={{fontSize: 12, marginTop: 4}}>
+              <span className="muted"><b>因为：</b>{opp.why}</span>
+            </div>
+          )}
+          {opp.suggested_angle && (
+            <div style={{fontSize: 12, marginTop: 4}}>
+              <b style={{color: "var(--primary)"}}>切入方式：</b>{opp.suggested_angle}
+            </div>
+          )}
+        </div>
+        <span style={{fontSize: 12, color: "var(--primary)", whiteSpace: "nowrap",
+                      paddingTop: 2}}>用这个 →</span>
+      </div>
     </div>
   );
 }

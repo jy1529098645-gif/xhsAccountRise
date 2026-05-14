@@ -176,6 +176,24 @@ export default function Strategy() {
     api.libraries().then(ls => setActiveLib(ls.find(l => l.active) ?? null)).catch(() => {});
     api.platforms().then(setPlatforms).catch(() => {});
     api.listStrategies().then(setHistory).catch(() => {});
+
+    // Read prefill from sessionStorage if user clicked a 'use this →' opp
+    // on the Reports page. Wipe immediately so refresh doesn't re-prefill.
+    try {
+      const raw = sessionStorage.getItem("strategy.briefPrefill");
+      if (raw) {
+        const pf = JSON.parse(raw);
+        sessionStorage.removeItem("strategy.briefPrefill");
+        setInput(prev => ({
+          ...prev,
+          positioning: pf.positioning ?? prev.positioning,
+          target_audience: pf.target_audience ?? prev.target_audience,
+          personal_strengths: pf.personal_strengths ?? prev.personal_strengths,
+          constraints: pf.constraints ?? prev.constraints,
+        }));
+        if (pf.note) setInfo(`✨ ${pf.note}`);
+      }
+    } catch { /* ignore malformed storage */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

@@ -14,20 +14,22 @@ export default function Analysis() {
   if (err) return <div className="banner danger">{err}</div>;
   if (!dna) return <div className="card muted">加载中…</div>;
 
-  const titles = dna.sections.titles ?? {};
-  const blueocean = dna.sections.keyword_blueocean?.rankings ?? [];
-  const tags = dna.sections.tags?.top_tags ?? [];
-  const tagPairs = dna.sections.tags?.top_pairs ?? [];
-  const topPerf = dna.sections.top_performers ?? {};
-  const timing = dna.sections.timing ?? {};
-  const shape = dna.sections.body_and_shape ?? {};
-  const comments = dna.sections.comment_demand ?? {};
+  const sections = dna.sections ?? {} as any;
+  const summary = dna.summary ?? {} as any;
+  const titles = sections.titles ?? {};
+  const blueocean = sections.keyword_blueocean?.rankings ?? [];
+  const tags = sections.tags?.top_tags ?? [];
+  const tagPairs = sections.tags?.top_pairs ?? [];
+  const topPerf = sections.top_performers ?? {};
+  const timing = sections.timing ?? {};
+  const shape = sections.body_and_shape ?? {};
+  const comments = sections.comment_demand ?? {};
 
   return (
     <div>
       <div className="page-header">
         <h1>爆款 DNA · v{dna.version}</h1>
-        <p>{dna.summary.total_notes_analysed.toLocaleString()} 条 notes 全量分析 · 耗时 {dna.summary.generated_in_seconds}s</p>
+        <p>{(summary.total_notes_analysed ?? 0).toLocaleString()} 条 notes 全量分析 · 耗时 {summary.generated_in_seconds ?? "?"}s</p>
       </div>
 
       <Section title="1 · 标题 hook 分布">

@@ -167,48 +167,48 @@ def delete_external_report(report_id: str) -> bool:
 # ---- Integration via gpt-4o ---------------------------------------------
 
 INTEGRATION_SYSTEM = """\
-你是「报告整合主编」。用户给你扔了若干份外部分析报告（可能来自咨询、竞品拆解、ChatGPT、自己写的笔记等），可能还附带本工具自动生成的一份双 AI 共识报告。
+你是「报告整合主编」。用户扔给你 N 份分析报告（可能来自不同 AI、咨询稿、自己写的笔记等），可能还有本工具自动出的双 AI 共识。
 
-你的任务：**融合所有这些报告**，输出**一份统一的起号分析共识报告**，让用户后面在做策略、写稿时只需要看这一份。
+**关键 ：你的工作是「并集」不是「交集」**。每份报告都有它独到的视角和洞察，**绝对不要把不同的观点压扁成共识**。具体规则 ：
 
-要求：
-1. **不要简单拼接** — 同一论点出现在多份里要合并，相互矛盾的要标注。
-2. **保留每个观点的出处**，标在 evidence 或 note 字段里（比如"咨询稿 + ChatGPT 都提到…"）。
-3. **launch_mode**（冷启动 / 硬启动 / 混合启动）必须从输入材料里推断并明确给出。如果材料里有相关讨论就综合，没有就基于内容判断。
-4. **charts_to_show** 从给定枚举里挑（即使外部报告不带原始数据，挑的是用户后面会看到的图表 keys，方便统一渲染）。
-5. 如果某个外部报告只是数据 dump 没有结论，把它当作信号源，提炼为 findings。
+1. **每份报告的核心论点都要保留**，不管其它报告有没有同样的观点。
+2. 多份报告说同一件事 → 在 evidence 里标「报告 A + 报告 B 都强调」，但不要因此降权 ；恰恰是值得加强的信号。
+3. **相互矛盾的观点都要保留**，分别列出。让用户看到「报告 A 说 X、报告 B 说 Y」的分歧本身就是有价值的信号。
+4. consensus_findings 应该是**全集 union 后的 findings 列表**，至少 6-10 条，不是「都同意的才进」。
+5. single_side_views 是补充字段，用来标「只在一份里出现的独到观点」，至少 4-6 条。
+6. **不要丢失数字 / 引用 / 案例**。每份报告里出现的关键数据点都要进 findings 的 evidence。
 
 输出 JSON：
 {
   "title": "<整合后的报告标题>",
-  "executive_summary": "<3-6 句融合后的核心结论>",
+  "executive_summary": "<6-10 句话，把所有报告的核心论点都覆盖一遍，不要压缩成 3 句>",
   "launch_mode": {
     "recommendation": "cold_start" | "hot_start" | "hybrid",
-    "rationale": "<综合多份报告的理由>",
-    "first_week_plan": "<第一周怎么发>",
-    "agreement_level": "both_agree" | "leaned" | "split"
+    "rationale": "<综合所有报告的理由 — 如果报告之间不一致，明说>",
+    "first_week_plan": "<第一周怎么发，融合各报告的具体建议>",
+    "agreement_level": "all_agree" | "leaned" | "split"
   },
   "consensus_findings": [
-    {"title": "...", "evidence": "<引用具体哪份报告 + 内容>", "implication": "..."}
+    {"title": "<具体论点>", "evidence": "<引用具体哪几份报告 + 它们的数据/案例>", "implication": "..."}
   ],
   "consensus_opportunities": [
-    {"opportunity": "...", "why": "...", "suggested_angle": "..."}
+    {"opportunity": "...", "why": "<引用具体报告的数据>", "suggested_angle": "..."}
   ],
-  "consensus_risks": ["..."],
-  "consensus_next_steps": ["..."],
+  "consensus_risks": ["<分别列每份报告提到的风险>"],
+  "consensus_next_steps": ["<合集，不要去重压缩>"],
   "single_side_views": [
-    {"side": "<报告名或 'external_only'>", "point": "...", "note": "<为什么没合并>"}
+    {"side": "<报告名>", "point": "<该报告独有的论点>", "note": "<这点为什么有价值即使其它报告没提>"}
   ],
   "charts_to_show": [
     "blue_ocean_top15" | "hook_distribution" | "timing_heatmap" |
     "top_tags" | "body_length" | "top_titles" | "comment_demand"
   ],
   "source_breakdown": [
-    {"name": "<外部报告名>", "contributed": ["<它贡献了哪些点>"]}
+    {"name": "<外部报告名>", "contributed": ["<它具体贡献了哪些独到观点>"]}
   ]
 }
 
-严格按 JSON schema 输出，至少 4 条 consensus_findings、3 条 opportunities。
+严格按 schema 输出。consensus_findings 至少 6 条（宁多勿少）。每条 evidence 都要钉到具体报告 + 具体数字/案例。
 """
 
 _INTEGRATION_SCHEMA = {

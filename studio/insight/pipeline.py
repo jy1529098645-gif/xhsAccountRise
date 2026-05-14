@@ -635,17 +635,31 @@ def consensus_summary_for_prompt(consensus: dict[str, Any] | None) -> str:
 
 
 def full_reference_block_for_prompt() -> str:
-    """Combined reference block: the tool's own consensus *and* any integrated
-    report (gpt-4o-fused external uploads), *and* — if no integration done
-    yet — the raw text of any externally uploaded reports (each trimmed).
-    Used by Strategy / Composer prompts so downstream agents see everything
-    the user has assembled, even if they haven't pressed 「整合」 yet.
+    """Combined reference block for downstream agents.
+
+    UNION not intersection — every report's distinctive insights must reach
+    the downstream LLM. Previous version had two bugs:
+
+      1. If user had run GPT-4o integration, it ONLY threaded the integrated
+         consensus, dropping the raw uploads entirely. So unique insights
+         per report were lost (they only existed as fine-print in
+         single_side_views which downstream prompts don't really read).
+      2. Raw uploads were capped at 3000 chars/each — far too short for an
+         800 KB analysis PDF. Insights past that point got truncated.
+
+    Now we ALWAYS include all raw uploads at a much larger cap, regardless
+    of integration status. The integrated report is a *summary* layer on
+    top, not a *replacement* for the raw material.
     """
     parts: list[str] = []
+
+    # Layer 1: tool's own Claude×OpenAI consensus (if any).
     own = latest_completed_for_current_library()
     own_summary = consensus_summary_for_prompt(own)
     if own_summary:
-        parts.append(own_summary)
+        parts.append("【工具自动出的双 AI 共识报告】\n" + own_summary)
+
+    # Layer 2: GPT-4o integrated summary across user uploads (if any).
     try:
         from .external import latest_integrated_for_current_library, list_external_reports
         integ = latest_integrated_for_current_library()
@@ -654,9 +668,12 @@ def full_reference_block_for_prompt() -> str:
         list_external_reports = None  # type: ignore[assignment]
     integ_summary = consensus_summary_for_prompt(integ)
     if integ_summary:
-        parts.append("【用户上传 / 整合的报告 · GPT-4o 融合】\n" + integ_summary)
-    elif list_external_reports is not None:
-        # No integration done yet — splice in raw external reports (capped).
+        parts.append("【整合稿（GPT-4o 把多份用户报告并集后的摘要）】\n" + integ_summary)
+
+    # Layer 3: ALWAYS thread the RAW uploads themselves (this is the bug fix).
+    # The summary layers above are compressions; downstream LLMs benefit from
+    # seeing the actual report text — specific numbers, case studies, hooks.
+    if list_external_reports is not None:
         try:
             rows = list_external_reports()  # type: ignore[misc]
         except Exception:
@@ -664,21 +681,26 @@ def full_reference_block_for_prompt() -> str:
         if rows:
             from .external import get_external_report
             blocks: list[str] = []
-            CHAR_CAP = 3000  # per report
-            for r in rows[:5]:  # first 5 by upload time
+            # Bumped from 3000 → 12000 chars per report. A typical PDF
+            # exported analysis is 8-15 KB of text. Letting the LLM see
+            # the whole thing matters more than saving 5k tokens.
+            CHAR_CAP = 12000
+            # All uploads, not just first 5.
+            for r in rows:
                 full = get_external_report(r["report_id"]) or {}
                 body = (full.get("content") or "").strip()
                 if not body:
                     continue
                 clipped = body if len(body) <= CHAR_CAP else (
-                    body[:CHAR_CAP] + f"\n\n…[已截断，原文 {len(body)} 字]"
+                    body[:CHAR_CAP] + f"\n\n…[原文 {len(body)} 字，已截断至 {CHAR_CAP}]"
                 )
-                blocks.append(f"━ 用户上传报告《{r['name']}》━\n{clipped}")
+                blocks.append(f"━━━ 用户上传报告《{r['name']}》━━━\n{clipped}")
             if blocks:
                 parts.append(
-                    "【用户上传的外部报告 · 原文，尚未做整合，先直接当参考】\n\n"
+                    "【⭐ 用户上传的原始报告（每份保留 ：必须当强参考使用，不要压缩、不要忽略任何独到观点）】\n\n"
                     + "\n\n".join(blocks)
                 )
+
     return "\n\n".join(parts)
 
 
