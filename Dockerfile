@@ -43,8 +43,8 @@ WORKDIR /app
 
 # Cache layer for deps.
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir curl_cffi  # optional but lightweight
+RUN pip install --no-cache-dir -r requirements.txt
+# v0.61.27 ：原 curl_cffi 用于 xhs 自动 fetch，已因风控风险移除该功能。
 
 # App code.
 COPY studio/ ./studio/

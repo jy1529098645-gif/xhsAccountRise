@@ -3,7 +3,7 @@ import type {
   Library, Platform, Status,
   AccountInputDTO, StrategicDirectionDTO, StrategyDetail, StrategyListItem, StrategyPackDTO,
   ProjectDTO, InsightReportDTO,
-  ComplianceCheck, ComplianceHit, TrackingFetchResult, PromptProposal,
+  ComplianceCheck, ComplianceHit, PromptProposal,
   ProductContextDTO, GoalTypeDTO,
 } from "./types";
 
@@ -261,6 +261,54 @@ export const api = {
     postJson(`/api/drafts/${draftId}/candidates/${candidateId}/score`, { score }),
   chooseCandidate: (draftId: string, candidateId: string) =>
     postJson(`/api/drafts/${draftId}/candidates/${candidateId}/choose`, {}),
+
+  // v0.61.27 ：历史出稿删除
+  deleteDraft: async (draftId: string) => {
+    const backend = backendUrl();
+    if (!backend) throw new HttpError(0, "需要本地后端");
+    const r = await fetch(`${backend}/api/drafts/${draftId}`, { method: "DELETE" });
+    if (!r.ok) throw new HttpError(r.status, await r.text().catch(() => ""));
+    return r.json() as Promise<{ deleted: string; rows: Record<string, number> }>;
+  },
+
+  // v0.61.27 ：变现评估 — 商单适合度 + 风险 + 价位 + 改进建议
+  evaluateMonetization: (draftId: string, req?: {
+    candidate_id?: string;
+    monetization_intent?: "none" | "soft_lead" | "hard_sell" | "brand_collab";
+    model_spec?: string;
+  }) => postJson<{
+    commercial_score: number;
+    factors: Record<string, number>;
+    estimated_price_band: string;
+    verdict: string;
+    risks: string[];
+    suggestions: string[];
+  }>(`/api/drafts/${draftId}/monetization/eval`, req ?? {}),
+
+  // v0.61.27 ：生成私域引流话术（评论 / 私信开场 / 主页简介）
+  generateLeadScripts: (draftId: string, req?: {
+    candidate_id?: string;
+    model_spec?: string;
+  }) => postJson<{
+    comment_prompts: string[];
+    dm_opener: string[];
+    bio_oneliner: string;
+  }>(`/api/drafts/${draftId}/monetization/lead_scripts`, req ?? {}),
+
+  // v0.61.26: 跨平台改稿。把一条 final draft 改成 target_platform 版本。
+  // 可选 target_lib_id ：如果用户上传过该平台的 lib，会拉真实爆款做 voice 锚。
+  repurposeDraft: (draftId: string, req: {
+    target_platform: string;
+    target_lib_id?: string | null;
+    model_spec?: string;
+  }, signal?: AbortSignal) => postJson<{
+    child_draft_id: string;
+    candidate_id: string;
+    target_platform: string;
+    elapsed_s: number;
+    payload: any;
+    rationale: string;
+  }>(`/api/drafts/${draftId}/repurpose`, req, signal),
 
   // Retrospective ----------------------------------------------------------
   markPublished: (draftId: string, body: {
@@ -562,14 +610,15 @@ export const api = {
               by_candidate: Record<string, { severity: string; hits: ComplianceHit[]; checked_at: number }> }>(
       `/api/drafts/${draftId}/compliance`),
 
-  // v0.53 — tracking (URL paste → auto-refresh) --------------------------
+  // v0.61.27 ：trackingRefresh / trackingHistory 已删除。原因 ：抓 xhs 后台
+  // 需要 chrome131 TLS impersonation + 登录 cookie，触发风控可能 ban 账号。
+  // 改纯手动填。trackingStatus 保留只为兼容性（永远返回 manual-only）。
   trackingStatus: () =>
-    getJson<{ crawler_available: boolean; hint: string }>("/api/tracking/status").catch(
-      () => ({ crawler_available: false, hint: "未连接后端" })),
-  trackingRefresh: (draftId: string, url?: string) =>
-    postJson<TrackingFetchResult>(`/api/drafts/${draftId}/refresh-from-url`, { url: url ?? null }),
-  trackingHistory: (draftId: string) =>
-    getJson<Array<TrackingFetchResult & { fetched_at: number }>>(`/api/drafts/${draftId}/fetches`).catch(() => []),
+    getJson<{ crawler_available: boolean; hint: string; manual_only?: boolean }>(
+      "/api/tracking/status"
+    ).catch(() => ({
+      crawler_available: false, hint: "未连接后端", manual_only: true,
+    })),
 
   // v0.53 — variants (one-click fan-out) ---------------------------------
   spawnVariants: (draftId: string, angles: string[]) =>

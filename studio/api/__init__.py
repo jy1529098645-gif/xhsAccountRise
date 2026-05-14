@@ -1479,6 +1479,194 @@ async def iterate_strategy_api(pack_id: str, req: StrategyIterateRequest) -> dic
         raise HTTPException(400, str(e))
 
 
+# v0.61.27 ：变现套装（商单评估 + 引流话术）
+class MonetizationEvalRequest(BaseModel):
+    candidate_id: str | None = None  # 若空 → 用 draft 的 final_candidate_id
+    monetization_intent: str = "soft_lead"  # none | soft_lead | hard_sell | brand_collab
+    model_spec: str = "openai:gpt-4o"
+
+
+@app.post("/api/drafts/{draft_id}/monetization/eval")
+async def monetization_eval(draft_id: str, req: MonetizationEvalRequest) -> dict[str, Any]:
+    """商单评估 ：评 score + factors + 价位 + 风险 + 改进建议。"""
+    from ..agents import monetization as _mon
+    with db.connect(read_only=True) as con:
+        cid = req.candidate_id
+        if not cid:
+            row = con.execute(
+                "SELECT final_candidate_id FROM studio_drafts WHERE draft_id = ?",
+                (draft_id,),
+            ).fetchone()
+            if not row:
+                raise HTTPException(404, "draft not found")
+            cid = row["final_candidate_id"]
+        if not cid:
+            # 没有 final_candidate_id 时挑第一个非 error 的
+            row = con.execute(
+                "SELECT candidate_id FROM studio_draft_candidates"
+                " WHERE draft_id = ?"
+                " ORDER BY self_score DESC LIMIT 1",
+                (draft_id,),
+            ).fetchone()
+            if not row:
+                raise HTTPException(404, "no candidate found")
+            cid = row["candidate_id"]
+        cand = con.execute(
+            "SELECT title, body, tags_json, cover_prompt, hook_type,"
+            " predicted_likes, self_score, self_critique"
+            " FROM studio_draft_candidates WHERE candidate_id = ?",
+            (cid,),
+        ).fetchone()
+        if not cand:
+            raise HTTPException(404, "candidate not found")
+        payload = {
+            "title": cand["title"] or "",
+            "body": cand["body"] or "",
+            "tags": json.loads(cand["tags_json"] or "[]"),
+            "cover_prompt": cand["cover_prompt"] or "",
+            "hook_type": cand["hook_type"] or "",
+            "predicted_likes": cand["predicted_likes"] or 0,
+            "self_score": cand["self_score"] or 0.0,
+            "self_critique": cand["self_critique"] or "",
+        }
+    try:
+        return await _mon.evaluate_commercial(
+            payload,
+            monetization_intent=req.monetization_intent,
+            model_spec=req.model_spec,
+        )
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+
+
+class LeadScriptsRequest(BaseModel):
+    candidate_id: str | None = None
+    model_spec: str = "claude:sonnet"
+
+
+@app.post("/api/drafts/{draft_id}/monetization/lead_scripts")
+async def monetization_lead_scripts(
+    draft_id: str, req: LeadScriptsRequest
+) -> dict[str, Any]:
+    """生成私域引流话术。"""
+    from ..agents import monetization as _mon
+    with db.connect(read_only=True) as con:
+        cid = req.candidate_id
+        if not cid:
+            row = con.execute(
+                "SELECT final_candidate_id FROM studio_drafts WHERE draft_id = ?",
+                (draft_id,),
+            ).fetchone()
+            cid = row and row["final_candidate_id"]
+        if not cid:
+            row = con.execute(
+                "SELECT candidate_id FROM studio_draft_candidates"
+                " WHERE draft_id = ?"
+                " ORDER BY self_score DESC LIMIT 1",
+                (draft_id,),
+            ).fetchone()
+            if not row:
+                raise HTTPException(404, "no candidate found")
+            cid = row["candidate_id"]
+        cand = con.execute(
+            "SELECT title, body, tags_json, cover_prompt, hook_type,"
+            " predicted_likes, self_score, self_critique"
+            " FROM studio_draft_candidates WHERE candidate_id = ?",
+            (cid,),
+        ).fetchone()
+        if not cand:
+            raise HTTPException(404, "candidate not found")
+        payload = {
+            "title": cand["title"] or "",
+            "body": cand["body"] or "",
+            "tags": json.loads(cand["tags_json"] or "[]"),
+            "cover_prompt": cand["cover_prompt"] or "",
+            "hook_type": cand["hook_type"] or "",
+            "predicted_likes": cand["predicted_likes"] or 0,
+            "self_score": cand["self_score"] or 0.0,
+            "self_critique": cand["self_critique"] or "",
+        }
+    try:
+        return await _mon.generate_lead_scripts(payload, model_spec=req.model_spec)
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+
+
+# v0.61.27 ：历史出稿删除
+@app.delete("/api/drafts/{draft_id}")
+def delete_draft(draft_id: str) -> dict[str, Any]:
+    """硬删一条 draft + 它的所有 candidates / critiques / agent_traces。
+    级联干净，不留孤儿数据。"""
+    with db.connect() as con:
+        # 先验证 draft 存在
+        row = con.execute(
+            "SELECT 1 FROM studio_drafts WHERE draft_id = ?", (draft_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "draft not found")
+        counts: dict[str, int] = {}
+        try:
+            counts["candidates"] = con.execute(
+                "DELETE FROM studio_draft_candidates WHERE draft_id = ?",
+                (draft_id,),
+            ).rowcount
+        except Exception:
+            counts["candidates"] = 0
+        try:
+            counts["critiques"] = con.execute(
+                "DELETE FROM studio_critiques WHERE draft_id = ?",
+                (draft_id,),
+            ).rowcount
+        except Exception:
+            counts["critiques"] = 0
+        try:
+            counts["agent_traces"] = con.execute(
+                "DELETE FROM studio_agent_traces WHERE draft_id = ?",
+                (draft_id,),
+            ).rowcount
+        except Exception:
+            counts["agent_traces"] = 0
+        try:
+            counts["performance"] = con.execute(
+                "DELETE FROM studio_draft_performance WHERE draft_id = ?",
+                (draft_id,),
+            ).rowcount
+        except Exception:
+            counts["performance"] = 0
+        # 最后删 draft 本身
+        con.execute("DELETE FROM studio_drafts WHERE draft_id = ?", (draft_id,))
+        counts["draft"] = 1
+    return {"deleted": draft_id, "rows": counts}
+
+
+# v0.61.26 ：跨平台改稿
+class RepurposeRequest(BaseModel):
+    target_platform: str
+    target_lib_id: str | None = None
+    model_spec: str = "claude:sonnet"
+
+
+@app.post("/api/drafts/{draft_id}/repurpose")
+async def repurpose_draft_api(
+    draft_id: str, req: RepurposeRequest
+) -> dict[str, Any]:
+    """跨平台改稿。把 source draft 的 final candidate 按 target 平台 voice
+    + 长度 + 格式重写。提供 target_lib_id 时用该 lib 真实爆款做 voice 锚。"""
+    from ..agents import repurpose as _repurpose
+    try:
+        return await _repurpose.repurpose_draft(
+            draft_id, req.target_platform,
+            target_lib_id=req.target_lib_id,
+            model_spec=req.model_spec,
+        )
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+
+
 @app.post("/api/drafts/{draft_id}/candidates/{candidate_id}/choose")
 def choose_candidate(draft_id: str, candidate_id: str) -> dict[str, Any]:
     with db.connect() as con:
@@ -1586,38 +1774,19 @@ def get_draft_compliance(draft_id: str) -> dict[str, Any]:
     }
 
 
-# ---------------- tracking (URL paste → reingest) -----------------------
-
-from .. import tracking as _tracking  # noqa: E402
-
-
-class TrackingRefreshRequest(BaseModel):
-    url: str | None = None  # if omitted, uses draft.published_url
-
-
-@app.post("/api/drafts/{draft_id}/refresh-from-url")
-def tracking_refresh(draft_id: str, req: TrackingRefreshRequest) -> dict[str, Any]:
-    try:
-        return _tracking.refresh_draft(draft_id, force_url=req.url)
-    except LookupError as e:
-        raise HTTPException(404, str(e))
-
-
-@app.get("/api/drafts/{draft_id}/fetches")
-def tracking_list(draft_id: str, limit: int = 20) -> list[dict[str, Any]]:
-    return _tracking.list_fetches(draft_id, limit=limit)
-
+# v0.61.26 ：原 「URL → 自动 fetch xhs 后台数据」 端点已移除。
+# 原因 ：抓取小红书需要 curl_cffi + chrome131 impersonation + 用户登录 cookie，
+# 高度依赖 TLS 指纹规避，触发风控 = 账号限流甚至 ban 的风险无法接受。
+# 数据回流改为**纯手动填**（在 PerformanceWidget 里输入 likes / 收藏 / 评论）。
+# tracking 模块代码保留在 studio/tracking/ 仅作历史参考，不挂任何 API 端点。
 
 @app.get("/api/tracking/status")
 def tracking_status() -> dict[str, Any]:
-    """Tell the frontend whether auto-refresh is supported in this install."""
+    """v0.61.27 ：永远返回 manual-only — 自动 fetch 已禁用避风控。"""
     return {
-        "crawler_available": _tracking.crawler_available(),
-        "hint": (
-            "已就绪：粘贴小红书 URL 即可一键刷新数据。"
-            if _tracking.crawler_available()
-            else "未安装 curl_cffi。pip install curl_cffi 后即可启用自动刷新。"
-        ),
+        "crawler_available": False,
+        "hint": "数据回流仅支持手动填写 — 自动 fetch 风控风险已禁用",
+        "manual_only": True,
     }
 
 

@@ -16,20 +16,42 @@ interface IntegratedDTO {
   included_single_side_view_indices?: number[];
 }
 
+// v0.61.27 ：勾选「采纳的单方观点」本地化 — 不再 PATCH 后端，避免多用户互覆盖。
+// 键 ：studio.integrated.included.<pid>.<integrated_id>。每个用户独立。
+function includedLocalKey(integratedId: string): string {
+  let pid = "default";
+  try { pid = localStorage.getItem("studio.activeProjectId") || "default"; } catch { /* ignore */ }
+  return `studio.integrated.included.${pid}.${integratedId}`;
+}
+function readIncludedLocal(integratedId: string): number[] | null {
+  try {
+    const raw = localStorage.getItem(includedLocalKey(integratedId));
+    if (!raw) return null;
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter((n: any) => typeof n === "number") : null;
+  } catch { return null; }
+}
+function writeIncludedLocal(integratedId: string, indices: number[]): void {
+  try {
+    localStorage.setItem(includedLocalKey(integratedId), JSON.stringify(indices));
+  } catch { /* quota */ }
+}
+
 export default function IntegratedReport() {
   const { id } = useParams();
   const [data, setData] = useState<IntegratedDTO | null>(null);
   const [sourceNames, setSourceNames] = useState<Record<string, string>>({});
   const [err, setErr] = useState<string | null>(null);
-  // v0.61.11 ：本地镜像勾选状态，toggle 时立即更新 UI + 异步 PATCH 后端。
+  // v0.61.11 → v0.61.27 ：本地化。优先 localStorage；没有就回退 backend 已存的。
   const [includedIdx, setIncludedIdx] = useState<Set<number>>(new Set());
-  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!id) return;
     api.getIntegratedReport(id).then(d => {
       setData(d);
-      setIncludedIdx(new Set(d.included_single_side_view_indices ?? []));
+      const local = readIncludedLocal(id);
+      const initial = local ?? d.included_single_side_view_indices ?? [];
+      setIncludedIdx(new Set(initial));
     }).catch(e => setErr(e.message));
     api.listExternalReports().then(rows => {
       const m: Record<string, string> = {};
@@ -38,22 +60,16 @@ export default function IntegratedReport() {
     }).catch(() => {});
   }, [id]);
 
-  async function toggleInclude(idx: number) {
+  function toggleInclude(idx: number) {
     if (!id) return;
     const next = new Set(includedIdx);
     if (next.has(idx)) next.delete(idx); else next.add(idx);
-    setIncludedIdx(next);  // optimistic
-    setSaving(true);
-    try {
-      await api.setIntegratedSingleSideInclusion(id, Array.from(next));
-    } catch (e: any) {
-      // rollback
-      setIncludedIdx(includedIdx);
-      setErr("保存失败 ：" + e.message);
-    } finally {
-      setSaving(false);
-    }
+    setIncludedIdx(next);
+    writeIncludedLocal(id, Array.from(next));
+    // 不再 PATCH 后端 — 每个用户的「这一条要不要采纳」是私人偏好。
   }
+  // 保持 saving 哑变量避免别处 type error（部分 UI 引用 saving）
+  const saving = false;
 
   if (err) return <div className="banner danger">{err}</div>;
   if (!data) return <div className="card muted">加载中…</div>;

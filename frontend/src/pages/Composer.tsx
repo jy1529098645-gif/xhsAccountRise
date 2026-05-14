@@ -490,28 +490,39 @@ export default function Composer() {
   );
 }
 
+// v0.61.27 ：chosen 候选选择本地化（不再 PATCH 后端，避免多用户互覆盖）。
+// 键 ：studio.composer.chosen.<pid>.<draft_id>。每个用户 / 每个浏览器独立。
+function chosenLocalKey(draftId: string): string {
+  let pid = "default";
+  try { pid = localStorage.getItem("studio.activeProjectId") || "default"; } catch { /* ignore */ }
+  return `studio.composer.chosen.${pid}.${draftId}`;
+}
+function readChosenLocal(draftId: string): string | null {
+  try { return localStorage.getItem(chosenLocalKey(draftId)); } catch { return null; }
+}
+function writeChosenLocal(draftId: string, cid: string | null): void {
+  try {
+    if (cid) localStorage.setItem(chosenLocalKey(draftId), cid);
+    else localStorage.removeItem(chosenLocalKey(draftId));
+  } catch { /* quota */ }
+}
+
 function ComposeResult({bundle}: {bundle: ComposeBundle}) {
-  // v0.61.19 ：本地 chosen 镜像 ，initial = backend 已挑的（_pick_best 给的
-  // top-critic 那条）。点 ★ 选这条 → optimistic 更新 + PATCH 后端。
-  const [chosenId, setChosenId] = useState<string | null>(
-    (bundle.final as any)?.candidate_id ?? (bundle.refined as any)?.candidate_id ?? null
-  );
-  const [savingChoice, setSavingChoice] = useState(false);
-  async function chooseDraft(cid: string) {
+  // v0.61.19 → v0.61.27 ：chosen 现在**纯本地** ：
+  // 1) initial 优先读 localStorage（本浏览器之前选过的）
+  // 2) 否则 fallback bundle.final / refined（_pick_best 自动挑的 top critic）
+  // 3) 切换时只写 localStorage，不再 PATCH 后端 → 多人协作不互覆盖。
+  const [chosenId, setChosenId] = useState<string | null>(() => {
+    const local = readChosenLocal(bundle.draft_id);
+    return local
+      ?? (bundle.final as any)?.candidate_id
+      ?? (bundle.refined as any)?.candidate_id
+      ?? null;
+  });
+  function chooseDraft(cid: string) {
     if (cid === chosenId) return;
-    const prev = chosenId;
-    setChosenId(cid);  // optimistic
-    setSavingChoice(true);
-    try {
-      await api.chooseCandidate(bundle.draft_id, cid);
-    } catch (e: any) {
-      // eslint-disable-next-line no-console
-      console.error("[chooseCandidate] failed", e);
-      setChosenId(prev);  // rollback
-      alert("保存失败 ：" + (e?.message || String(e)));
-    } finally {
-      setSavingChoice(false);
-    }
+    setChosenId(cid);
+    writeChosenLocal(bundle.draft_id, cid);
   }
   // 当前 final 候选对象 ：找 chosenId 对应的那条 draft
   const chosenDraft = bundle.drafts.find((d: any) => d.candidate_id === chosenId)
@@ -523,8 +534,7 @@ function ComposeResult({bundle}: {bundle: ComposeBundle}) {
           <div>
             <strong>本次出稿 #{bundle.draft_id.slice(0, 8)}</strong>
             <p className="muted">
-              耗时 {bundle.totals.elapsed_s}s · 成本 ≈ ${bundle.totals.cost_usd.toFixed(4)} · {bundle.drafts.length} 份候选
-              {savingChoice && " · 保存选择中…"}
+              耗时 {bundle.totals.elapsed_s}s · 成本 ≈ ${bundle.totals.cost_usd.toFixed(4)} · {bundle.drafts.length} 份候选 · 你的 final 选择只存本地浏览器（队友看到的可能是 critic 自动挑的）
             </p>
           </div>
           <Link to={`/drafts/${bundle.draft_id}`}><button className="secondary">详情</button></Link>

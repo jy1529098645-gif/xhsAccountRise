@@ -3,8 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import { fmtTime, roleName } from "../format";
 import PlatformPill from "../components/PlatformPill";
-import type { ComplianceHit, RagRef, RagComment, RagHook, VariantChild,
-              TrackingFetchResult } from "../types";
+import type { ComplianceHit, RagRef, RagComment, RagHook, VariantChild } from "../types";
 
 export default function DraftDetail() {
   const { id } = useParams();
@@ -164,6 +163,13 @@ export default function DraftDetail() {
         published={!!d.published}
         onSpawned={reload}
       />
+
+      {/* v0.61.26 ：跨平台改稿。把这条稿改成 抖音 / B 站 / Reddit / X 版本。 */}
+      <RepurposeCard draftId={d.draft_id} sourcePlatform={brief?.platform || "xiaohongshu"}
+        onDone={reload} />
+
+      {/* v0.61.27 ：变现套装 — 商单评估 + 引流话术 */}
+      <MonetizationCard draftId={d.draft_id} />
 
       <ProvenancePanel rag={data.rag} />
 
@@ -392,14 +398,7 @@ function PerformanceWidget({draft, onChanged}: {draft: any; onChanged: () => voi
         填几条都行，复盘的时候 AI 会自动用最新一条。
       </p>
 
-      <RefreshFromUrl draft={draft} onRefreshed={() => {
-        onChanged();
-        api.listPublishedDrafts().then((rows: any[]) => {
-          const me = rows.find(r => r.draft_id === draft.draft_id);
-          setRecent(me?.performance ?? []);
-        });
-      }} />
-
+      {/* v0.61.27 ：自动 fetch 已禁用避风控。手动填即可。 */}
 
       <div style={{display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8}}>
         <NumIn label="👍 点赞" v={likes} setV={setLikes} />
@@ -643,6 +642,328 @@ const ALL_ANGLES = [
   "盘点","复盘","问答","打卡","教训",
 ];
 
+// v0.61.27 ：变现套装卡 — 给当前 draft 评 「适合恰饭吗」 + 生成私域引流话术
+function MonetizationCard({draftId}: {draftId: string}) {
+  const [opened, setOpened] = useState(false);
+  const [intent, setIntent] = useState<"none"|"soft_lead"|"hard_sell"|"brand_collab">("soft_lead");
+  const [evalBusy, setEvalBusy] = useState(false);
+  const [evalResult, setEvalResult] = useState<any>(null);
+  const [scriptsBusy, setScriptsBusy] = useState(false);
+  const [scriptsResult, setScriptsResult] = useState<any>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function runEval() {
+    setEvalBusy(true); setErr(null);
+    try {
+      const r = await api.evaluateMonetization(draftId, {monetization_intent: intent});
+      setEvalResult(r);
+    } catch (e: any) {
+      setErr("评估失败 ：" + (e?.message || String(e)));
+    } finally {
+      setEvalBusy(false);
+    }
+  }
+  async function runScripts() {
+    setScriptsBusy(true); setErr(null);
+    try {
+      const r = await api.generateLeadScripts(draftId);
+      setScriptsResult(r);
+    } catch (e: any) {
+      setErr("生成话术失败 ：" + (e?.message || String(e)));
+    } finally {
+      setScriptsBusy(false);
+    }
+  }
+
+  function copyText(s: string) {
+    try { navigator.clipboard?.writeText(s); } catch { /* ignore */ }
+  }
+
+  return (
+    <div className="card" style={{marginTop: 10}}>
+      <div className="spread">
+        <h2 style={{margin: 0}}>💰 变现 · 商单 + 私域引流</h2>
+        <button className="ghost" onClick={() => setOpened(v => !v)}>
+          {opened ? "收起" : "展开 →"}
+        </button>
+      </div>
+      <p className="muted" style={{fontSize: 12, margin: "4px 0 0"}}>
+        评这条稿适合接广告 / 恰饭吗 · 生成不踩平台违规线的私域引流话术
+      </p>
+      {opened && (
+        <div style={{marginTop: 12}}>
+          {err && <div className="banner danger" onClick={() => setErr(null)}>{err}</div>}
+
+          <div className="row" style={{gap: 12, alignItems: "flex-end", marginBottom: 14}}>
+            <div style={{flex: 1}}>
+              <label>变现意图</label>
+              <select value={intent} onChange={e => setIntent(e.target.value as any)}
+                style={{width: "100%"}}>
+                <option value="none">💚 none · 纯涨粉，不恰饭</option>
+                <option value="soft_lead">🟡 soft_lead · 软引流到私域</option>
+                <option value="hard_sell">🟠 hard_sell · 挂商单卖货</option>
+                <option value="brand_collab">🔴 brand_collab · 品牌植入</option>
+              </select>
+            </div>
+            <button onClick={runEval} disabled={evalBusy}
+              style={{minWidth: 140, padding: "8px 16px"}}>
+              {evalBusy ? "🤖 评估中…" : "💸 评商单适合度"}
+            </button>
+            <button onClick={runScripts} disabled={scriptsBusy}
+              className="secondary"
+              style={{minWidth: 140, padding: "8px 16px"}}>
+              {scriptsBusy ? "🤖 生成中…" : "💬 生成引流话术"}
+            </button>
+          </div>
+
+          {evalResult && (
+            <div style={{marginBottom: 16, padding: 12,
+                         background: evalResult.commercial_score >= 7 ? "#f0fff4"
+                                   : evalResult.commercial_score >= 4 ? "#fff8e0"
+                                   : "#ffe9e9",
+                         borderRadius: 8, border: "1px solid #e0e0e0"}}>
+              <div className="row" style={{justifyContent: "space-between", alignItems: "baseline", marginBottom: 8}}>
+                <div>
+                  <b style={{fontSize: 18}}>💸 商单适合度 ：{evalResult.commercial_score?.toFixed(1)} / 10</b>
+                  <span className="muted" style={{marginLeft: 12, fontSize: 12}}>
+                    价位 ：{evalResult.estimated_price_band}
+                  </span>
+                </div>
+              </div>
+              <div style={{fontSize: 13, marginBottom: 10}}>
+                <b>判断 ：</b>{evalResult.verdict}
+              </div>
+              <div style={{display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6, marginBottom: 10}}>
+                {Object.entries(evalResult.factors || {}).map(([k, v]: any) => (
+                  <div key={k} style={{padding: 6, background: "#fff", borderRadius: 4, textAlign: "center"}}>
+                    <div className="muted" style={{fontSize: 10.5}}>{({
+                      authenticity_preservation: "真实感", audience_friction: "用户反感",
+                      conversion_path: "转化路径", compliance_risk: "合规", pricing_leverage: "议价",
+                    } as any)[k] || k}</div>
+                    <div style={{fontWeight: 600, fontSize: 14}}>{Number(v).toFixed(1)}</div>
+                  </div>
+                ))}
+              </div>
+              {evalResult.risks?.length > 0 && (
+                <div style={{fontSize: 12, marginBottom: 6}}>
+                  <b>⚠️ 风险 ：</b>
+                  <ul style={{margin: "4px 0 0 18px"}}>
+                    {evalResult.risks.map((r: string, i: number) => <li key={i}>{r}</li>)}
+                  </ul>
+                </div>
+              )}
+              {evalResult.suggestions?.length > 0 && (
+                <div style={{fontSize: 12}}>
+                  <b>💡 改进建议 ：</b>
+                  <ul style={{margin: "4px 0 0 18px"}}>
+                    {evalResult.suggestions.map((s: string, i: number) => <li key={i}>{s}</li>)}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+
+          {scriptsResult && (
+            <div style={{padding: 12, background: "var(--primary-soft)", borderRadius: 8}}>
+              <b style={{fontSize: 14}}>💬 私域引流话术（点 📋 复制）</b>
+              {scriptsResult.comment_prompts?.length > 0 && (
+                <div style={{marginTop: 10}}>
+                  <div style={{fontSize: 12.5, fontWeight: 600, color: "var(--primary)"}}>
+                    ▸ 评论区引导（自己评论自己稿件）
+                  </div>
+                  <div style={{display: "grid", gap: 4, marginTop: 4}}>
+                    {scriptsResult.comment_prompts.map((p: string, i: number) => (
+                      <div key={i} style={{padding: "6px 10px", background: "#fff", borderRadius: 4,
+                                            display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6}}>
+                        <span style={{fontSize: 12.5, flex: 1}}>{p}</span>
+                        <button className="ghost" onClick={() => copyText(p)}
+                          style={{fontSize: 10.5, padding: "2px 8px", flexShrink: 0}}>📋</button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {scriptsResult.dm_opener?.length > 0 && (
+                <div style={{marginTop: 10}}>
+                  <div style={{fontSize: 12.5, fontWeight: 600, color: "var(--primary)"}}>
+                    ▸ 私信开场白
+                  </div>
+                  <div style={{display: "grid", gap: 4, marginTop: 4}}>
+                    {scriptsResult.dm_opener.map((p: string, i: number) => (
+                      <div key={i} style={{padding: "6px 10px", background: "#fff", borderRadius: 4,
+                                            display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6}}>
+                        <span style={{fontSize: 12.5, flex: 1}}>{p}</span>
+                        <button className="ghost" onClick={() => copyText(p)}
+                          style={{fontSize: 10.5, padding: "2px 8px", flexShrink: 0}}>📋</button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {scriptsResult.bio_oneliner && (
+                <div style={{marginTop: 10}}>
+                  <div style={{fontSize: 12.5, fontWeight: 600, color: "var(--primary)"}}>
+                    ▸ 主页 bio 一句话
+                  </div>
+                  <div style={{padding: "6px 10px", background: "#fff", borderRadius: 4, marginTop: 4,
+                                display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6}}>
+                    <span style={{fontSize: 12.5, flex: 1}}>{scriptsResult.bio_oneliner}</span>
+                    <button className="ghost" onClick={() => copyText(scriptsResult.bio_oneliner)}
+                      style={{fontSize: 10.5, padding: "2px 8px", flexShrink: 0}}>📋</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// v0.61.26 ：跨平台改稿卡。把当前 draft 的 final candidate 改写成另一个
+// 平台的版本。target_lib_id 可选 ：用户有那个平台的 lib 就传，AI 会拉真实
+// 爆款做 voice 锚；不传就靠 AI 通用平台 prompt 生成（质量略次但能用）。
+function RepurposeCard({draftId, sourcePlatform, onDone}: {
+  draftId: string;
+  sourcePlatform: string;
+  onDone: () => void;
+}) {
+  const [opened, setOpened] = useState(false);
+  const [target, setTarget] = useState<string>("");
+  const [targetLibId, setTargetLibId] = useState<string>("");
+  const [libs, setLibs] = useState<Array<{lib_id: string; display_name: string; platform: string}>>([]);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<any>(null);
+
+  useEffect(() => {
+    if (opened && libs.length === 0) {
+      api.libraries().then(setLibs as any).catch(() => {});
+    }
+  }, [opened, libs.length]);
+
+  const PLATFORMS = [
+    {id: "xiaohongshu", label: "📕 小红书"},
+    {id: "douyin", label: "🎵 抖音"},
+    {id: "kuaishou", label: "📹 快手"},
+    {id: "bilibili", label: "📺 B站"},
+    {id: "youtube", label: "🎬 YouTube"},
+    {id: "reddit", label: "🤖 Reddit"},
+    {id: "x", label: "𝕏 Twitter"},
+  ].filter(p => p.id !== sourcePlatform);
+
+  // 默认 target — 第一个不是 source 的
+  useEffect(() => {
+    if (opened && !target && PLATFORMS.length > 0) {
+      setTarget(PLATFORMS[0].id);
+    }
+  }, [opened, target, PLATFORMS]);
+
+  // 当 target 变化时自动找该平台的 lib（如果有）
+  useEffect(() => {
+    if (!target) return;
+    const matching = libs.find(l => l.platform === target);
+    setTargetLibId(matching?.lib_id ?? "");
+  }, [target, libs]);
+
+  async function run() {
+    if (!target) { alert("先选目标平台"); return; }
+    setBusy(true); setResult(null);
+    try {
+      const r = await api.repurposeDraft(draftId, {
+        target_platform: target,
+        target_lib_id: targetLibId || null,
+      });
+      setResult(r);
+      onDone();
+    } catch (e: any) {
+      alert("改稿失败 ：" + e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card" style={{marginTop: 10}}>
+      <div className="spread">
+        <h2 style={{margin: 0}}>🔄 跨平台改稿 · 一稿多发</h2>
+        <button className="ghost" onClick={() => setOpened(v => !v)}>
+          {opened ? "收起" : "展开 →"}
+        </button>
+      </div>
+      <p className="muted" style={{fontSize: 12, margin: "4px 0 0"}}>
+        把这条稿改成另一个平台版本（voice + 长度 + 格式 自动迁移）。
+        有目标平台的 library 时会拉真实爆款做 voice 锚，没有就靠 AI 通用平台风格生成。
+      </p>
+      {opened && (
+        <div style={{marginTop: 12}}>
+          <div className="row" style={{gap: 8, marginBottom: 10, alignItems: "flex-end"}}>
+            <div style={{flex: 1}}>
+              <label>目标平台</label>
+              <select value={target} onChange={e => setTarget(e.target.value)}
+                style={{width: "100%"}}>
+                {PLATFORMS.map(p => (
+                  <option key={p.id} value={p.id}>{p.label}</option>
+                ))}
+              </select>
+              <div className="muted" style={{fontSize: 11, marginTop: 2}}>
+                源 ：{sourcePlatform} → 目标 ：{target || "选一个"}
+              </div>
+            </div>
+            <div style={{flex: 1}}>
+              <label>目标平台的 library（可选）</label>
+              <select value={targetLibId} onChange={e => setTargetLibId(e.target.value)}
+                style={{width: "100%"}}>
+                <option value="">无 · AI 通用平台风格生成</option>
+                {libs.filter(l => l.platform === target).map(l => (
+                  <option key={l.lib_id} value={l.lib_id}>
+                    {l.display_name}
+                  </option>
+                ))}
+              </select>
+              <div className="muted" style={{fontSize: 11, marginTop: 2}}>
+                {libs.filter(l => l.platform === target).length === 0
+                  ? "你没上传过这个平台的 lib · AI 据通用模板生成"
+                  : "有 lib → AI 会按真实爆款 voice 改写（更准）"}
+              </div>
+            </div>
+            <button onClick={run} disabled={busy || !target}
+              style={{minWidth: 140, padding: "8px 16px"}}>
+              {busy ? "🤖 改稿中…(约 20-40s)" : "🚀 开始改稿"}
+            </button>
+          </div>
+          {result && (
+            <div style={{marginTop: 12, padding: 12, background: "#f0fff4",
+                         border: "1px solid var(--ok)", borderRadius: 8}}>
+              <div className="spread">
+                <b>✓ 改稿成功（{result.elapsed_s}s）</b>
+                <Link to={`/drafts/${result.child_draft_id}`}>
+                  <button className="secondary">查看新稿 →</button>
+                </Link>
+              </div>
+              {result.rationale && (
+                <div className="muted" style={{fontSize: 12, marginTop: 6}}>
+                  💡 改稿说明 ：{result.rationale}
+                </div>
+              )}
+              <details style={{marginTop: 8, fontSize: 13}}>
+                <summary style={{cursor: "pointer", fontWeight: 600}}>
+                  ▾ 预览新稿
+                </summary>
+                <div style={{marginTop: 6, fontSize: 13.5, fontWeight: 600}}>{result.payload?.title}</div>
+                <div style={{marginTop: 4, fontSize: 12.5, lineHeight: 1.7, whiteSpace: "pre-wrap",
+                              padding: 8, background: "#fff", borderRadius: 4}}>
+                  {result.payload?.body}
+                </div>
+              </details>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function VariantFanOutCard({draftId, existing, published, onSpawned}: {
   draftId: string; existing: VariantChild[]; published: boolean; onSpawned: () => void;
 }) {
@@ -809,54 +1130,6 @@ function ProvenancePanel({rag}: {rag?: {refs: RagRef[]; comments: RagComment[]; 
   );
 }
 
-// ---------- Tracking refresh button ---------------------------
-function RefreshFromUrl({draft, onRefreshed}: {draft: any; onRefreshed: () => void}) {
-  const [available, setAvailable] = useState<boolean | null>(null);
-  const [hint, setHint] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [lastFetch, setLastFetch] = useState<TrackingFetchResult | null>(null);
-
-  useEffect(() => {
-    api.trackingStatus().then(s => { setAvailable(s.crawler_available); setHint(s.hint); });
-  }, []);
-
-  async function refresh() {
-    if (!draft.published_url) {
-      alert("先在上方填写 published_url");
-      return;
-    }
-    setBusy(true);
-    try {
-      const r = await api.trackingRefresh(draft.draft_id);
-      setLastFetch(r);
-      if (r.status === "ok") onRefreshed();
-    } catch (e: any) {
-      alert("刷新失败: " + e.message);
-    } finally { setBusy(false); }
-  }
-
-  if (!draft.published || !draft.published_url) return null;
-
-  return (
-    <div style={{marginBottom: 10, padding: 10, background: "#f0f7fc", borderRadius: 6}}>
-      <div className="spread">
-        <div style={{fontSize: 13}}>
-          <b>🔄 自动从 URL 刷新</b>{" "}
-          <span className="muted" style={{fontSize: 11}}>{hint}</span>
-        </div>
-        <button onClick={refresh} disabled={busy || available === false}
-          className={available === false ? "ghost" : ""}
-          style={{fontSize: 12, padding: "4px 10px"}}>
-          {busy ? "刷新中…" : "刷新"}
-        </button>
-      </div>
-      {lastFetch && (
-        <div style={{marginTop: 6, fontSize: 12}}>
-          状态: <b style={{color: lastFetch.status === "ok" ? "#2a8" : "#a33"}}>
-            {lastFetch.status}
-          </b> · {lastFetch.raw_summary}
-        </div>
-      )}
-    </div>
-  );
-}
+// v0.61.27 ：原 RefreshFromUrl 自动 fetch 组件已删除。原因 ：
+// 抓取小红书后台数据需要 curl_cffi + chrome131 impersonation + 登录 cookie，
+// 风控风险（限流 / ban 账号）大于收益。数据回流改为纯手动填。

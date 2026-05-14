@@ -9,6 +9,10 @@ export default function Drafts() {
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
+    reload();
+  }, []);
+
+  function reload() {
     api.drafts()
       .then(d => setDrafts(Array.isArray(d) ? d : []))
       .catch(e => {
@@ -16,7 +20,20 @@ export default function Drafts() {
         console.error("[Drafts] load failed:", e);
         setErr(e?.message || String(e));
       });
-  }, []);
+  }
+
+  async function deleteDraft(id: string, topic: string) {
+    // v0.61.27 ：参考 ProjectPicker 一点就删的体验，不弹 confirm — 误删
+    // 自负，反正用户随时能再 compose 一份。
+    try {
+      await api.deleteDraft(id);
+      setDrafts(prev => prev.filter(d => d.draft_id !== id));
+    } catch (e: any) {
+      alert("删除失败 ：" + (e?.message || String(e)));
+    }
+    // 抑制未使用警告 — topic 可以用于将来加 toast
+    void topic;
+  }
 
   return (
     <div>
@@ -34,7 +51,7 @@ export default function Drafts() {
             <thead>
               <tr>
                 <th>主题</th><th>最终标题</th><th>方式</th>
-                <th className="num">候选数</th><th>时间</th><th></th>
+                <th className="num">候选数</th><th>时间</th><th></th><th></th>
               </tr>
             </thead>
             <tbody>
@@ -46,6 +63,14 @@ export default function Drafts() {
                   <td className="num">{d.candidate_count}</td>
                   <td className="muted">{fmtRelative(d.generated_at)}</td>
                   <td><Link to={`/drafts/${d.draft_id}`}>详情</Link></td>
+                  <td>
+                    <button className="ghost"
+                      style={{padding: "2px 8px", fontSize: 11, color: "var(--danger)"}}
+                      title="永久删除这条出稿 + 所有候选 / 审稿 / 时间线"
+                      onClick={() => deleteDraft(d.draft_id, d.brief?.topic || "")}>
+                      ✕ 删
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
