@@ -313,10 +313,38 @@ def hard_delete(project_id: str) -> dict[str, int]:
                 # Table might not exist on older DBs — skip.
                 counts[table] = 0
 
-    # studio_projects 现在在全局 db
+    # studio_projects 现在在全局 db。同时也必须扫所有 per-lib .db 把残留的
+    # 同 project_id 行删掉 — 否则 list_projects 的 _migrate_per_library_projects
+    # _into_global 会把删过的项目「复活」回来。
     with _gconn() as con:
         con.execute("DELETE FROM studio_projects WHERE project_id = ?", (project_id,))
         counts["studio_projects"] = 1
+    import sqlite3
+    libs_dir = config.DATA_DIR / "libraries"
+    if libs_dir.exists():
+        for lib_dir in libs_dir.iterdir():
+            if not lib_dir.is_dir():
+                continue
+            per_lib_db = lib_dir / "xhs.db"
+            if not per_lib_db.exists():
+                continue
+            try:
+                c = sqlite3.connect(per_lib_db)
+                try:
+                    has = c.execute(
+                        "SELECT name FROM sqlite_master"
+                        " WHERE type='table' AND name='studio_projects'"
+                    ).fetchone()
+                    if has:
+                        c.execute(
+                            "DELETE FROM studio_projects WHERE project_id = ?",
+                            (project_id,),
+                        )
+                        c.commit()
+                finally:
+                    c.close()
+            except Exception:
+                continue
 
     return counts
 
