@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { fmtTime, fmtRelative } from "../format";
 import NextStepCard from "../components/NextStepCard";
 import ErrorBoundary from "../components/ErrorBoundary";
 import { humaniseError } from "../errors";
+import { isAborted } from "../api";
 
 interface PublishedDraft {
   draft_id: string;
@@ -49,6 +50,8 @@ export default function Retrospective() {
   const [latestReviewId, setLatestReviewId] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  function pauseAnalyze() { abortRef.current?.abort(); }
 
   async function load() {
     try {
@@ -81,19 +84,25 @@ export default function Retrospective() {
       return;
     }
     setErr(null); setInfo(null); setAnalyzing(true);
+    abortRef.current = new AbortController();
     try {
       const r = await api.runRetrospective({
         draft_ids: Array.from(selectedIds),
-        model_spec: "claude:opus",
-      });
+        model_spec: "claude:sonnet",
+      }, abortRef.current.signal);
       setAnalysis(r.analysis);
       setLatestReviewId(r.review_id);
       setInfo(`✓ 复盘报告生成完成（${r.elapsed_s}s · 覆盖 ${r.draft_ids.length} 篇）`);
       load();
     } catch (e: any) {
-      setErr(humaniseError(e));
+      if (isAborted(e)) {
+        setInfo("⏸ 已暂停。点🚀生成复盘报告可重新开始。");
+      } else {
+        setErr(humaniseError(e));
+      }
     } finally {
       setAnalyzing(false);
+      abortRef.current = null;
     }
   }
 
@@ -186,9 +195,15 @@ export default function Retrospective() {
                   Wins / Losses / 模式拆解 / 下一轮该做什么 — 约 30-60s
                 </div>
               </div>
-              <button onClick={runAnalyze} disabled={analyzing || selectedIds.size === 0}>
-                {analyzing ? "🤖 分析中（30-60s）…" : "🚀 生成复盘报告"}
-              </button>
+              <div className="row" style={{gap: 6}}>
+                <button onClick={runAnalyze} disabled={analyzing || selectedIds.size === 0}>
+                  {analyzing ? "🤖 分析中（30-60s）…" : "🚀 生成复盘报告"}
+                </button>
+                {analyzing && (
+                  <button className="ghost" onClick={pauseAnalyze}
+                    style={{padding: "8px 14px", fontSize: 13}}>⏸ 暂停</button>
+                )}
+              </div>
             </div>
           </div>
         </div>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import { fmtRelative, platformLabel } from "../format";
@@ -6,6 +6,7 @@ import PlatformPill from "../components/PlatformPill";
 import ProgressTimeline, { Stage as TimelineStage } from "../components/ProgressTimeline";
 import NextStepCard from "../components/NextStepCard";
 import { humaniseError, humaniseErrorAsync } from "../errors";
+import { isAborted } from "../api";
 import { LLM_CATALOG } from "../catalog";
 import type {
   AccountInputDTO, Library, Platform, StrategicDirectionDTO, StrategyPackDTO,
@@ -129,6 +130,11 @@ export default function Strategy() {
   const [lastFailedAction, setLastFailedAction] = useState<
     { kind: "autofill" } | { kind: "propose" } | { kind: "expand"; idx: number } | null
   >(null);
+  const abortRef = useRef<AbortController | null>(null);
+  function pauseCurrent() {
+    abortRef.current?.abort();
+    abortRef.current = null;
+  }
 
   // Save in-progress input to localStorage as user types.
   useEffect(() => {
@@ -211,14 +217,15 @@ export default function Strategy() {
 
   async function runAutofill(extraHints?: { personal?: string; constraints?: string }) {
     setPhase("autofilling"); setAutofillErr(null); setInfo(null);
+    abortRef.current = new AbortController();
     try {
       const r = await api.autofillStrategy({
         personal_hint: extraHints?.personal ?? input.personal_strengths ?? "",
         constraints_hint: extraHints?.constraints ?? input.constraints ?? "",
-        claude_spec: "claude:opus",
+        claude_spec: "claude:sonnet",
         openai_spec: "openai",
-        moderator_spec: "claude:opus",
-      });
+        moderator_spec: "claude:sonnet",
+      }, abortRef.current.signal);
       setAutofill(r);
       setInput({
         positioning: r.input.positioning || "",
@@ -232,9 +239,16 @@ export default function Strategy() {
       setLastFailedAction(null);
       setPhase("input");
     } catch (e: any) {
-      setAutofillErr(await humaniseErrorAsync(e));
-      setLastFailedAction({ kind: "autofill" });
-      setPhase("input");
+      if (isAborted(e)) {
+        setInfo("⏸ 已暂停。后端可能还在跑（无害），需要时点上面🪄重新拟。");
+        setPhase("input");
+      } else {
+        setAutofillErr(await humaniseErrorAsync(e));
+        setLastFailedAction({ kind: "autofill" });
+        setPhase("input");
+      }
+    } finally {
+      abortRef.current = null;
     }
   }
 
@@ -246,12 +260,13 @@ export default function Strategy() {
       return;
     }
     setErr(null); setInfo(null); setPhase("loading-propose");
+    abortRef.current = new AbortController();
     try {
       const res = await api.proposeStrategy({
         ...input,
         platform: platform,
         positioner_spec: positionerSpec,
-      });
+      }, abortRef.current.signal);
       setPackId(res.pack_id);
       setDirections(res.directions);
       setLastFailedAction(null);
@@ -260,9 +275,16 @@ export default function Strategy() {
       navigate(`/strategy/${res.pack_id}`, { replace: true });
       api.listStrategies().then(setHistory).catch(() => {});
     } catch (e: any) {
-      setErr(await humaniseErrorAsync(e)); setInfo(null);
-      setLastFailedAction({ kind: "propose" });
-      setPhase("input");
+      if (isAborted(e)) {
+        setInfo("⏸ 已暂停。点上面🚀重新启动会从头开始。");
+        setPhase("input");
+      } else {
+        setErr(await humaniseErrorAsync(e)); setInfo(null);
+        setLastFailedAction({ kind: "propose" });
+        setPhase("input");
+      }
+    } finally {
+      abortRef.current = null;
     }
   }
 
@@ -271,12 +293,13 @@ export default function Strategy() {
     setChosenIdx(idx); setErr(null);
     setInfo("AI 正在生成 N 周完整排期 + 材料清单（约 60-180s）…");
     setPhase("loading-expand");
+    abortRef.current = new AbortController();
     try {
       const res = await api.expandStrategy(packId, idx, {
         topicgen_spec: topicgenSpec,
         scheduler_spec: schedulerSpec,
         resourcer_spec: resourcerSpec,
-      });
+      }, abortRef.current.signal);
       setPack(res.pack);
       setInfo(null);
       setLastFailedAction(null);
@@ -285,6 +308,12 @@ export default function Strategy() {
       try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
       api.listStrategies().then(setHistory).catch(() => {});
     } catch (e: any) {
+      // User pressed pause: just stop, don't surface as error.
+      if (isAborted(e)) {
+        setInfo("⏸ 已暂停。后端可能还在跑 — 之后点这个方向「继续等」会自动接回结果。");
+        setPhase("directions");
+        return;
+      }
       // Two recovery paths:
       //   (a) Network drop mid-call: backend is probably still running →
       //       poll for completion.
@@ -312,6 +341,8 @@ export default function Strategy() {
       setErr(await humaniseErrorAsync(e)); setInfo(null);
       setLastFailedAction({ kind: "expand", idx });
       setPhase("directions");
+    } finally {
+      abortRef.current = null;
     }
   }
 
@@ -427,8 +458,14 @@ export default function Strategy() {
 
       {phase === "autofilling" && (
         <div className="card">
-          <h2 style={{margin: "0 0 4px"}}>🤖🤖 AI 双方正在为你拟起号初稿</h2>
-          <p className="muted" style={{margin: 0}}>Claude + OpenAI 独立分析 → 互评 → 主编融合共识</p>
+          <div className="spread" style={{alignItems: "flex-start"}}>
+            <div>
+              <h2 style={{margin: "0 0 4px"}}>🤖🤖 AI 双方正在为你拟起号初稿</h2>
+              <p className="muted" style={{margin: 0}}>Claude + OpenAI 独立分析 → 互评 → 主编融合共识</p>
+            </div>
+            <button className="ghost" onClick={pauseCurrent}
+              style={{padding: "6px 12px", fontSize: 13}}>⏸ 暂停</button>
+          </div>
           <ProgressTimeline stages={AUTOFILL_STAGES} currentIndex={-1} auto />
         </div>
       )}
@@ -474,8 +511,14 @@ export default function Strategy() {
 
       {phase === "loading-propose" && (
         <div className="card">
-          <h2 style={{margin: "0 0 4px"}}>🤖 AI 在为你拟候选方向</h2>
-          <p className="muted" style={{margin: 0}}>读 brief → 解析爆款 DNA → 输出 3-5 个差异化定位</p>
+          <div className="spread" style={{alignItems: "flex-start"}}>
+            <div>
+              <h2 style={{margin: "0 0 4px"}}>🤖 AI 在为你拟候选方向</h2>
+              <p className="muted" style={{margin: 0}}>读 brief → 解析爆款 DNA → 输出 8-12 个差异化定位</p>
+            </div>
+            <button className="ghost" onClick={pauseCurrent}
+              style={{padding: "6px 12px", fontSize: 13}}>⏸ 暂停</button>
+          </div>
           <ProgressTimeline stages={PROPOSE_STAGES} currentIndex={-1} auto />
         </div>
       )}
@@ -489,8 +532,14 @@ export default function Strategy() {
 
       {phase === "loading-expand" && (
         <div className="card">
-          <h2 style={{margin: "0 0 4px"}}>🤖🤖🤖 AI 团队正在排期 + 列材料</h2>
-          <p className="muted" style={{margin: 0}}>多家 LLM 协作出完整周历 + 材料清单 + 风险评估</p>
+          <div className="spread" style={{alignItems: "flex-start"}}>
+            <div>
+              <h2 style={{margin: "0 0 4px"}}>🤖🤖🤖 AI 团队正在排期 + 列材料</h2>
+              <p className="muted" style={{margin: 0}}>多家 LLM 协作出完整周历 + 材料清单 + 风险评估</p>
+            </div>
+            <button className="ghost" onClick={pauseCurrent}
+              style={{padding: "6px 12px", fontSize: 13}}>⏸ 暂停</button>
+          </div>
           <ProgressTimeline stages={EXPAND_STAGES} currentIndex={-1} auto />
         </div>
       )}

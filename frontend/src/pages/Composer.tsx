@@ -8,6 +8,7 @@ import AgentConfigPanel, {
 import ProgressTimeline, { Stage as TimelineStage } from "../components/ProgressTimeline";
 import NextStepCard from "../components/NextStepCard";
 import { humaniseError, humaniseErrorAsync } from "../errors";
+import { isAborted } from "../api";
 import type { ComposeBundle, DraftCandidate, Library, Platform } from "../types";
 
 const COMPOSE_STAGES: TimelineStage[] = [
@@ -38,6 +39,8 @@ export default function Composer() {
   const [running, setRunning] = useState(false);
   const [bundle, setBundle] = useState<ComposeBundle | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const [paused, setPaused] = useState(false);
 
   useEffect(() => {
     api.platforms().then(setPlatforms).catch(() => {});
@@ -82,18 +85,23 @@ export default function Composer() {
   }, []);
 
   async function run() {
-    setRunning(true); setErr(null); setBundle(null);
+    setRunning(true); setErr(null); setBundle(null); setPaused(false);
+    abortRef.current = new AbortController();
     try {
       const res = await api.compose({
         topic, angle, target_length: length, cta_strength: cta,
         niche, extra_constraints: extra,
         platform: platform || undefined,
         ...selectionToSpecs(agentConfig),
-      });
+      }, abortRef.current.signal);
       setBundle(res);
     } catch (e: any) {
-      setErr(await humaniseErrorAsync(e));
-    } finally { setRunning(false); }
+      if (isAborted(e)) { setPaused(true); }
+      else { setErr(await humaniseErrorAsync(e)); }
+    } finally { setRunning(false); abortRef.current = null; }
+  }
+  function pause() {
+    abortRef.current?.abort();
   }
 
   const noBackend = !api.isConnected();
@@ -189,9 +197,21 @@ export default function Composer() {
             <AgentConfigPanel selection={agentConfig} onChange={setAgentConfig} />
           )}
 
-          <button onClick={run} disabled={running || !topic.trim() || noBackend} style={{marginTop: 16, width: "100%", fontSize: 15, padding: "10px 0"}}>
-            {running ? "🤖 AI 们正在协作出稿中…(60-180s)" : "🚀 启动 AI 团队"}
-          </button>
+          <div className="row" style={{gap: 8, marginTop: 16}}>
+            <button onClick={run} disabled={running || !topic.trim() || noBackend}
+              style={{flex: 1, fontSize: 15, padding: "10px 0"}}>
+              {running ? "🤖 AI 们正在协作出稿中…(60-180s)" : (paused ? "🚀 重新启动" : "🚀 启动 AI 团队")}
+            </button>
+            {running && (
+              <button className="ghost" onClick={pause}
+                style={{padding: "10px 16px", fontSize: 14}}>⏸ 暂停</button>
+            )}
+          </div>
+          {paused && !running && (
+            <div className="banner info" style={{marginTop: 8}}>
+              ⏸ 已暂停。后端可能还在跑（无害），点上面「🚀 重新启动」会从头开始。
+            </div>
+          )}
           {err && (
             <div className="banner danger" style={{marginTop: 10, display: "flex",
                                                    justifyContent: "space-between",

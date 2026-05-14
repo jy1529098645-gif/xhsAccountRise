@@ -6,6 +6,7 @@ import PlatformPill from "../components/PlatformPill";
 import ProgressTimeline, { Stage as TimelineStage } from "../components/ProgressTimeline";
 import NextStepCard from "../components/NextStepCard";
 import { humaniseError } from "../errors";
+import { isAborted } from "../api";
 import { GITHUB_REPO } from "../catalog";
 import type { Library, Platform } from "../types";
 
@@ -76,6 +77,10 @@ export default function Reports() {
   const [integrating, setIntegrating] = useState(false);
   const [includeOwnConsensus, setIncludeOwnConsensus] = useState(true);
   const textFileRef = useRef<HTMLInputElement>(null);
+  const insightAbortRef = useRef<AbortController | null>(null);
+  const integrateAbortRef = useRef<AbortController | null>(null);
+  function pauseInsight() { insightAbortRef.current?.abort(); }
+  function pauseIntegrate() { integrateAbortRef.current?.abort(); }
 
   // Per-file feedback for the current session — user explicitly asked to
   // see "uploaded which files / did they succeed".
@@ -182,6 +187,7 @@ export default function Reports() {
     const ids = Array.from(selectedSourceIds);
     if (ids.length === 0) { setErr("勾一份以上的外部报告再整合"); return; }
     setErr(null); setInfo(null); setIntegrating(true);
+    integrateAbortRef.current = new AbortController();
     try {
       const ownLatest = includeOwnConsensus
         ? reportsForSelected.find(r => r.status === "completed")?.report_id ?? null
@@ -191,13 +197,18 @@ export default function Reports() {
         library_id: selectedLibId || null,
         include_consensus_report_id: ownLatest,
         model_spec: "openai:gpt-4o",
-      });
+      }, integrateAbortRef.current.signal);
       setInfo(`✓ GPT-4o 整合完成（${r.elapsed_s}s）· 整合报告已生成。`);
       await load();
     } catch (e: any) {
-      setErr(humaniseError(e));
+      if (isAborted(e)) {
+        setInfo("⏸ 整合已暂停。点🚀整合所选可重新开始。");
+      } else {
+        setErr(humaniseError(e));
+      }
     } finally {
       setIntegrating(false);
+      integrateAbortRef.current = null;
     }
   }
 
@@ -227,14 +238,21 @@ export default function Reports() {
         }
       }
 
-      const r = await api.runInsight(imp.lib_id);
+      insightAbortRef.current = new AbortController();
+      const r = await api.runInsight(imp.lib_id, undefined, insightAbortRef.current.signal);
       setStage("done");
       setProgress("✓ 报告完成");
       setTimeout(() => navigate(`/reports/${r.report_id}`), 600);
     } catch (e: any) {
-      setErr(humaniseError(e));
+      if (isAborted(e)) {
+        setInfo("⏸ 已暂停（库已上传，可以稍后到「已有库 · 重新生成报告」重跑分析）。");
+      } else {
+        setErr(humaniseError(e));
+      }
       setStage("idle");
       setProgress("");
+    } finally {
+      insightAbortRef.current = null;
     }
   }
 
@@ -248,13 +266,20 @@ export default function Reports() {
       }
       setStage("running-insight");
       setProgress("");
-      const r = await api.runInsight(selectedLibId);
+      insightAbortRef.current = new AbortController();
+      const r = await api.runInsight(selectedLibId, undefined, insightAbortRef.current.signal);
       setStage("done");
       setTimeout(() => navigate(`/reports/${r.report_id}`), 600);
     } catch (e: any) {
-      setErr(humaniseError(e));
+      if (isAborted(e)) {
+        setInfo("⏸ 已暂停。点🚀重跑报告可以再来。");
+      } else {
+        setErr(humaniseError(e));
+      }
       setStage("idle");
       setProgress("");
+    } finally {
+      insightAbortRef.current = null;
     }
   }
 
@@ -320,6 +345,10 @@ export default function Reports() {
               <div className="muted" style={{marginTop: 6}}>
                 不要关闭页面 · 看下面进度，1-3 分钟自动跳到报告
               </div>
+              <button className="ghost" onClick={(e) => { e.stopPropagation(); pauseInsight(); }}
+                style={{pointerEvents: "auto", marginTop: 12, padding: "6px 16px", fontSize: 13}}>
+                ⏸ 暂停
+              </button>
             </>
           ) : (
             <>
@@ -391,6 +420,10 @@ export default function Reports() {
               style={{minWidth: 160, fontSize: 14, padding: "10px 18px"}}>
               {busy ? "AI 工作中…" : "🚀 重跑报告"}
             </button>
+            {busy && (
+              <button className="ghost" onClick={pauseInsight}
+                style={{minWidth: 80, fontSize: 14, padding: "10px 12px"}}>⏸ 暂停</button>
+            )}
           </div>
           {busy && stage === "running-insight" && (
             <ProgressTimeline
@@ -594,11 +627,17 @@ export default function Reports() {
                     一起融合本工具自动出的 Claude×OpenAI 共识报告（如有）
                   </label>
                 </div>
-                <button onClick={runIntegrate}
-                  disabled={integrating || selectedSourceIds.size === 0 || offline}
-                  style={{minWidth: 160}}>
-                  {integrating ? "🤖 GPT-4o 整合中（约 30-60s）…" : "🚀 整合所选 → 一份共识"}
-                </button>
+                <div className="row" style={{gap: 6}}>
+                  <button onClick={runIntegrate}
+                    disabled={integrating || selectedSourceIds.size === 0 || offline}
+                    style={{minWidth: 160}}>
+                    {integrating ? "🤖 GPT-4o 整合中（约 30-60s）…" : "🚀 整合所选 → 一份共识"}
+                  </button>
+                  {integrating && (
+                    <button className="ghost" onClick={pauseIntegrate}
+                      style={{padding: "8px 14px", fontSize: 13}}>⏸ 暂停</button>
+                  )}
+                </div>
               </div>
             </div>
           </>

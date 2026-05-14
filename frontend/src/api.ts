@@ -64,19 +64,33 @@ async function getJson<T>(apiPath: string, staticPath?: string): Promise<T> {
   return res.json();
 }
 
-async function postJson<T>(path: string, body: any): Promise<T> {
+async function postJson<T>(path: string, body: any, signal?: AbortSignal): Promise<T> {
   const backend = backendUrl();
   if (!backend) throw new HttpError(0, `此操作需要本地后端，请去 Settings 配置 backend URL`);
   const res = await fetch(`${backend}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal,
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new HttpError(res.status, `${path} → ${res.status}: ${text.slice(0, 400)}`);
   }
   return res.json();
+}
+
+// A helper for the user-cancelable flows. Wraps a promise that completes via
+// fetch, surfacing AbortError as a distinct condition so the page can show
+// '已暂停' instead of an error banner.
+export class AbortedError extends Error {
+  constructor() { super("aborted"); this.name = "AbortedError"; }
+}
+export function isAborted(e: unknown): boolean {
+  if (e instanceof AbortedError) return true;
+  if (e instanceof DOMException && e.name === "AbortError") return true;
+  const msg = e instanceof Error ? e.message : String(e ?? "");
+  return /aborted|AbortError/i.test(msg);
 }
 
 interface StrategyProposeResult {
@@ -233,8 +247,8 @@ export const api = {
       .catch(() => []),
   runRetrospective: (body: {
     draft_ids?: string[]; library_id?: string | null; model_spec?: string;
-  }) => postJson<{ review_id: string; elapsed_s: number; analysis: any; draft_ids: string[] }>(
-    "/api/retrospective/analyze", body),
+  }, signal?: AbortSignal) => postJson<{ review_id: string; elapsed_s: number; analysis: any; draft_ids: string[] }>(
+    "/api/retrospective/analyze", body, signal),
   listRetrospectives: (libraryId?: string) =>
     getJson<any[]>(`/api/retrospective/reviews${libraryId ? `?library_id=${libraryId}` : ""}`)
       .catch(() => []),
@@ -272,8 +286,8 @@ export const api = {
   },
 
   // Insight (Claude × OpenAI report) -----------
-  runInsight: (libraryId: string, opts?: { claude_spec?: string; openai_spec?: string; moderator_spec?: string }) =>
-    postJson<InsightReportDTO>("/api/insight/run", { library_id: libraryId, ...opts }),
+  runInsight: (libraryId: string, opts?: { claude_spec?: string; openai_spec?: string; moderator_spec?: string }, signal?: AbortSignal) =>
+    postJson<InsightReportDTO>("/api/insight/run", { library_id: libraryId, ...opts }, signal),
   listInsights: (libraryId?: string) =>
     getJson<{ report_id: string; library_id: string; created_at: number; status: string; elapsed_s: number | null }[]>(
       `/api/insight${libraryId ? `?library_id=${libraryId}` : ""}`,
@@ -327,11 +341,11 @@ export const api = {
     source_ids: string[]; library_id?: string | null;
     include_consensus_report_id?: string | null;
     model_spec?: string;
-  }) => postJson<{
+  }, signal?: AbortSignal) => postJson<{
     integrated_id: string; status: string; elapsed_s: number;
     source_ids: string[]; source_names: string[];
     consensus: any;  // same shape as insight consensus
-  }>("/api/external_reports/integrate", req),
+  }>("/api/external_reports/integrate", req, signal),
   listIntegratedReports: (libraryId?: string) =>
     getJson<{
       integrated_id: string; library_id: string | null; created_at: number;
@@ -346,7 +360,7 @@ export const api = {
   // Strategy -----------------
   autofillStrategy: (opts?: { personal_hint?: string; constraints_hint?: string;
                               claude_spec?: string; openai_spec?: string;
-                              moderator_spec?: string }) =>
+                              moderator_spec?: string }, signal?: AbortSignal) =>
     postJson<{
       input: AccountInputDTO;
       field_rationale: Record<string, { source: string; rationale: string; alternatives?: any[] }>;
@@ -355,11 +369,11 @@ export const api = {
       claude_proposal: any;
       openai_proposal: any;
       elapsed_s: number;
-    }>("/api/strategy/autofill", opts ?? {}),
-  proposeStrategy: (req: Partial<AccountInputDTO> & { positioning: string; target_audience: string; positioner_spec?: string }) =>
-    postJson<StrategyProposeResult>("/api/strategy/propose", req),
-  expandStrategy: (packId: string, chosenIdx: number, opts?: { topicgen_spec?: string; scheduler_spec?: string; resourcer_spec?: string }) =>
-    postJson<StrategyExpandResult>(`/api/strategy/${packId}/expand`, { chosen_direction_idx: chosenIdx, ...opts }),
+    }>("/api/strategy/autofill", opts ?? {}, signal),
+  proposeStrategy: (req: Partial<AccountInputDTO> & { positioning: string; target_audience: string; positioner_spec?: string }, signal?: AbortSignal) =>
+    postJson<StrategyProposeResult>("/api/strategy/propose", req, signal),
+  expandStrategy: (packId: string, chosenIdx: number, opts?: { topicgen_spec?: string; scheduler_spec?: string; resourcer_spec?: string }, signal?: AbortSignal) =>
+    postJson<StrategyExpandResult>(`/api/strategy/${packId}/expand`, { chosen_direction_idx: chosenIdx, ...opts }, signal),
   listStrategies: () => getJson<StrategyListItem[]>("/api/strategy", "strategies.json").catch(() => [] as StrategyListItem[]),
   getStrategy: (packId: string) => getJson<StrategyDetail>(`/api/strategy/${packId}`),
   deleteStrategy: async (packId: string) => {
@@ -400,7 +414,7 @@ export const api = {
     skip_refiner?: boolean;
     skip_synthesizer?: boolean;
     skip_planner?: boolean;
-  }) => postJson<ComposeBundle>("/api/compose", req),
+  }, signal?: AbortSignal) => postJson<ComposeBundle>("/api/compose", req, signal),
 };
 
 export { HttpError, STATIC_PLATFORMS };
