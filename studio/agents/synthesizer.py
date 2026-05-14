@@ -113,8 +113,12 @@ def _build_user(ctx: AgentContext) -> str:
         f"避坑: {'；'.join(strategy.get('avoid', []))}"
     )
 
+    angles = ctx.brief.all_angles()
+    angle_line = (f"角度: {angles[0]}" if len(angles) == 1
+                  else "覆盖角度: " + " / ".join(angles)
+                       + "（候选已按角度分别出稿，融合时保留多角度优点而不是收敛到单一角度）")
     return (
-        f"【brief】\n主题: {ctx.brief.topic}\n角度: {ctx.brief.angle}\n"
+        f"【brief】\n主题: {ctx.brief.topic}\n{angle_line}\n"
         f"字数: {ctx.brief.target_length}\n\n"
         f"【上层 Strategist 已定的策略】\n{strategy_lines}\n\n"
         f"【{len([c for c in ctx.drafts if not c.error])} 份候选 + critic 评审】\n\n"

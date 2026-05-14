@@ -236,3 +236,10 @@ export const PLATFORM_LABEL_MAP: Record<string, string> =
   Object.fromEntries(PLATFORM_GUIDES.map(p => [p.id, p.label]));
 
 export const GITHUB_REPO = "https://github.com/jy1529098645-gif/xhsAccountRise";
+
+// v0.52: angles available for both Composer (per-draft) and Strategy
+// (per-slot) multi-select. Backend Brief.angles + AccountInput.expected_angles
+// validate against this same list.
+export const CONTENT_ANGLES: string[] = [
+  "教程", "痛点", "故事", "工具评测", "对比", "感悟", "数字", "种草", "建议",
+];

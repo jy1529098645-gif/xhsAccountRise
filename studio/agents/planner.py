@@ -174,7 +174,7 @@ class PlannerAgent(Agent):
             f"hook 类型: {final.hook_type}\n"
             f"tags: {final.tags}\n"
             f"正文（节选）: {final.body[:600]}\n\n"
-            f"【brief】主题={ctx.brief.topic} · 角度={ctx.brief.angle}"
+            f"【brief】主题={ctx.brief.topic} · 角度={'/'.join(ctx.brief.all_angles())}"
             f" · niche={ctx.brief.niche or '无'}\n\n"
             f"【该平台过往爆款发布时段统计（按 median likes 排序）】\n"
             f"{_format_timing(timing)}\n\n"

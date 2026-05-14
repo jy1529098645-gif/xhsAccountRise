@@ -587,6 +587,10 @@ def rag_search(q: str, k: int = 8, n: int = 15) -> dict[str, Any]:
 class ComposeRequest(BaseModel):
     topic: str
     angle: str = "教程"
+    # v0.52: multi-angle. When non-empty, drafter pool produces one candidate
+    # per angle (cycling LLMs). `angle` stays as the singular fallback for
+    # back-compat callers.
+    angles: list[str] = Field(default_factory=list)
     target_length: int = Field(default=600, ge=120, le=3000)
     cta_strength: str = Field(default="soft", pattern="^(none|soft|strong)$")
     niche: str = ""
@@ -612,8 +616,17 @@ class ComposeRequest(BaseModel):
 async def compose(req: ComposeRequest) -> dict[str, Any]:
     platform = req.platform or library.get_meta(library.active_lib_id()) and \
         library.get_meta(library.active_lib_id()).platform or "xiaohongshu"
+    # De-dupe angles preserving order; ignore unknown values silently.
+    from ..brief import ALL_ANGLES
+    seen: set[str] = set()
+    angles_clean: list[str] = []
+    for a in req.angles or []:
+        if a in ALL_ANGLES and a not in seen:
+            angles_clean.append(a); seen.add(a)
     brief = Brief(
-        topic=req.topic, angle=req.angle, target_length=req.target_length,
+        topic=req.topic, angle=req.angle,
+        angles=tuple(angles_clean),
+        target_length=req.target_length,
         cta_strength=req.cta_strength, niche=req.niche,
         extra_constraints=req.extra_constraints,
         platform=library.normalise_platform(platform),
@@ -914,6 +927,9 @@ class StrategyInput(BaseModel):
     personal_strengths: str = ""
     constraints: str = ""
     platform: str | None = None
+    # v0.52: user can pre-pick which angles the schedule should cover.
+    # Empty = AI picks freely (legacy).
+    expected_angles: list[str] = Field(default_factory=list)
     positioner_spec: str = "openai:gpt-4o"
 
 
@@ -965,6 +981,8 @@ async def strategy_propose(req: StrategyInput) -> dict[str, Any]:
     if not plat:
         meta = library.get_meta(library.active_lib_id())
         plat = meta.platform if meta else "xiaohongshu"
+    from ..brief import ALL_ANGLES as _ALL_ANGLES
+    _exp_angles = [a for a in (req.expected_angles or []) if a in _ALL_ANGLES]
     inp = AccountInput(
         positioning=req.positioning,
         target_audience=req.target_audience,
@@ -973,6 +991,7 @@ async def strategy_propose(req: StrategyInput) -> dict[str, Any]:
         personal_strengths=req.personal_strengths,
         constraints=req.constraints,
         platform=library.normalise_platform(plat),
+        expected_angles=_exp_angles,
     )
     try:
         result = await strategy_pipeline.propose(inp, positioner_spec=req.positioner_spec)
@@ -990,6 +1009,8 @@ async def strategy_propose_stream(req: StrategyInput):
     if not plat:
         meta = library.get_meta(library.active_lib_id())
         plat = meta.platform if meta else "xiaohongshu"
+    from ..brief import ALL_ANGLES as _ALL_ANGLES
+    _exp_angles = [a for a in (req.expected_angles or []) if a in _ALL_ANGLES]
     inp = AccountInput(
         positioning=req.positioning,
         target_audience=req.target_audience,
@@ -998,6 +1019,7 @@ async def strategy_propose_stream(req: StrategyInput):
         personal_strengths=req.personal_strengths,
         constraints=req.constraints,
         platform=library.normalise_platform(plat),
+        expected_angles=_exp_angles,
     )
     return StreamingResponse(
         strategy_pipeline.propose_stream(inp, positioner_spec=req.positioner_spec),

@@ -615,6 +615,21 @@ async def _expand_inner(
     all_topics: list[dict[str, Any]] = []  # kept for response shape compat
 
     timing_heatmap = (dna.get("sections", {}).get("timing", {}) or {}).get("heatmap", [])
+    # v0.52: distribute slots across user-selected angles. With K angles + N
+    # slots, each angle gets ~N/K slots (rounded). Forces variety in the
+    # generated schedule instead of the LLM's natural collapse to a couple
+    # of comfortable angles.
+    angle_directive = ""
+    exp_angles = list(inp.expected_angles or [])
+    if exp_angles:
+        per_angle = max(1, topic_count // len(exp_angles))
+        angle_directive = (
+            f"\n\n⭐ **角度分布约束** ：用户希望本期 {topic_count} 篇覆盖以下 {len(exp_angles)} 个角度："
+            f" {', '.join(exp_angles)}。\n"
+            f"  - 每个 slot 的 angle 字段必须**严格等于**这几个角度之一（不要写其它角度）\n"
+            f"  - 大致每个角度 ≈ {per_angle} 篇（最后剩余 slot 可在角度间灵活分配）\n"
+            f"  - 同一周内尽量混合不同角度，避免一周全是同一个角度\n"
+        )
     sched_user = (
         f"【已选定的账号方向】\n"
         f"name: {chosen.name}\n"
@@ -633,6 +648,7 @@ async def _expand_inner(
            "每一个都必须能在你的 schedule 里找到对应位置。报告里点名的方向 → 必须有 slot。"
            "不要因为「这条不像亮点」就丢。schedule 里至少 60% 要能直接溯源到上传报告的具体内容。"
            if report_ctx else "")
+        + angle_directive
     )
     scheduler_gen = registry.build(scheduler_spec)[0]
     async def _try_scheduler(user_payload: str, max_tokens: int = 6000):

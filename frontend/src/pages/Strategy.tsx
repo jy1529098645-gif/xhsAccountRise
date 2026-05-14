@@ -8,7 +8,7 @@ import NextStepCard from "../components/NextStepCard";
 import { humaniseError, humaniseErrorAsync } from "../errors";
 import { isAborted, cancelBackendJob } from "../api";
 import { startJob, getJob, cancelJob as cancelLocalJob, clearJob as clearLocalJob, useJob } from "../lib/jobs";
-import { LLM_CATALOG } from "../catalog";
+import { LLM_CATALOG, CONTENT_ANGLES as STRATEGY_ANGLES } from "../catalog";
 import type {
   AccountInputDTO, Library, Platform, StrategicDirectionDTO, StrategyPackDTO,
   StrategyListItem,
@@ -139,6 +139,7 @@ function emptyInput(): AccountInputDTO {
     positioning: "", target_audience: "",
     cycle_weeks: 4, posts_per_week: 3,
     personal_strengths: "", constraints: "", platform: "",
+    expected_angles: [],
   };
 }
 
@@ -799,6 +800,36 @@ function InputForm(props: {
         <div style={{marginTop: 10, fontSize: 14, fontWeight: 600, color: "var(--primary)",
                       textAlign: "center", padding: 6, background: "#fff", borderRadius: 6}}>
           ⇒ 最终会出 <span style={{fontSize: 18}}>{i.cycle_weeks * i.posts_per_week}</span> 篇带初稿正文的内容
+        </div>
+      </div>
+
+      <div style={{marginBottom: 10}}>
+        <label>希望覆盖的内容角度（多选 · 留空让 AI 自由分配）</label>
+        <div style={{display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4}}>
+          {STRATEGY_ANGLES.map(a => {
+            const sel = (i.expected_angles || []).includes(a);
+            return (
+              <button key={a} type="button"
+                onClick={() => {
+                  const cur = i.expected_angles || [];
+                  set("expected_angles", sel ? cur.filter(x => x !== a) : [...cur, a]);
+                }}
+                style={{
+                  padding: "4px 12px", borderRadius: 16, fontSize: 13,
+                  border: sel ? "1.5px solid var(--primary)" : "1px solid var(--border)",
+                  background: sel ? "var(--primary-soft)" : "#fff",
+                  color: sel ? "var(--primary)" : "#333",
+                  cursor: "pointer", fontWeight: sel ? 600 : 400,
+                }}>
+                {sel ? "✓ " : ""}{a}
+              </button>
+            );
+          })}
+        </div>
+        <div className="muted" style={{fontSize: 11, marginTop: 4}}>
+          {(i.expected_angles || []).length === 0
+            ? "未选 → AI 自己决定每篇用什么角度"
+            : `已选 ${(i.expected_angles || []).length} 个 → 排期会均匀分布在这些角度上`}
         </div>
       </div>
 

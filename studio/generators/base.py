@@ -27,6 +27,7 @@ class CandidatePayload:
     predicted_likes: int
     self_score: float       # 0-10 confidence
     self_critique: str
+    angle: str = ""         # v0.52: which angle this draft was written for
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "CandidatePayload":
@@ -39,6 +40,7 @@ class CandidatePayload:
             predicted_likes=int(d.get("predicted_likes") or 0),
             self_score=float(d.get("self_score") or 0),
             self_critique=str(d.get("self_critique", "")).strip(),
+            angle=str(d.get("angle", "")).strip(),
         )
 
 

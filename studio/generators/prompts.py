@@ -68,18 +68,29 @@ _PLATFORM_LABEL = {
 }
 
 
-def _format_brief(brief: Brief) -> str:
+def _format_brief(brief: Brief, angle_override: str | None = None) -> str:
     cta_map = {
         "none": "无明显引导",
         "soft": "结尾轻引导评论/收藏",
         "strong": "结尾强转化（求私信/求资源/求关注）",
     }
     platform_label = _PLATFORM_LABEL.get(brief.platform, brief.platform)
+    # Multi-angle: when caller specifies a single angle to use for THIS draft,
+    # show only it. Otherwise list all requested angles so the writer knows the
+    # full scope (drafter pool then explicitly tells each instance which one
+    # to actually pick via the override).
+    angles = brief.all_angles()
+    if angle_override:
+        angle_line = f"角度：{angle_override}"
+    elif len(angles) == 1:
+        angle_line = f"角度：{angles[0]}"
+    else:
+        angle_line = "角度：" + " / ".join(angles) + "（多角度，本稿任选其一突出）"
     lines = [
         f"目标平台：{platform_label}（{brief.platform}）",
         f"平台风格指引：{brief.voice_hint()}",
         f"主题：{brief.topic}",
-        f"角度：{brief.angle}",
+        angle_line,
         f"目标正文字数：{brief.target_length}",
         f"CTA 强度：{cta_map.get(brief.cta_strength, brief.cta_strength)}",
     ]
@@ -138,9 +149,10 @@ def build_user_message(
     refs: list[dict[str, Any]],
     comments: list[dict[str, Any]],
     hooks: list[dict[str, Any]],
+    angle_override: str | None = None,
 ) -> str:
     return USER_TEMPLATE.format(
-        brief_block=_format_brief(brief),
+        brief_block=_format_brief(brief, angle_override=angle_override),
         refs_block=_format_refs(refs),
         comments_block=_format_comments(comments),
         hooks_block=_format_hooks(hooks),

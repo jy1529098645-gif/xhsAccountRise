@@ -24,35 +24,52 @@ const COMPOSE_STAGES: TimelineStage[] = [
 
 const ANGLES = ["教程", "痛点", "故事", "工具评测", "对比", "感悟", "数字", "种草", "建议"];
 
-// v0.51: persist the user's form state across navigation. Switching to
-// Strategy / Reports and back should not blow away what they typed.
+// v0.51 → v0.52: persist the user's form state across navigation. Now also
+// stores `angles` (multi-select). `angle` is kept as the primary fallback so
+// existing callers / older saved state still works.
 const COMPOSER_FORM_KEY = "studio.composer.form.v1";
 interface ComposerFormState {
-  topic: string; angle: string; length: number;
+  topic: string; angle: string; angles: string[]; length: number;
   cta: "none" | "soft" | "strong";
   niche: string; extra: string; platform: string;
 }
 const COMPOSER_FORM_DEFAULT: ComposerFormState = {
-  topic: "降AI率技巧", angle: "教程", length: 600, cta: "soft",
+  topic: "降AI率技巧", angle: "教程", angles: ["教程"], length: 600, cta: "soft",
   niche: "", extra: "", platform: "",
 };
 function loadComposerForm(): ComposerFormState {
   try {
     const raw = localStorage.getItem(COMPOSER_FORM_KEY);
     if (!raw) return COMPOSER_FORM_DEFAULT;
-    return { ...COMPOSER_FORM_DEFAULT, ...JSON.parse(raw) };
+    const parsed = JSON.parse(raw) as Partial<ComposerFormState>;
+    const merged = { ...COMPOSER_FORM_DEFAULT, ...parsed };
+    // Migrate v0.51 saves (no `angles` field) → seed from singular `angle`.
+    if (!Array.isArray(merged.angles) || merged.angles.length === 0) {
+      merged.angles = [merged.angle || "教程"];
+    }
+    return merged;
   } catch { return COMPOSER_FORM_DEFAULT; }
 }
 
 export default function Composer() {
   const initialForm = useRef(loadComposerForm()).current;
   const [topic, setTopic] = useState(initialForm.topic);
-  const [angle, setAngle] = useState(initialForm.angle);
+  const [angles, setAngles] = useState<string[]>(initialForm.angles);
   const [length, setLength] = useState(initialForm.length);
   const [cta, setCta] = useState<"none" | "soft" | "strong">(initialForm.cta);
   const [niche, setNiche] = useState(initialForm.niche);
   const [extra, setExtra] = useState(initialForm.extra);
   const [platform, setPlatform] = useState<string>(initialForm.platform);
+
+  function toggleAngle(a: string) {
+    setAngles(prev => {
+      if (prev.includes(a)) {
+        // Don't allow zero — at least one angle must be picked.
+        return prev.length > 1 ? prev.filter(x => x !== a) : prev;
+      }
+      return [...prev, a];
+    });
+  }
   const [platforms, setPlatforms] = useState<Platform[]>([]);
   const [activeLib, setActiveLib] = useState<Library | null>(null);
   const [hasExternalReports, setHasExternalReports] = useState<boolean>(false);
@@ -91,10 +108,10 @@ export default function Composer() {
   useEffect(() => {
     try {
       localStorage.setItem(COMPOSER_FORM_KEY, JSON.stringify({
-        topic, angle, length, cta, niche, extra, platform,
+        topic, angle: angles[0] || "教程", angles, length, cta, niche, extra, platform,
       }));
     } catch { /* quota — ignore */ }
-  }, [topic, angle, length, cta, niche, extra, platform]);
+  }, [topic, angles, length, cta, niche, extra, platform]);
 
   // ---- Pre-fill from Strategy "出这一篇 →" navigation ---------------------
   // Reads sessionStorage instead of location.state. The old location.state
@@ -119,7 +136,13 @@ export default function Composer() {
     prefilled.current = true;
     try {
       if (bf.topic) setTopic(String(bf.topic));
-      if (bf.angle && ANGLES.includes(String(bf.angle))) setAngle(String(bf.angle));
+      // prefill: support both `angle` (legacy single) and `angles` (multi).
+      if (Array.isArray(bf.angles) && bf.angles.length > 0) {
+        const cleaned = bf.angles.filter((a: any) => ANGLES.includes(String(a))).map(String);
+        if (cleaned.length > 0) setAngles(cleaned);
+      } else if (bf.angle && ANGLES.includes(String(bf.angle))) {
+        setAngles([String(bf.angle)]);
+      }
       if (typeof bf.target_length === "number") setLength(bf.target_length);
       if (bf.cta_strength === "none" || bf.cta_strength === "soft" || bf.cta_strength === "strong") {
         setCta(bf.cta_strength);
@@ -138,7 +161,10 @@ export default function Composer() {
     const job = startJob<ComposeBundle>(
       COMPOSE_JOB_ID, "compose",
       (signal) => api.compose({
-        topic, angle, target_length: length, cta_strength: cta,
+        topic,
+        angle: angles[0] || "教程",   // back-compat singular fallback
+        angles,                        // v0.52: drafter fans 1 per angle
+        target_length: length, cta_strength: cta,
         niche, extra_constraints: extra,
         platform: platform || undefined,
         ...selectionToSpecs(agentConfig),
@@ -193,18 +219,37 @@ export default function Composer() {
             <input value={topic} onChange={e => setTopic(e.target.value)}
               placeholder="比如：降AI率技巧 / 论文怎么写引言 / 留学党赶ddl" />
           </div>
-          <div className="row">
-            <div style={{flex: 1}}>
-              <label>角度</label>
-              <select value={angle} onChange={e => setAngle(e.target.value)}>
-                {ANGLES.map(a => <option key={a}>{a}</option>)}
-              </select>
+          <div style={{marginBottom: 10}}>
+            <label>角度（多选 · 起草团会按你选的角度数量出对应数量的稿件）</label>
+            <div style={{display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4}}>
+              {ANGLES.map(a => {
+                const on = angles.includes(a);
+                return (
+                  <button
+                    key={a}
+                    type="button"
+                    onClick={() => toggleAngle(a)}
+                    style={{
+                      padding: "4px 12px", borderRadius: 16, fontSize: 13,
+                      border: on ? "1.5px solid var(--primary)" : "1px solid var(--border)",
+                      background: on ? "var(--primary-soft)" : "#fff",
+                      color: on ? "var(--primary)" : "#333",
+                      cursor: "pointer", fontWeight: on ? 600 : 400,
+                    }}
+                  >
+                    {on ? "✓ " : ""}{a}
+                  </button>
+                );
+              })}
             </div>
-            <div style={{flex: 1}}>
-              <label>正文字数</label>
-              <input type="number" min={120} max={3000} step={50}
-                value={length} onChange={e => setLength(Number(e.target.value))} />
+            <div className="muted" style={{fontSize: 11, marginTop: 4}}>
+              已选 {angles.length} 个角度 → 起草团会出 {angles.length} 份候选（每份一个角度）
             </div>
+          </div>
+          <div style={{marginBottom: 8}}>
+            <label>正文字数</label>
+            <input type="number" min={120} max={3000} step={50}
+              value={length} onChange={e => setLength(Number(e.target.value))} />
           </div>
           <div className="row">
             <div style={{flex: 1}}>
@@ -503,9 +548,19 @@ function Candidate({c, highlighted}: {c: DraftCandidate; highlighted?: boolean})
   const p = c.payload;
   const tok = c.token_usage ?? {};
   const scores = c.critiques?.[0]?.scores ?? {};
+  const cAngle = (p as any).angle as string | undefined;
   return (
     <div className={`cand ${highlighted ? "final" : ""}`}>
-      <div className="llm">{c.llm}</div>
+      <div className="llm">
+        {c.llm}
+        {cAngle && (
+          <span style={{
+            marginLeft: 8, padding: "1px 8px", fontSize: 11, fontWeight: 600,
+            background: "var(--primary-soft)", color: "var(--primary)",
+            borderRadius: 8,
+          }}>{cAngle}</span>
+        )}
+      </div>
       <div className="muted" style={{fontSize: 11}}>
         {c.latency_ms}ms · {tok.input ?? 0}↑/{tok.output ?? 0}↓ · ${c.cost_estimate_usd?.toFixed(4) ?? "0"} ·
         自评 {p.self_score?.toFixed(1)} {c.critique_avg != null && <>· 审稿 <b>{c.critique_avg.toFixed(1)}</b></>}

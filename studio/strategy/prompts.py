@@ -66,11 +66,18 @@ def input_blurb(inp: AccountInput) -> str:
     # LLM knows it's "no bias from user — please recommend purely from DNA".
     pos = inp.positioning.strip() or "（用户未填 — 完全交给你按 DNA 推荐）"
     aud = inp.target_audience.strip() or "（用户未填 — 你按方向自然推断）"
+    angle_line = ""
+    exp_angles = list(getattr(inp, "expected_angles", None) or [])
+    if exp_angles:
+        angle_line = (
+            f"\n希望覆盖的内容角度：{' / '.join(exp_angles)}"
+            f"（每篇会被指定其中一个角度，整体均匀分布）"
+        )
     return (
         f"目标平台：{inp.platform}\n"
         f"初步定位：{pos}\n"
         f"目标受众：{aud}\n"
-        f"运营周期：{inp.cycle_weeks} 周 · 每周发 {inp.posts_per_week} 篇\n"
+        f"运营周期：{inp.cycle_weeks} 周 · 每周发 {inp.posts_per_week} 篇{angle_line}\n"
         f"个人优势：{inp.personal_strengths or '未填'}\n"
         f"附加约束：{inp.constraints or '无'}"
     )

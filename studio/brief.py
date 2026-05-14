@@ -2,7 +2,9 @@
 
 A Brief carries everything a generator needs:
     - topic: 主题，决定 RAG 检索的核心词（e.g. "降 AI 率技巧"）
-    - angle: 角度类型（教程/痛点/故事/工具评测/对比/感悟）
+    - angle: 单角度（兼容字段，默认"教程"）
+    - angles: 多角度（v0.52）。非空时优先于 angle；drafter 池会按角度数量
+              扇出 N 份候选，每份用一个角度。空时退化到单角度 [angle]。
     - target_length: 目标正文字数
     - cta_strength: 转化引导强度 (none|soft|strong)
     - niche: 内部分类（用于复盘聚合）
@@ -19,6 +21,9 @@ from typing import Literal
 
 
 Angle = Literal["教程", "痛点", "故事", "工具评测", "对比", "感悟", "数字", "种草", "建议"]
+ALL_ANGLES: tuple[str, ...] = (
+    "教程", "痛点", "故事", "工具评测", "对比", "感悟", "数字", "种草", "建议",
+)
 CtaStrength = Literal["none", "soft", "strong"]
 
 
@@ -38,6 +43,10 @@ _PLATFORM_VOICE: dict[str, str] = {
 class Brief:
     topic: str
     angle: Angle = "教程"
+    # v0.52: multi-angle support. Non-empty wins over `angle`. Drafter pool
+    # produces one candidate per angle (cycling through configured LLMs).
+    # Empty defaults to `(angle,)` so old single-angle callers keep working.
+    angles: tuple[str, ...] = ()
     target_length: int = 600
     cta_strength: CtaStrength = "soft"
     niche: str = ""
@@ -48,6 +57,10 @@ class Brief:
     def voice_hint(self) -> str:
         return _PLATFORM_VOICE.get(self.platform, _PLATFORM_VOICE["other"])
 
+    def all_angles(self) -> tuple[str, ...]:
+        """Returns the full list of requested angles (always ≥1)."""
+        return self.angles or (self.angle,)
+
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)
 
@@ -55,5 +68,6 @@ class Brief:
     def from_json(cls, payload: str) -> "Brief":
         d = json.loads(payload)
         d["reference_note_ids"] = tuple(d.get("reference_note_ids") or ())
+        d["angles"] = tuple(d.get("angles") or ())
         d.setdefault("platform", "xiaohongshu")
         return cls(**d)

@@ -34,9 +34,10 @@ def _strategy_block(strategy: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def _augmented_user(brief: Brief, ctx: AgentContext) -> str:
+def _augmented_user(brief: Brief, ctx: AgentContext, angle_override: str | None = None) -> str:
     base = g_prompts.build_user_message(
-        brief, ctx.refs, ctx.comments, ctx.hooks
+        brief, ctx.refs, ctx.comments, ctx.hooks,
+        angle_override=angle_override,
     )
     # Pull in the latest insight report's consensus so each drafter aligns
     # with what both AIs already agreed about the corpus.
@@ -46,10 +47,17 @@ def _augmented_user(brief: Brief, ctx: AgentContext) -> str:
         f"\n\n{report_ctx}\n（以上是这个语料库的双 AI 共识 + 用户上传整合的报告，是你创作的强参考。）\n"
         if report_ctx else ""
     )
+    angle_directive = (
+        f"\n【本次起草的角度 — 必须按此写】{angle_override}\n"
+        f"（用户选了多个角度，整个起草团会一人一个角度并发出稿；你这一份只写「{angle_override}」角度，"
+        f"不要写成其它角度。）\n"
+        if angle_override else ""
+    )
     return (
         "【上层 Strategist 已经定的策略 — 必须遵从】\n"
         f"{_strategy_block(ctx.strategy)}"
-        f"{report_block}\n\n"
+        f"{report_block}"
+        f"{angle_directive}\n\n"
         f"{base}"
     )
 
@@ -64,40 +72,58 @@ class DrafterPoolAgent(Agent):
 
     async def run(self, ctx: AgentContext) -> None:
         system = g_prompts.SYSTEM_TITLE_BODY
-        user = _augmented_user(ctx.brief, ctx)
-        bundle = PromptBundle(
-            system=system, user=user,
-            expected_schema=g_prompts.JSON_SCHEMA,
-        )
+        # v0.52: multi-angle. We produce one draft per requested angle. LLMs
+        # are cycled round-robin so a single-LLM pool still produces N
+        # different-angle candidates (each is a fresh call). For multi-LLM
+        # pools, the assignment also rotates so each angle hits a different
+        # family if possible.
+        angles = list(ctx.brief.all_angles())
+        tasks: list[tuple[str, Generator]] = [
+            (angles[i], self.generators[i % len(self.generators)])
+            for i in range(len(angles))
+        ]
 
-        async def _one(gen: Generator) -> GeneratedCandidate:
+        async def _one(angle: str, gen: Generator) -> tuple[str, GeneratedCandidate, str]:
+            user = _augmented_user(ctx.brief, ctx, angle_override=angle)
+            bundle = PromptBundle(
+                system=system, user=user,
+                expected_schema=g_prompts.JSON_SCHEMA,
+            )
             try:
-                return await asyncio.wait_for(gen.generate(bundle), timeout=180)
+                cand = await asyncio.wait_for(gen.generate(bundle), timeout=180)
             except asyncio.TimeoutError:
-                return GeneratedCandidate.failed(gen.model, "timeout (180s)")
+                cand = GeneratedCandidate.failed(gen.model, "timeout (180s)")
             except Exception as e:
-                return GeneratedCandidate.failed(gen.model, f"unhandled: {e!r}")
+                cand = GeneratedCandidate.failed(gen.model, f"unhandled: {e!r}")
+            return angle, cand, user
 
         t0 = self._ms()
-        results = await asyncio.gather(*(_one(g) for g in self.generators))
+        results = await asyncio.gather(*(_one(a, g) for a, g in tasks))
         elapsed = self._ms() - t0
 
-        ctx.drafts.extend(results)
+        # Annotate each candidate with its assigned angle so downstream
+        # (synthesizer, UI) can show "candidate A — 故事 / B — 教程".
+        for angle, cand, _ in results:
+            try:
+                cand.payload.angle = angle  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            ctx.drafts.append(cand)
 
-        # Emit one trace step per drafter so the UI timeline shows them all.
         base_idx = len(ctx.trace)
-        for i, (gen, cand) in enumerate(zip(self.generators, results)):
-            step = self._new_step(base_idx + i, f"{self.name}:{gen.name}")
+        for i, ((angle, cand, user_msg), (_, gen)) in enumerate(zip(results, tasks)):
+            step = self._new_step(base_idx + i, f"{self.name}:{gen.name}[{angle}]")
             step.llm = cand.llm
             step.latency_ms = cand.latency_ms
             step.cost_estimate_usd = cand.cost_estimate_usd
             step.error = cand.error
-            step.input_summary = self._truncate(user, 800)
+            step.input_summary = self._truncate(user_msg, 800)
             if cand.error:
                 step.output_summary = cand.error
             else:
                 step.output_summary = json.dumps(
                     {
+                        "angle": angle,
                         "title": cand.payload.title,
                         "self_score": cand.payload.self_score,
                         "hook_type": cand.payload.hook_type,
@@ -106,6 +132,4 @@ class DrafterPoolAgent(Agent):
                 )
             step.raw_response = self._truncate(cand.raw_response, 4000)
             ctx.record(step)
-        # Total pool elapsed not recorded as a step — sum of children already
-        # in the trace covers it.
         _ = elapsed

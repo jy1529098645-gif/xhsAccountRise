@@ -45,6 +45,8 @@ export interface DnaArtifact {
 export interface Brief {
   topic: string;
   angle: string;
+  /** v0.52: multi-angle. Drafter pool produces one candidate per angle. */
+  angles?: string[];
   target_length: number;
   cta_strength: "none" | "soft" | "strong";
   niche?: string;
@@ -62,6 +64,8 @@ export interface CandidatePayload {
   predicted_likes: number;
   self_score: number;
   self_critique: string;
+  /** v0.52: which angle this draft was written for. */
+  angle?: string;
 }
 
 export interface CritiqueScore {
@@ -172,6 +176,8 @@ export interface AccountInputDTO {
   personal_strengths: string;
   constraints: string;
   platform: string;
+  /** v0.52: angles the schedule should distribute slots across. Empty = AI free pick. */
+  expected_angles?: string[];
 }
 
 export interface StrategicDirectionDTO {

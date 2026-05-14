@@ -58,8 +58,12 @@ def _user(brief, hooks: list[dict[str, Any]], top_refs: list[dict[str, Any]]) ->
     cta = {"none": "无引导", "soft": "轻引导评论收藏", "strong": "强引导私信/求资源"}.get(
         brief.cta_strength, brief.cta_strength
     )
+    angles = brief.all_angles()
+    angle_line = (f"角度：{angles[0]}" if len(angles) == 1
+                  else "覆盖角度：" + " / ".join(angles)
+                       + "（多角度起草，策略要给到能服务每个角度的通用 hook + 结构骨架）")
     return (
-        f"【brief】\n主题：{brief.topic}\n角度：{brief.angle}\n"
+        f"【brief】\n主题：{brief.topic}\n{angle_line}\n"
         f"目标字数：{brief.target_length}\nCTA：{cta}\n"
         f"赛道：{brief.niche or '未指定'}\n"
         f"附加要求：{brief.extra_constraints or '无'}\n\n"

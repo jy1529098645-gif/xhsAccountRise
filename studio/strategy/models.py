@@ -27,6 +27,10 @@ class AccountInput:
     personal_strengths: str = ""
     constraints: str = ""
     platform: str = "xiaohongshu"
+    # v0.52: angles the user wants the schedule to span. When non-empty,
+    # the scheduler distributes slots across these angles roughly evenly.
+    # Empty = AI picks freely (legacy behaviour).
+    expected_angles: list[str] = field(default_factory=list)
 
 
 @dataclass
