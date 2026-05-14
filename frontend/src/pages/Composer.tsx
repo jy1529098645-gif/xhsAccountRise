@@ -571,16 +571,20 @@ function ComposeResult({bundle}: {bundle: ComposeBundle}) {
         </div>
       )}
 
+      {/* v0.61.25 ：refs 概览卡保留（这里只列标题）— 详细内容在下面 final 稿
+          section 里折叠展开。 */}
       {bundle.rag && Array.isArray(bundle.rag.refs) && bundle.rag.refs.length > 0 && (
         <div className="card">
           <h2>📚 参考爆款 ({bundle.rag.refs.length})</h2>
           <ol>
-            {bundle.rag.refs.slice(0, 5).map(r => (
-              <li key={r.note_id}>[{fmtLikes(r.likes)} likes] {r.title}</li>
+            {bundle.rag.refs.slice(0, 5).map((r: any) => (
+              <li key={r.note_id}>
+                [{fmtLikes(r.liked_count ?? r.likes)} likes] {r.title}
+              </li>
             ))}
           </ol>
           <p className="muted" style={{fontSize: 12}}>
-            + {bundle.rag.comments_count ?? 0} 条用户原话评论 + {(bundle.rag.hooks?.length ?? 0)} 个 hook 模板
+            + {(bundle.rag as any).comments_count ?? 0} 条用户原话评论 + {(bundle.rag.hooks?.length ?? 0)} 个 hook 模板
           </p>
         </div>
       )}
@@ -629,6 +633,10 @@ function ComposeResult({bundle}: {bundle: ComposeBundle}) {
           <div className="candidate-grid">
             <Candidate c={chosenDraft as any} highlighted />
           </div>
+          {/* v0.61.25 ：AI 写这条稿时具体参考了哪些素材 — 让用户能验证 AI 没瞎编 */}
+          {bundle.rag && (
+            <ReferenceSourcesPanel rag={bundle.rag as any} />
+          )}
         </div>
       )}
 
@@ -703,6 +711,101 @@ function PlanCard({plan}: {plan: any}) {
         </>
       )}
     </div>
+  );
+}
+
+// v0.61.25 ：参考素材面板 — 让用户看清 AI 写这条稿时具体参考了哪些 ：
+// 1) 同赛道高赞标题 + 正文片段（refs）— 验证 AI 没编内容
+// 2) 高赞评论原话（comments）— 验证情绪 / 语气来源
+// 3) hook 模板（hooks）— 看 AI 学了哪些标题套路
+// 默认收起避免视觉拥挤。
+function ReferenceSourcesPanel({rag}: {rag: any}) {
+  const refs = Array.isArray(rag?.refs) ? rag.refs : [];
+  const comments = Array.isArray(rag?.comments) ? rag.comments : [];
+  const hooks = Array.isArray(rag?.hooks) ? rag.hooks : [];
+  if (refs.length === 0 && comments.length === 0 && hooks.length === 0) return null;
+  return (
+    <details style={{marginTop: 14, padding: "10px 12px", background: "#fafafa", borderRadius: 8}}>
+      <summary style={{cursor: "pointer", fontWeight: 600, fontSize: 13}}>
+        📚 看 AI 写这条稿时参考了什么 ：{refs.length} 篇爆款 + {comments.length} 条评论原话 + {hooks.length} 个 hook 模板
+      </summary>
+      {refs.length > 0 && (
+        <div style={{marginTop: 10}}>
+          <div style={{fontWeight: 600, fontSize: 12.5, color: "var(--primary)", marginBottom: 6}}>
+            ▸ 同赛道高赞参考稿（refs）
+          </div>
+          <div style={{display: "grid", gap: 8}}>
+            {refs.slice(0, 8).map((r: any, i: number) => (
+              <div key={r.note_id || i} style={{
+                padding: 10, background: "#fff", borderRadius: 6,
+                border: "1px solid #eee",
+              }}>
+                <div className="row" style={{justifyContent: "space-between", alignItems: "baseline", gap: 8}}>
+                  <div style={{fontWeight: 600, fontSize: 13, flex: 1, minWidth: 0}}>
+                    {r.title || "(无标题)"}
+                  </div>
+                  <div className="muted" style={{fontSize: 11, whiteSpace: "nowrap"}}>
+                    {fmtLikes(r.liked_count ?? r.likes)} likes · {fmtLikes(r.collected_count)} 收藏 · {fmtLikes(r.comment_count)} 评论
+                  </div>
+                </div>
+                {r.body_excerpt && (
+                  <div className="muted" style={{
+                    fontSize: 12, lineHeight: 1.6, marginTop: 6,
+                    background: "#fafafa", padding: "6px 8px", borderRadius: 4,
+                    whiteSpace: "pre-wrap",
+                  }}>
+                    {r.body_excerpt}
+                  </div>
+                )}
+                {r.url && (
+                  <a href={r.url} target="_blank" rel="noreferrer"
+                    style={{fontSize: 11, color: "var(--primary)", marginTop: 4, display: "inline-block"}}>
+                    🔗 原文
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {comments.length > 0 && (
+        <div style={{marginTop: 14}}>
+          <div style={{fontWeight: 600, fontSize: 12.5, color: "var(--primary)", marginBottom: 6}}>
+            ▸ 目标用户原话（高赞评论） · 用于 voice / 情绪学习
+          </div>
+          <ul style={{margin: 0, paddingLeft: 18, fontSize: 12, lineHeight: 1.7, color: "#555"}}>
+            {comments.slice(0, 12).map((c: any, i: number) => (
+              <li key={c.comment_id || i}>
+                <span className="muted" style={{fontSize: 11}}>({c.like_count ?? 0}👍)</span>{" "}
+                {String(c.content ?? "").slice(0, 200)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {hooks.length > 0 && (
+        <div style={{marginTop: 14}}>
+          <div style={{fontWeight: 600, fontSize: 12.5, color: "var(--primary)", marginBottom: 6}}>
+            ▸ hook 模板 · AI 学了哪些标题套路
+          </div>
+          <div style={{display: "grid", gap: 4, fontSize: 12, color: "#555"}}>
+            {hooks.slice(0, 8).map((h: any, i: number) => (
+              <div key={i}>
+                <b>{h.category}</b>
+                <span className="muted" style={{marginLeft: 6, fontSize: 11}}>
+                  n={h.count} · 中位 {fmtLikes(h.median_likes)} likes
+                </span>
+                {Array.isArray(h.examples) && h.examples.length > 0 && (
+                  <div className="muted" style={{paddingLeft: 14, fontSize: 11.5, marginTop: 2}}>
+                    例 ：{h.examples.slice(0, 3).map((e: any) => e.title).join(" | ")}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </details>
   );
 }
 
