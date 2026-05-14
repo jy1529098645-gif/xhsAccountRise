@@ -609,11 +609,74 @@ export default function Strategy() {
     }
   }
 
+  // v0.61.14 ：4 步 stepper — 让用户随时跳回任意步骤回看 / 修改。每步
+  // 是否可点 ：
+  //   1 目标 → 永远可点（回去重选 goal_type，不丢失下游已有的 input / pack）
+  //   2 输入 → 永远可点（回去改字段；如果已有 pack 也保留在内存里）
+  //   3 方向 → directions 有内容时可点（要么有 packId + directions，要么
+  //            propose 已完成在 jobs store 里）
+  //   4 排期 → pack 有内容时可点（expand 已完成）
+  const stepperStep =
+    phase === "goal" ? 1
+    : phase === "autofilling" ? 2
+    : phase === "input" ? 2
+    : phase === "loading-propose" ? 3
+    : phase === "directions" ? 3
+    : phase === "loading-expand" ? 4
+    : phase === "pack" ? 4
+    : 1;
+  const canStep3 = directions.length > 0;
+  const canStep4 = !!pack;
+  function StepBtn({n, label, canGo, onGo}: {n: number; label: string; canGo: boolean; onGo: () => void}) {
+    const isCurrent = stepperStep === n;
+    const isDone = stepperStep > n;
+    const clickable = canGo || isDone;
+    return (
+      <button type="button" onClick={() => { if (clickable) onGo(); }} disabled={!clickable}
+        title={clickable ? `跳到第 ${n} 步` : `先完成前面的步骤`}
+        style={{
+          flex: 1, padding: "8px 12px", fontSize: 13, fontWeight: 600,
+          border: "1px solid " + (isCurrent ? "var(--primary)" : "var(--border)"),
+          background: isCurrent ? "var(--primary)" : (isDone ? "var(--ok-soft)" : "#fff"),
+          color: isCurrent ? "#fff" : (isDone ? "var(--ok)" : (clickable ? "var(--fg)" : "var(--muted)")),
+          borderRadius: 6, cursor: clickable ? "pointer" : "not-allowed",
+          opacity: clickable ? 1 : 0.55,
+          transition: "background 0.15s, color 0.15s",
+        }}>
+        <span style={{
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+          width: 20, height: 20, borderRadius: "50%", marginRight: 6,
+          background: isCurrent ? "rgba(255,255,255,0.25)" : (isDone ? "var(--ok)" : "#eee"),
+          color: isCurrent ? "#fff" : (isDone ? "#fff" : "var(--muted)"),
+          fontSize: 11,
+        }}>{isDone ? "✓" : n}</span>
+        {label}
+      </button>
+    );
+  }
+
   return (
     <div>
       <div className="page-header">
         <h1>🚀 起号策略 · 第 2 步</h1>
         <p>定方向 + 排周期 + 出初稿正文</p>
+      </div>
+
+      {/* v0.61.14 ：步骤跳转条 ─ 每步状态/可点击都自动算出来 */}
+      <div className="card" style={{padding: "10px 12px"}}>
+        <div className="row" style={{gap: 6, alignItems: "stretch"}}>
+          <StepBtn n={1} label="🎯 目标" canGo={true}
+            onGo={() => setPhase("goal")} />
+          <StepBtn n={2} label="📝 输入" canGo={true}
+            onGo={() => setPhase("input")} />
+          <StepBtn n={3} label="🚀 方向" canGo={canStep3}
+            onGo={() => setPhase("directions")} />
+          <StepBtn n={4} label="📅 排期" canGo={canStep4}
+            onGo={() => setPhase("pack")} />
+        </div>
+        <div className="muted" style={{fontSize: 11, marginTop: 6, textAlign: "center"}}>
+          每步都自动保存 · 随时点上面任一步回看或修改
+        </div>
       </div>
 
       {!api.isConnected() && (
