@@ -186,6 +186,24 @@ _BODY_DRAFT_SCHEMA = {
     "properties": {"body_draft": {"type": "string"}},
 }
 
+_BODY_DRAFT_BATCH_SCHEMA = {
+    "type": "object",
+    "required": ["drafts"],
+    "properties": {
+        "drafts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["idx", "body_draft"],
+                "properties": {
+                    "idx": {"type": "integer"},
+                    "body_draft": {"type": "string"},
+                },
+            },
+        },
+    },
+}
+
 _SCHEDULE_SCHEMA = {
     "type": "object",
     "required": ["series_thesis", "weekly_themes", "schedule"],
@@ -388,8 +406,19 @@ async def _expand_inner(
     report_ctx = full_reference_block_for_prompt()
     report_block = f"\n\n{report_ctx}\n" if report_ctx else ""
 
-    # --- Topic-gen pool (parallel) ---
-    topicgen_user = (
+    # --- Unified scheduler: generate + arrange in ONE Sonnet call ---
+    # Used to be two stages: a parallel topicgen pool (2 LLMs × 12 topics =
+    # 24+ candidates) followed by a scheduler that filtered + arranged them.
+    # The pool added ~40-60s without much value — scheduler was filtering
+    # anyway and a focused single call writes 12 differentiated topics fine.
+    # Net: ~30-60s saved off expand. Quality holds because the scheduler
+    # now sees direction+DNA+reports directly and generates topics tuned
+    # for the schedule positions instead of going through a filter dance.
+    topicgen_errors: list[str] = []
+    all_topics: list[dict[str, Any]] = []  # kept for response shape compat
+
+    timing_heatmap = (dna.get("sections", {}).get("timing", {}) or {}).get("heatmap", [])
+    sched_user = (
         f"【已选定的账号方向】\n"
         f"name: {chosen.name}\n"
         f"positioning: {chosen.positioning_statement}\n"
@@ -397,60 +426,24 @@ async def _expand_inner(
         f"hook_angles: {chosen.hook_angles}\n"
         f"differentiator: {chosen.differentiator}"
         f"{report_block}\n"
-        f"【用户运营约束】\n{prompts.input_blurb(inp)}\n\n"
+        f"【运营约束】cycle_weeks={inp.cycle_weeks}, posts_per_week={inp.posts_per_week}"
+        f" ⇒ 需要排出 {topic_count} 篇\n"
+        f"【用户其它约束】\n{prompts.input_blurb(inp)}\n\n"
         f"【该平台 DNA】\n{prompts.dna_blurb(dna)}\n\n"
-        f"请输出 {max(topic_count, 12)} 个候选选题。"
+        f"【该平台发布时段热力图】\n{_format_timing(timing_heatmap)}\n\n"
+        f"请基于以上信息**直接出 {topic_count} 篇排期**（不需要先列候选池再筛 — 直接出 final）。"
         + ("\n\n⭐ **强约束** ：上面用户上传的原始报告里写的选题方向 / 案例 / 数字 / hook，"
-           "每一个都必须能在你的候选选题里找到对应。如果报告点名「适合做 X 选题」、「Y 角度爆过 Z 赞」，"
-           "你的列表里就要有 X 和 Y 的具体落地版本。不要因为「我觉得这条不算亮点」就丢。\n"
-           "选题里至少 60% 要能直接溯源到上传报告的具体内容（标题/角度/案例/数据点）。"
+           "每一个都必须能在你的 schedule 里找到对应位置。报告里点名的方向 → 必须有 slot。"
+           "不要因为「这条不像亮点」就丢。schedule 里至少 60% 要能直接溯源到上传报告的具体内容。"
            if report_ctx else "")
     )
-    topicgens = registry.build(topicgen_spec)
-
-    async def _one_topicgen(g: Generator):
-        try:
-            return await asyncio.wait_for(
-                _call_json(g, prompts.TOPICGEN_SYSTEM, topicgen_user,
-                           max_tokens=4096, tool_name="submit_topics",
-                           schema=_TOPICS_SCHEMA),
-                timeout=180,
-            )
-        except Exception as e:
-            return {"_error": str(e), "_llm": g.model}
-
-    # Resume: skip topicgen if we already have its results checkpointed.
-    if "topicgen" in saved:
-        topic_results = saved["topicgen"]
-    else:
-        _check_cancel()
-        topic_results = await asyncio.gather(*(_one_topicgen(g) for g in topicgens))
-        _save_checkpoint("topicgen", topic_results)
-        _check_cancel()
-
-    # Collate all topics with a source-llm tag for visibility.
-    all_topics: list[dict[str, Any]] = []
-    topicgen_errors: list[str] = []
-    for g, r in zip(topicgens, topic_results):
-        if "_error" in r:
-            topicgen_errors.append(f"{g.model}: {r['_error']}")
-            continue
-        for t in (r.get("topics") or []):
-            t = dict(t); t["_source"] = g.model
-            all_topics.append(t)
-
-    # --- Scheduler: fuse + schedule ---
-    timing_heatmap = (dna.get("sections", {}).get("timing", {}) or {}).get("heatmap", [])
-    sched_user = (
-        f"【已选定的账号方向】name={chosen.name} · 定位={chosen.positioning_statement}\n"
-        f"【运营约束】cycle_weeks={inp.cycle_weeks}, posts_per_week={inp.posts_per_week} ⇒ "
-        f"需要排出 {topic_count} 篇\n\n"
-        f"【N 家 LLM 起草的候选选题（共 {len(all_topics)} 条，含来源）】\n"
-        + json.dumps(all_topics, ensure_ascii=False, indent=2)
-        + f"\n\n【该平台发布时段热力图 (top 时段)】\n"
-        + _format_timing(timing_heatmap)
-        + "\n\n请按 system 提示，融合 + 去重 + 排成完整周历。"
-    )
+    scheduler_gen = registry.build(scheduler_spec)[0]
+    async def _try_scheduler(user_payload: str, max_tokens: int = 6000):
+        return await _call_json(
+            scheduler_gen, prompts.SCHEDULER_SYSTEM, user_payload,
+            max_tokens=max_tokens, tool_name="submit_schedule",
+            schema=_SCHEDULE_SCHEMA,
+        )
     scheduler_gen = registry.build(scheduler_spec)[0]
     async def _try_scheduler(user_payload: str, max_tokens: int = 6000):
         return await _call_json(
@@ -601,42 +594,67 @@ async def _expand_inner(
         f"{report_block}"
     )
 
-    async def _draft_one(slot_idx: int, slot: TopicSlot) -> tuple[int, str, str | None]:
-        fmt = slot.content_format or ("图文" if platform == "xiaohongshu" else "短视频" if platform in ("douyin","kuaishou") else "图文")
-        slot_prompt = (
-            f"{direction_block}\n\n"
-            f"【这一篇的 slot】\n"
+    def _slot_fmt_default(slot: TopicSlot) -> str:
+        return slot.content_format or (
+            "图文" if platform == "xiaohongshu"
+            else "短视频" if platform in ("douyin", "kuaishou")
+            else "图文"
+        )
+
+    def _slot_block(idx: int, slot: TopicSlot) -> str:
+        fmt = _slot_fmt_default(slot)
+        return (
+            f"--- slot #{idx} ---\n"
             f"- 标题：{slot.title}\n"
             f"- 备选标题：{', '.join(slot.title_variants[:3])}\n"
             f"- 角度：{slot.angle} · hook 类型：{slot.hook_type} · 意图：{slot.intent}\n"
-            f"- **content_format：{fmt}** ← 必须按这个格式写！图文 vs 短视频脚本 vs 长视频章节差别很大\n"
-            f"- 大纲：\n" + "\n".join(f"  · {o}" for o in slot.outline) + "\n"
+            f"- content_format：{fmt}\n"
+            f"- 大纲：" + " / ".join(slot.outline) + "\n"
             + (f"- 需要的素材：{', '.join(slot.materials_needed)}\n" if slot.materials_needed else "")
-            + f"\n请按 system 给的 {fmt} 格式输出 body_draft（**不要混淆格式**）。"
         )
-        # Two-shot retry: bursts of N parallel Sonnet calls sometimes return
-        # empty body_draft (rate-limit / throttle / SDK quirk). Retry once
-        # after a short jittered delay before declaring failure.
+
+    BATCH_SIZE = 3  # slots per Sonnet call
+
+    async def _draft_batch(slots_with_idx: list[tuple[int, TopicSlot]]) -> list[tuple[int, str, str | None]]:
+        if not slots_with_idx:
+            return []
+        slot_blocks = "\n\n".join(_slot_block(i, s) for i, s in slots_with_idx)
+        batch_prompt = (
+            f"{direction_block}\n\n"
+            f"【一次性给你 {len(slots_with_idx)} 个 slot，请同时为每个写 body_draft】\n\n"
+            f"{slot_blocks}\n\n"
+            f"按 schema 输出 ：drafts 数组，每项 {{ idx: <对应 slot 编号>, body_draft: <完整正文> }}。"
+            f" 每个 body_draft 必须按它自己的 content_format 写（图文 vs 短视频脚本 vs 长视频章节差别很大）。"
+            f" 不同 slot 之间的口吻和内容要有差异化，不要互相重复。"
+        )
+        idx_to_slot = {i: s for i, s in slots_with_idx}
         last_err: str | None = None
         for attempt in (1, 2):
             try:
                 r = await asyncio.wait_for(
                     _call_json(
-                        drafter_chosen, prompts.BODY_DRAFTER_SYSTEM, slot_prompt,
-                        max_tokens=2000,
-                        tool_name="submit_body_draft", schema=_BODY_DRAFT_SCHEMA,
+                        drafter_chosen, prompts.BODY_DRAFTER_BATCH_SYSTEM, batch_prompt,
+                        max_tokens=8000,
+                        tool_name="submit_body_draft_batch",
+                        schema=_BODY_DRAFT_BATCH_SCHEMA,
                     ),
                     timeout=180,
                 )
-                body = str(r.get("body_draft", "")).strip()
-                if body:
-                    return slot_idx, body, None
-                last_err = "empty body_draft returned"
+                drafts = r.get("drafts") or []
+                out: list[tuple[int, str, str | None]] = []
+                returned = {int(d.get("idx", -1)): str(d.get("body_draft", "")).strip()
+                            for d in drafts if isinstance(d, dict)}
+                for i, _ in slots_with_idx:
+                    body = returned.get(i, "")
+                    out.append((i, body, None if body else "empty body_draft in batch"))
+                if any(b for _, b, _ in out):
+                    return out
+                last_err = "all drafts in batch were empty"
             except Exception as e:
                 last_err = repr(e)
-            # Backoff with jitter so retries don't all hammer at once.
-            await asyncio.sleep(2 + slot_idx * 0.4)
-        return slot_idx, "", last_err
+            await asyncio.sleep(2)
+        # Both attempts failed/empty — return empty per-slot with the error.
+        return [(i, "", last_err) for i, _ in slots_with_idx]
 
     # --- Body-drafter pool + Resourcer in parallel ---
     # Resourcer only reads titles/materials from the schedule, NOT body_drafts,
@@ -660,7 +678,20 @@ async def _expand_inner(
                     for item in saved["drafter"] if isinstance(item, dict)]
         if not schedule:
             return []
-        results = await asyncio.gather(*[_draft_one(i, s) for i, s in enumerate(schedule)])
+        # Batch slots by BATCH_SIZE; run batches in parallel. For 12 slots
+        # with BATCH_SIZE=3 → 4 parallel calls instead of 12 (no rate-limit
+        # storms, smoother latency).
+        batches: list[list[tuple[int, TopicSlot]]] = []
+        cur: list[tuple[int, TopicSlot]] = []
+        for i, s in enumerate(schedule):
+            cur.append((i, s))
+            if len(cur) >= BATCH_SIZE:
+                batches.append(cur); cur = []
+        if cur: batches.append(cur)
+        batch_results = await asyncio.gather(*[_draft_batch(b) for b in batches])
+        results: list[tuple[int, str, str | None]] = []
+        for br in batch_results:
+            results.extend(br)
         _save_checkpoint("drafter", [
             {"idx": idx, "body": d, "err": e} for idx, d, e in results
         ])
