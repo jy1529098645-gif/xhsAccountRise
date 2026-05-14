@@ -119,12 +119,18 @@ export default function Analysis() {
         <p>{(summary.total_notes_analysed ?? 0).toLocaleString()} 条 notes 全量分析 · 耗时 {summary.generated_in_seconds ?? "?"}s</p>
       </div>
 
-      <Section title="1 · 标题 hook 分布">
+      <Section title="1 · 标题钩子分布">
         <HookDist dist={titles.primary_distribution ?? {}} byCat={titles.by_category ?? {}} />
-        <h3>Top 30 标题（按 likes）</h3>
+        <h3>Top 30 标题（按点赞）</h3>
         <table className="table">
           <thead>
-            <tr><th>#</th><th>标题</th><th className="num">likes</th><th className="num">cmt</th><th>hook</th></tr>
+            <tr>
+              <th className="num">排名</th>
+              <th>标题</th>
+              <th className="num">点赞</th>
+              <th className="num">评论</th>
+              <th>命中钩子</th>
+            </tr>
           </thead>
           <tbody>
             {(titles.top_titles ?? []).slice(0, 30).map((t: any, i: number) => (
@@ -140,11 +146,20 @@ export default function Analysis() {
         </table>
       </Section>
 
-      <Section title="2 · 关键词蓝海">
-        <p className="muted">分数 = avg_likes / log2(n + 2)。分数高 = 该词供给少 + 单帖回报高，最适合切入。</p>
+      <Section title="2 · 关键词蓝海排行">
+        <p className="muted">蓝海分 = 平均点赞 / log₂(笔记数 + 2)。分数高 = 该词供给少 + 单帖回报高，最适合切入。</p>
         <table className="table">
           <thead>
-            <tr><th>#</th><th>关键词</th><th className="num">n</th><th className="num">avg</th><th className="num">median</th><th className="num">p90</th><th className="num">score</th><th></th></tr>
+            <tr>
+              <th className="num">排名</th>
+              <th>关键词</th>
+              <th className="num">笔记数</th>
+              <th className="num">均赞</th>
+              <th className="num">中位赞</th>
+              <th className="num">P90 赞</th>
+              <th className="num">蓝海分</th>
+              <th>分布</th>
+            </tr>
           </thead>
           <tbody>
             {blueocean.slice(0, 30).map((r: any, i: number) => (
@@ -163,7 +178,7 @@ export default function Analysis() {
         </table>
       </Section>
 
-      <Section title="3 · 发布时机 · 周 × 小时 (median likes)">
+      <Section title="3 · 发布时机 · 周 × 小时（按中位点赞）">
         <Heatmap data={timing.heatmap ?? []} />
       </Section>
 
@@ -177,8 +192,15 @@ export default function Analysis() {
       <Section title="5 · 标签生态 · Top 30 + 共现">
         <div className="row" style={{gap: 24, alignItems: "flex-start", flexWrap: "wrap"}}>
           <div style={{flex: 1, minWidth: 320}}>
+            <h3>Top 30 标签</h3>
             <table className="table">
-              <thead><tr><th>tag</th><th className="num">count</th><th className="num">avg likes</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>标签</th>
+                  <th className="num">出现次数</th>
+                  <th className="num">均赞</th>
+                </tr>
+              </thead>
               <tbody>
                 {tags.slice(0, 30).map((t: any) => (
                   <tr key={t.tag}>
@@ -193,7 +215,13 @@ export default function Analysis() {
           <div style={{flex: 1, minWidth: 320}}>
             <h3>Top 共现对</h3>
             <table className="table">
-              <thead><tr><th>a</th><th>b</th><th className="num">共现</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>标签 A</th>
+                  <th>标签 B</th>
+                  <th className="num">共现次数</th>
+                </tr>
+              </thead>
               <tbody>
                 {tagPairs.slice(0, 25).map((p: any, i: number) => (
                   <tr key={i}><td>{p.a}</td><td>{p.b}</td><td className="num">{p.count}</td></tr>
@@ -210,7 +238,12 @@ export default function Analysis() {
           <div key={label} style={{marginBottom: 16}}>
             <h3>「{label}」开头</h3>
             <table className="table">
-              <thead><tr><th>短语</th><th className="num">出现</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>评论短语</th>
+                  <th className="num">出现次数</th>
+                </tr>
+              </thead>
               <tbody>{items.slice(0, 8).map((p: any) => (
                 <tr key={p.phrase}><td>{p.phrase}</td><td className="num">{p.count}</td></tr>
               ))}</tbody>
@@ -219,8 +252,8 @@ export default function Analysis() {
         ))}
       </Section>
 
-      <Section title="7 · Top performers">
-        <h3>by likes</h3>
+      <Section title="7 · Top 爆款笔记">
+        <h3>按点赞数排序</h3>
         <PerfTable rows={topPerf.top_likes ?? []} />
       </Section>
     </div>
@@ -242,7 +275,16 @@ function HookDist({dist, byCat}: any) {
   const max = (entries[0]?.[1] as number) ?? 1;
   return (
     <table className="table">
-      <thead><tr><th>hook</th><th className="num">n</th><th className="num">占比</th><th>分布</th><th className="num">median likes</th><th className="num">p90</th></tr></thead>
+      <thead>
+        <tr>
+          <th>钩子类型</th>
+          <th className="num">笔记数</th>
+          <th className="num">占比</th>
+          <th>分布</th>
+          <th className="num">中位赞</th>
+          <th className="num">P90 赞</th>
+        </tr>
+      </thead>
       <tbody>
         {entries.map(([cat, n]) => {
           const c = byCat[cat] ?? {};
@@ -304,7 +346,14 @@ function ShapeTable({title, data, order}: {title: string; data: any; order?: str
     <div style={{flex: 1, minWidth: 240}}>
       <h3>{title}</h3>
       <table className="table">
-        <thead><tr><th>bucket</th><th className="num">n</th><th className="num">median</th><th className="num">p90</th></tr></thead>
+        <thead>
+          <tr>
+            <th>区间</th>
+            <th className="num">笔记数</th>
+            <th className="num">中位赞</th>
+            <th className="num">P90 赞</th>
+          </tr>
+        </thead>
         <tbody>
           {keys.map(k => {
             const d = data[k] ?? {};
@@ -326,7 +375,16 @@ function ShapeTable({title, data, order}: {title: string; data: any; order?: str
 function PerfTable({rows}: {rows: any[]}) {
   return (
     <table className="table">
-      <thead><tr><th>#</th><th>标题</th><th>作者</th><th className="num">likes</th><th className="num">收藏</th><th className="num">评论</th></tr></thead>
+      <thead>
+        <tr>
+          <th className="num">排名</th>
+          <th>标题</th>
+          <th>作者</th>
+          <th className="num">点赞</th>
+          <th className="num">收藏</th>
+          <th className="num">评论</th>
+        </tr>
+      </thead>
       <tbody>
         {rows.slice(0, 20).map((r, i) => (
           <tr key={r.note_id}>
