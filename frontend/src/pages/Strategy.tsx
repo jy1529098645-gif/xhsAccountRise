@@ -1,15 +1,17 @@
-// v0.62.5 ：起号策略板块 — 只剩「pack 浏览」+「pack 历史列表」。
+// v0.62.6 ：起号策略板块（第 2 步，分析报告 → 起号策略 → 出稿）。
 //
-// 板块大重构后 ：
-//   • 创建一个新 pack 的「目标 / 输入 / 方向 / 排期」4 步 wizard 搬去
-//     出稿板块 (/composer) 默认展开 — 用户在那里一站式生成 + 写正文。
-//   • 起号策略板块只保留「新增加的功能」：
-//       - /strategy           显示所有 pack 历史列表
-//       - /strategy/{pack_id} 显示该 pack 的时间线大纲（StrategyPackView）：
-//         方向卡 + 文字策略指导 + 时间线 schedule + 主推荐 + 2 备选 picker
-//         + 「✍️ 写这个 →」 跳 /composer?slot=...
+// 这个板块**只做一件事** ：给用户看时间线大纲。
+//   • 文字策略指导 ：方向 / 主线 / 周主题 / 材料 / 风险 / 指标
+//   • 每日所需信息 ：日期 / 冷热启动 / 风格 / 主题 / 图文视频 / 时段
+//   • 每日多方案 ：主推荐 + 2 个备选（不同时段/角度/格式）
+//   • 「✍️ 写这个 →」 跳出稿板块 (/composer?slot=PACK:IDX&alt=N)
 //
-// 旧实现的整 ~1700 行 wizard 代码已搬到 components/strategy/StrategyWizard.tsx。
+// 路由 ：
+//   /strategy            默认显示最新 pack 的大纲 + 顶部 pack 切换器
+//   /strategy/{pack_id}  显示指定 pack 的大纲
+//
+// **没有任何创建动作** — 创建 pack 在出稿板块用 wizard 完成。
+// **没有任何写正文动作** — 写正文在出稿板块多 agent 完成。
 
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -22,77 +24,20 @@ import type { StrategyPackDTO, StrategyListItem } from "../types";
 
 export default function Strategy() {
   const { packId: urlPackId } = useParams<{ packId?: string }>();
-  if (urlPackId) return <StrategyPackPage packId={urlPackId} />;
-  return <StrategyHistoryPage />;
+  return <StrategyPage explicitPackId={urlPackId} />;
 }
 
-/** /strategy/:pack_id — 单 pack 大纲浏览 */
-function StrategyPackPage({ packId }: { packId: string }) {
-  const navigate = useNavigate();
-  const [pack, setPack] = useState<StrategyPackDTO | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancel = false;
-    (async () => {
-      setLoading(true); setErr(null);
-      try {
-        const d = await api.getStrategy(packId);
-        if (cancel) return;
-        if (d.pack) {
-          setPack(d.pack);
-        } else {
-          setErr("这个 pack 还没生成完成 — 回出稿板块继续 4 步流程");
-        }
-      } catch (e: any) {
-        if (!cancel) setErr(humaniseError(e));
-      } finally {
-        if (!cancel) setLoading(false);
-      }
-    })();
-    return () => { cancel = true; };
-  }, [packId]);
-
-  return (
-    <div>
-      <div className="page-header" style={{display: "flex", justifyContent: "space-between", alignItems: "flex-start"}}>
-        <div>
-          <h1>📋 起号策略 · 时间线大纲</h1>
-          <p>这是 pack 的纯展示页 — 看大局、对比方案、选哪条进出稿。</p>
-        </div>
-        <Link to="/strategy" className="ghost"
-          style={{padding: "6px 12px", border: "1px solid var(--border)", borderRadius: 6, fontSize: 13, whiteSpace: "nowrap"}}>
-          ← 所有 pack
-        </Link>
-      </div>
-
-      {loading && (
-        <div className="card" style={{textAlign: "center", padding: 32}}>
-          <div className="muted">读取中…</div>
-        </div>
-      )}
-      {err && !loading && (
-        <div className="card">
-          <div className="banner danger">{err}</div>
-          <button onClick={() => navigate("/composer")}
-            style={{marginTop: 12}}>
-            ✍️ 去出稿板块继续 / 新建
-          </button>
-        </div>
-      )}
-      {pack && !err && <StrategyPackView pack={pack} />}
-    </div>
-  );
-}
-
-/** /strategy — pack 历史列表 */
-function StrategyHistoryPage() {
+/** 板块主页 ：默认拿最新 pack 来显示 ；URL 有 pack_id 用那个。
+ *  顶部带一个 pack 切换器，让用户在多个 pack 之间切。 */
+function StrategyPage({ explicitPackId }: { explicitPackId?: string }) {
   const navigate = useNavigate();
   const [history, setHistory] = useState<StrategyListItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [pack, setPack] = useState<StrategyPackDTO | null>(null);
+  const [packLoading, setPackLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // 1) 先拉 history（用来决定哪个 pack 默认显示 + 渲染切换器）
   useEffect(() => {
     let cancel = false;
     (async () => {
@@ -102,123 +47,154 @@ function StrategyHistoryPage() {
       } catch (e: any) {
         if (!cancel) setErr(humaniseError(e));
       } finally {
-        if (!cancel) setLoading(false);
+        if (!cancel) setHistoryLoading(false);
       }
     })();
     return () => { cancel = true; };
   }, []);
+
+  // 2) 决定显示哪个 pack ：URL > 最新一个 expanded 的 pack > 第一个 > 啥也没
+  const expandedPacks = history.filter(p => p.status === "expanded");
+  const targetPackId = explicitPackId
+    || (expandedPacks[0]?.pack_id)
+    || (history[0]?.pack_id)
+    || null;
+
+  // 3) 拉指定 pack 的详情
+  useEffect(() => {
+    if (!targetPackId) { setPack(null); return; }
+    let cancel = false;
+    setPackLoading(true);
+    (async () => {
+      try {
+        const d = await api.getStrategy(targetPackId);
+        if (cancel) return;
+        if (d.pack) {
+          setPack(d.pack);
+        } else {
+          setPack(null);
+          setErr("这个 pack 还没生成完成 — 去出稿板块继续 4 步流程");
+        }
+      } catch (e: any) {
+        if (!cancel) setErr(humaniseError(e));
+      } finally {
+        if (!cancel) setPackLoading(false);
+      }
+    })();
+    return () => { cancel = true; };
+  }, [targetPackId]);
 
   async function handleDelete(id: string, name: string) {
     if (!confirm(`确定删除 pack 「${name}」？此操作无法撤销。`)) return;
     try {
       await api.deleteStrategy(id);
       setHistory(h => h.filter(p => p.pack_id !== id));
+      // 如果删的是当前显示的，跳回 /strategy 让 effect 重选默认 pack
+      if (targetPackId === id) navigate("/strategy", { replace: true });
     } catch (e: any) {
       alert(humaniseError(e));
     }
   }
 
+  // No pack at all → onboarding
+  if (!historyLoading && history.length === 0) {
+    return (
+      <div>
+        <div className="page-header">
+          <h1>🚀 起号策略</h1>
+          <p>时间线大纲 + 每日多方案备选 + 文字策略指导 — 进出稿前先看清整盘节奏</p>
+        </div>
+        <div className="card" style={{textAlign: "center", padding: 48}}>
+          <div style={{fontSize: 48, marginBottom: 12}}>📭</div>
+          <h2 style={{margin: 0}}>还没有任何起号策略 pack</h2>
+          <p className="muted" style={{fontSize: 13, marginTop: 6}}>
+            策略 pack 在出稿板块创建 — 选目标 → 填输入 → 选方向 → 自动排期，一气呵成。
+            <br />回到这里就能看完整时间线大纲 + 每日多方案。
+          </p>
+          <button onClick={() => navigate("/composer")}
+            style={{marginTop: 18, fontSize: 14, padding: "10px 20px", fontWeight: 600}}>
+            ✍️ 去出稿创建第一份 pack →
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div>
-      <div className="page-header" style={{display: "flex", justifyContent: "space-between", alignItems: "flex-start"}}>
-        <div>
-          <h1>📋 起号策略</h1>
-          <p>所有 pack 的时间线大纲在这查 · 创建新 pack 去出稿板块</p>
-        </div>
-        <button onClick={() => navigate("/composer")}
-          style={{fontSize: 14, padding: "8px 16px", whiteSpace: "nowrap"}}>
-          ✍️ 去出稿 · 新建 pack
-        </button>
+      <div className="page-header">
+        <h1>🚀 起号策略 · 时间线大纲</h1>
+        <p>看大局 · 每天 AI 给主推荐 + 2 个备选 · 点哪条进出稿板块写哪条</p>
       </div>
 
-      {loading && (
+      {/* pack 切换器 — 当前显示哪个 pack，下拉切其它 */}
+      {history.length > 0 && (
+        <div className="card" style={{padding: "10px 14px", marginBottom: 12}}>
+          <div className="row" style={{gap: 10, alignItems: "center", flexWrap: "wrap"}}>
+            <span style={{fontSize: 13, fontWeight: 600}}>📦 当前 pack ：</span>
+            <select value={targetPackId || ""}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v) navigate(`/strategy/${v}`);
+              }}
+              style={{padding: "4px 10px", fontSize: 12.5, flex: 1, minWidth: 200, maxWidth: 500}}>
+              {history.map(p => {
+                const dt = p.created_at ? fmtRelative(p.created_at) : "";
+                const label = (p.input?.positioning || `(未填定位)`).slice(0, 40);
+                const statusBadge = p.status === "expanded" ? "✓ 已排期"
+                  : p.status === "expanding" ? "⏳ 排期中"
+                  : p.status === "directions" ? "✏️ 方向就绪" : p.status;
+                return (
+                  <option key={p.pack_id} value={p.pack_id}>
+                    [{statusBadge}] {label} · {dt}
+                  </option>
+                );
+              })}
+            </select>
+            {targetPackId && (
+              <button className="ghost" style={{fontSize: 11.5, padding: "3px 8px", color: "#c53030"}}
+                onClick={() => {
+                  const p = history.find(x => x.pack_id === targetPackId);
+                  handleDelete(targetPackId, p?.input?.positioning?.slice(0, 30) || targetPackId.slice(0, 8));
+                }}>
+                ✕ 删除此 pack
+              </button>
+            )}
+            <Link to="/composer">
+              <button style={{fontSize: 12, padding: "4px 12px", whiteSpace: "nowrap"}}>
+                + 出稿建新 pack
+              </button>
+            </Link>
+          </div>
+          {targetPackId && (() => {
+            const p = history.find(x => x.pack_id === targetPackId);
+            if (!p) return null;
+            return (
+              <div className="muted" style={{fontSize: 11, marginTop: 6, display: "flex", gap: 12, flexWrap: "wrap"}}>
+                {p.platform && <><PlatformPill platform={p.platform} /> ·</>}
+                {p.input?.cycle_weeks ? `${p.input.cycle_weeks} 周` : ""}
+                {p.input?.posts_per_week ? ` · 每周 ${p.input.posts_per_week} 篇` : ""}
+                {p.created_at ? ` · 创建于 ${fmtRelative(p.created_at)}` : ""}
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {(packLoading || historyLoading) && (
         <div className="card" style={{textAlign: "center", padding: 32}}>
           <div className="muted">读取中…</div>
         </div>
       )}
-      {err && (
+      {err && !packLoading && (
         <div className="card">
           <div className="banner danger">{err}</div>
-        </div>
-      )}
-      {!loading && history.length === 0 && !err && (
-        <div className="card" style={{textAlign: "center", padding: 40}}>
-          <div style={{fontSize: 40, marginBottom: 10}}>📭</div>
-          <h2 style={{margin: 0}}>还没有任何 pack</h2>
-          <p className="muted" style={{fontSize: 13}}>
-            起号策略 pack 在出稿板块创建 — 选目标 → 填输入 → 选方向 → 排期 一气呵成。
-          </p>
-          <button onClick={() => navigate("/composer")}
-            style={{marginTop: 14, fontSize: 14, padding: "10px 20px", fontWeight: 600}}>
-            ✍️ 开始创建第一份 pack →
+          <button onClick={() => navigate("/composer")} style={{marginTop: 12}}>
+            ✍️ 去出稿板块继续 / 新建
           </button>
         </div>
       )}
-
-      {history.length > 0 && (
-        <div className="card">
-          <h2 style={{marginTop: 0}}>📜 pack 历史 · {history.length} 份</h2>
-          <table className="table" style={{fontSize: 13}}>
-            <thead>
-              <tr>
-                <th style={{width: 80}}>状态</th>
-                <th>方向 / 主题</th>
-                <th style={{width: 100}}>平台</th>
-                <th style={{width: 110}}>创建时间</th>
-                <th style={{width: 60}}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {history.map((p) => {
-                const isExpanded = p.status === "expanded";
-                return (
-                  <tr key={p.pack_id}
-                      onClick={() => navigate(`/strategy/${p.pack_id}`)}
-                      style={{cursor: "pointer"}}>
-                    <td>
-                      <span className="tag-pill" style={{
-                        fontSize: 10.5, fontWeight: 600,
-                        background: isExpanded ? "var(--ok-soft)" : "#f4f4f4",
-                        color: isExpanded ? "var(--ok)" : "var(--muted)",
-                      }}>
-                        {isExpanded ? "✓ 已排期" : p.status}
-                      </span>
-                    </td>
-                    <td>
-                      <div style={{fontWeight: 600}}>{p.input?.positioning?.slice(0, 60) || "(未填定位)"}</div>
-                      <div className="muted" style={{fontSize: 11.5, marginTop: 2}}>
-                        {p.input?.target_audience?.slice(0, 80) || "(未填受众)"}
-                      </div>
-                    </td>
-                    <td>
-                      {p.platform ? <PlatformPill platform={p.platform} /> : (
-                        <span className="muted" style={{fontSize: 11}}>—</span>
-                      )}
-                    </td>
-                    <td className="muted" style={{fontSize: 11}}>
-                      {p.created_at ? fmtRelative(p.created_at) : "—"}
-                      <div style={{fontSize: 10, marginTop: 1}}>
-                        {p.input?.cycle_weeks ? `${p.input.cycle_weeks} 周` : ""}
-                        {p.input?.posts_per_week ? ` · ${p.input.posts_per_week}/周` : ""}
-                      </div>
-                    </td>
-                    <td>
-                      <button className="ghost"
-                        onClick={(e) => { e.stopPropagation(); handleDelete(p.pack_id, p.input?.positioning?.slice(0, 30) || p.pack_id.slice(0, 8)); }}
-                        style={{fontSize: 11, padding: "2px 8px", color: "#c53030"}}>
-                        ✕
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          <p className="muted" style={{fontSize: 11, marginTop: 10}}>
-            点任意行进入 pack 大纲 · 写每篇 / 迭代下一轮都在出稿板块
-          </p>
-        </div>
-      )}
+      {pack && !err && <StrategyPackView pack={pack} />}
     </div>
   );
 }
