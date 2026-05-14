@@ -1162,6 +1162,14 @@ def get_strategy(pack_id: str) -> dict[str, Any]:
     except Exception: d["directions"] = []
     pack_json = d.pop("pack_json", None)
     d["pack"] = json.loads(pack_json) if pack_json else None
+    # v0.59.1: parse chosen_direction_idxs (JSON-encoded list) so the
+    # frontend doesn't have to. Old packs without this column → null.
+    cdi_raw = d.get("chosen_direction_idxs")
+    if cdi_raw:
+        try: d["chosen_direction_idxs"] = json.loads(cdi_raw)
+        except Exception: d["chosen_direction_idxs"] = []
+    else:
+        d["chosen_direction_idxs"] = []
     return d
 
 

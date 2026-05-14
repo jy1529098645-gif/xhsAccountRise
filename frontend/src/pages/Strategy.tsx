@@ -226,7 +226,10 @@ export default function Strategy() {
         // cycle_start_date check is loose — defaultCycleStartDate() depends
         // on today, so just save if a value is set.
         !!trimmed.cycle_start_date ||
-        !!trimmed.platform;
+        !!trimmed.platform ||
+        // v0.59.1: include goal_type so user who only picked a goal and
+        // didn't fill text fields still gets their selection persisted.
+        !!trimmed.goal_type;
       if (hasMeaningfulEdit) {
         localStorage.setItem(DRAFT_KEY, JSON.stringify(trimmed));
       }
@@ -337,6 +340,13 @@ export default function Strategy() {
         if (restoredIdx !== null && restoredIdx !== undefined) {
           setChosenIdx(restoredIdx);
         }
+        // v0.59.1: restore multi-direction selection from server. Backend
+        // returns chosen_direction_idxs as a parsed list. Empty / missing
+        // = legacy single-direction pack (fall back to single chosenIdx).
+        const serverIdxs = (d as any).chosen_direction_idxs;
+        if (Array.isArray(serverIdxs) && serverIdxs.length > 0) {
+          setChosenIdxs(serverIdxs);
+        }
         if (d.pack) {
           setPack(d.pack);
           setPackId(urlPackId);
@@ -371,17 +381,23 @@ export default function Strategy() {
     try {
       const r = await job.promise;
       setAutofill(r);
-      setInput({
-        positioning: r.input.positioning || "",
-        target_audience: r.input.target_audience || "",
-        cycle_weeks: r.input.cycle_weeks || 4,
-        posts_per_week: r.input.posts_per_week || 3,
-        personal_strengths: r.input.personal_strengths || "",
-        constraints: r.input.constraints || "",
-        platform: r.input.platform || "",
-        expected_angles: r.input.expected_angles || [],
-        cycle_start_date: r.input.cycle_start_date || defaultCycleStartDate(),
-      });
+      // v0.59.1: 必须用「函数式 setInput」保留用户已设的字段（特别是
+      // goal_type — autofill 后端目前还不知道 goal 分类，response.input.goal_type
+      // 永远是空字符串，整体替换会把用户的选择 nuke 掉）。
+      setInput(prev => ({
+        ...prev,
+        positioning: r.input.positioning || prev.positioning,
+        target_audience: r.input.target_audience || prev.target_audience,
+        cycle_weeks: r.input.cycle_weeks || prev.cycle_weeks || 4,
+        posts_per_week: r.input.posts_per_week || prev.posts_per_week || 3,
+        personal_strengths: r.input.personal_strengths || prev.personal_strengths,
+        constraints: r.input.constraints || prev.constraints,
+        platform: r.input.platform || prev.platform,
+        expected_angles: r.input.expected_angles?.length ? r.input.expected_angles : prev.expected_angles,
+        cycle_start_date: r.input.cycle_start_date || prev.cycle_start_date || defaultCycleStartDate(),
+        // goal_type 永远从 prev 保留（autofill 不动它）
+        goal_type: prev.goal_type,
+      }));
       setLastFailedAction(null);
       setPhase("input");
     } catch (e: any) {
@@ -407,6 +423,9 @@ export default function Strategy() {
     // any was illogical.
     setErr(null); setInfo(null); setPhase("loading-propose");
     setProposeSeen(0);
+    // v0.59.1: clear multi-direction selection — new propose produces fresh
+    // directions, old indices would point at the wrong directions.
+    setChosenIdxs([]);
     const proposeJob = startJob<any>(
       "propose:current", "propose",
       (signal) => api.proposeStrategyStream(
