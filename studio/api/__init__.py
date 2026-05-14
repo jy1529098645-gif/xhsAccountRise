@@ -976,11 +976,17 @@ class StrategyInput(BaseModel):
     # picks the next Monday as default. Backend stores it and includes it in
     # the pack so the Strategy page can show real calendar dates per slot.
     cycle_start_date: str = ""
+    # v0.59: 8 大起号目标分类 — 决定 voice / 阶段权重 / 产品上下文必需性。
+    # 见 studio.strategy.goals.GOAL_TYPES。Empty = 通用（兼容旧客户端）。
+    goal_type: str = ""
     positioner_spec: str = "openai:gpt-4o"
 
 
 class StrategyExpandRequest(BaseModel):
-    chosen_direction_idx: int = Field(ge=0)
+    # v0.59: legacy single-direction field kept for backward compat. New
+    # frontend sends `chosen_direction_idxs` (list) for multi-direction.
+    chosen_direction_idx: int = Field(default=0, ge=0)
+    chosen_direction_idxs: list[int] = Field(default_factory=list)
     # v0.51: topic creativity gets gpt-4o + deepseek diversity; scheduling
     # (reasoning) → gpt-4o; resource compilation + body draft (volume) → deepseek.
     topicgen_spec: str = "openai:gpt-4o,deepseek"
@@ -997,6 +1003,13 @@ class StrategyAutofillRequest(BaseModel):
     claude_spec: str = "openai:gpt-4o"  # API kwarg name kept for back-compat
     openai_spec: str = "deepseek"       # API kwarg name kept for back-compat
     moderator_spec: str = "openai:gpt-4o"
+
+
+# v0.59 ：起号目标分类列表（前端 GoalPicker 用这个）
+@app.get("/api/strategy/goals")
+def strategy_goals_list() -> list[dict[str, Any]]:
+    from ..strategy.goals import list_goals_as_dicts
+    return list_goals_as_dicts()
 
 
 @app.post("/api/strategy/autofill")
@@ -1039,6 +1052,7 @@ async def strategy_propose(req: StrategyInput) -> dict[str, Any]:
         platform=library.normalise_platform(plat),
         expected_angles=_exp_angles,
         cycle_start_date=req.cycle_start_date,
+        goal_type=req.goal_type,
     )
     try:
         result = await strategy_pipeline.propose(inp, positioner_spec=req.positioner_spec)
@@ -1068,6 +1082,7 @@ async def strategy_propose_stream(req: StrategyInput):
         platform=library.normalise_platform(plat),
         expected_angles=_exp_angles,
         cycle_start_date=req.cycle_start_date,
+        goal_type=req.goal_type,
     )
     return StreamingResponse(
         strategy_pipeline.propose_stream(inp, positioner_spec=req.positioner_spec),
@@ -1086,6 +1101,7 @@ async def strategy_expand(pack_id: str, req: StrategyExpandRequest) -> dict[str,
             resourcer_spec=req.resourcer_spec,
             drafter_spec=req.drafter_spec,
             restart=req.restart,
+            chosen_idxs=req.chosen_direction_idxs or None,
         )
     except LookupError as e:
         raise HTTPException(404, str(e))

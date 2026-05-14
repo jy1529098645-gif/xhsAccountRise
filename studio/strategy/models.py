@@ -36,6 +36,9 @@ class AccountInput:
     # frontend formats each slot's real date as cycle_start + (week-1)*7 +
     # day_of_week. Stored here so it survives pack reload.
     cycle_start_date: str = ""
+    # v0.59: 起号目标分类。8 大目标见 goals.GOAL_TYPES。决定 voice / phase
+    # emphasis / product_context 是否必填 / prompt addendum。Empty = 通用（旧行为）。
+    goal_type: str = ""
 
 
 @dataclass
@@ -72,6 +75,11 @@ class TopicSlot:
     # angle/hook_type characteristics (emotional → late evening, tutorial →
     # afternoon, etc.), and to explain the choice in one sentence here.
     publish_rationale: str = ""
+    # v0.59: which direction (out of the user's multi-selected list) this slot
+    # belongs to. 0 = first chosen direction. -1/None = no direction tagged
+    # (legacy or single-direction pack). The frontend uses this to render
+    # color-coded badges in the schedule view so user sees主题分布。
+    direction_idx: int = -1
 
 
 @dataclass
@@ -96,6 +104,9 @@ class StrategyPack:
     materials_checklist: list[str] = field(default_factory=list)
     risks_and_mitigations: list[str] = field(default_factory=list)
     success_metrics: list[str] = field(default_factory=list)
+    # v0.59: multi-direction support. When user picked N directions, all of
+    # them go here. Empty list = legacy single-direction pack (use chosen_direction).
+    chosen_directions: list[StrategicDirection] = field(default_factory=list)
 
     @classmethod
     def new(cls, library_id: str, platform: str, input: AccountInput,

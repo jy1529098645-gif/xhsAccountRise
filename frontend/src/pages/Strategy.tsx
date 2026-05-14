@@ -11,7 +11,7 @@ import { startJob, getJob, cancelJob as cancelLocalJob, clearJob as clearLocalJo
 import { LLM_CATALOG, CONTENT_ANGLES as STRATEGY_ANGLES } from "../catalog";
 import type {
   AccountInputDTO, Library, Platform, StrategicDirectionDTO, StrategyPackDTO,
-  StrategyListItem, ProductContextDTO,
+  StrategyListItem, ProductContextDTO, GoalTypeDTO,
 } from "../types";
 
 const AUTOFILL_STAGES: TimelineStage[] = [
@@ -34,7 +34,8 @@ const EXPAND_STAGES: TimelineStage[] = [
   { label: "🤖 资源/风险师整理材料清单 + 指标", durationSec: 20 },
 ];
 
-type Phase = "autofilling" | "input" | "loading-propose" | "directions" | "loading-expand" | "pack";
+// v0.59: 「goal」 phase 加在最前面 — 选起号目标后再决定后续表单字段。
+type Phase = "goal" | "autofilling" | "input" | "loading-propose" | "directions" | "loading-expand" | "pack";
 
 interface FieldRationale {
   source: string;          // 'merged' | 'consensus' | 'claude' | 'openai'
@@ -50,6 +51,8 @@ interface AutofillResult {
 }
 
 const DOW_LABELS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+// v0.59: 多方向 slot 的颜色编码（每个 direction_idx 对应一种颜色）
+const DIRECTION_COLORS = ["#2E5C8A", "#a36df0", "#10a37f", "#e0a800", "#c4429a", "#5BC0EB", "#FCB97D", "#7a6fc8"];
 const INTENT_COLORS: Record<string, string> = {
   "拉新": "#fff5f5", "互动": "#fff8e6", "转化": "#fdecea", "沉淀": "#f0fafe",
 };
@@ -141,6 +144,7 @@ function emptyInput(): AccountInputDTO {
     personal_strengths: "", constraints: "", platform: "",
     expected_angles: [],
     cycle_start_date: defaultCycleStartDate(),
+    goal_type: "",
   };
 }
 
@@ -148,7 +152,9 @@ export default function Strategy() {
   const { packId: urlPackId } = useParams<{ packId?: string }>();
   const navigate = useNavigate();
 
-  const [phase, setPhase] = useState<Phase>("input");
+  // v0.59: 默认 phase = "goal" (新流程要先选目标)。如果旧 draft 已经有 goal_type
+  // 或者从 packId URL 进来，会被 useEffect 自动调整。
+  const [phase, setPhase] = useState<Phase>("goal");
   const [input, setInput] = useState<AccountInputDTO>(() => {
     // Resume in-progress draft from localStorage if present.
     try {
@@ -157,6 +163,10 @@ export default function Strategy() {
     } catch { /* ignore */ }
     return emptyInput();
   });
+  // v0.59: 多选 directions（替代之前的单选 chosenIdx）
+  const [chosenIdxs, setChosenIdxs] = useState<number[]>([]);
+  // v0.59: 起号目标分类列表（从 API 拿）
+  const [goals, setGoals] = useState<GoalTypeDTO[]>([]);
   const [activeLib, setActiveLib] = useState<Library | null>(null);
   const [platforms, setPlatforms] = useState<Platform[]>([]);
   const [hasExternalReports, setHasExternalReports] = useState<boolean>(false);
@@ -236,6 +246,19 @@ export default function Strategy() {
       .then(([ext, integ]) => setHasExternalReports(ext.length > 0 || integ.length > 0))
       .catch(() => {});
     reloadProductContexts();
+    api.listStrategyGoals().then(setGoals).catch(() => {});
+    // v0.59: if cached draft already has goal_type set, skip the goal picker
+    setPhase(prev => {
+      if (prev !== "goal") return prev;
+      try {
+        const cached = localStorage.getItem(DRAFT_KEY);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed?.goal_type) return "input";
+        }
+      } catch { /* ignore */ }
+      return "goal";
+    });
 
     // Read prefill from sessionStorage if user clicked a 'use this →' opp
     // on the Reports page. Wipe immediately so refresh doesn't re-prefill.
@@ -421,10 +444,14 @@ export default function Strategy() {
     }
   }
 
+  // v0.59: 改为多选 confirm。idx 留作向后兼容：直接传 idx 时也加进 chosenIdxs 列表。
   async function pickDirection(idx: number, restart: boolean = false) {
     if (!packId) return;
-    setChosenIdx(idx); setErr(null);
-    saveChosenIdxFor(packId, idx);
+    // Use current chosenIdxs if non-empty (multi-select flow), otherwise
+    // treat the explicit idx as single-direction.
+    const idxs = chosenIdxs.length > 0 ? chosenIdxs : [idx];
+    setChosenIdx(idxs[0] ?? idx); setErr(null);
+    saveChosenIdxFor(packId, idxs[0] ?? idx);
     // If a job for this pack is already running locally, cancel it before
     // starting a new one (the backend restart=true also handles this on
     // its side; we do both for snappy UX).
@@ -442,13 +469,14 @@ export default function Strategy() {
     activeJobIdRef.current = `expand:${packId}`;
     const expandJob = startJob<any>(
       `expand:${packId}`, "expand",
-      (signal) => api.expandStrategy(packId, idx, {
+      (signal) => api.expandStrategy(packId, idxs[0] ?? idx, {
         topicgen_spec: topicgenSpec,
         scheduler_spec: schedulerSpec,
         resourcer_spec: resourcerSpec,
         restart,
+        chosenIdxs: idxs.length > 1 ? idxs : undefined,
       }, signal),
-      { pack_id: packId, idx, restart },
+      { pack_id: packId, idx: idxs[0] ?? idx, restart, idxs },
     );
     try {
       const res: any = await expandJob.promise;
@@ -522,8 +550,10 @@ export default function Strategy() {
   }
 
   function reset() {
-    setPhase("input"); setPackId(null); setDirections([]);
-    setChosenIdx(null); setPack(null); setErr(null); setInfo(null);
+    // v0.59: 重置回 goal 第 0 步，让用户重新选目标。包括清空 chosenIdxs。
+    setPhase("goal"); setPackId(null); setDirections([]);
+    setChosenIdx(null); setChosenIdxs([]); setPack(null);
+    setErr(null); setInfo(null);
     setAutofill(null);
     try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
     setInput(emptyInput());
@@ -636,6 +666,14 @@ export default function Strategy() {
         </div>
       )}
 
+      {phase === "goal" && (
+        <GoalPicker goals={goals} selected={input.goal_type || ""}
+          onPick={(key) => {
+            setInput(prev => ({ ...prev, goal_type: key }));
+            setPhase("input");
+          }} />
+      )}
+
       {phase === "autofilling" && (
         <div className="card">
           <div className="spread" style={{alignItems: "flex-start"}}>
@@ -691,6 +729,8 @@ export default function Strategy() {
             schedulerSpec={schedulerSpec} setSchedulerSpec={setSchedulerSpec}
             resourcerSpec={resourcerSpec} setResourcerSpec={setResourcerSpec}
             onSubmit={submitInput}
+            onBackToGoal={() => setPhase("goal")}
+            selectedGoal={goals.find(g => g.key === input.goal_type) ?? null}
             onRequestAutofill={() => runAutofill()}
             hasAutofillResult={!!autofill}
             fieldRationale={autofill?.field_rationale ?? {}}
@@ -724,6 +764,7 @@ export default function Strategy() {
       {phase === "directions" && (
         <DirectionsList
           directions={directions} chosenIdx={chosenIdx}
+          chosenIdxs={chosenIdxs} setChosenIdxs={setChosenIdxs}
           onPick={pickDirection} onReset={reset} onBack={backToInput}
           slotCount={input.cycle_weeks * input.posts_per_week}
         />
@@ -777,6 +818,8 @@ function InputForm(props: {
   resourcerSpec: string;
   setResourcerSpec: (s: string) => void;
   onSubmit: () => void;
+  onBackToGoal?: () => void;
+  selectedGoal?: GoalTypeDTO | null;
   onRequestAutofill?: () => void;
   hasAutofillResult?: boolean;
   fieldRationale: Record<string, FieldRationale>;
@@ -791,14 +834,32 @@ function InputForm(props: {
   return (
     <div className="card">
       <div className="spread" style={{alignItems: "flex-start"}}>
-        <h2 style={{margin: 0}}>{hasAutofill ? "1. 检查 / 编辑 AI 拟好的初稿" : "1. 你的账号想法"}</h2>
-        {!hasAutofill && !props.hasAutofillResult && props.onRequestAutofill && (
-          <button className="ghost" onClick={props.onRequestAutofill}
-            style={{fontSize: 12, padding: "6px 12px"}}>
-            ✨ 不知道填啥？AI 帮拟一版（~15s）
-          </button>
-        )}
+        <h2 style={{margin: 0}}>{hasAutofill ? "2. 检查 / 编辑 AI 拟好的初稿" : "2. 你的账号想法"}</h2>
+        <div className="row" style={{gap: 6}}>
+          {props.onBackToGoal && (
+            <button className="ghost" onClick={props.onBackToGoal}
+              style={{fontSize: 12, padding: "6px 12px"}}
+              title="返回上一步重新选起号目标">
+              ← 返回选目标
+            </button>
+          )}
+          {!hasAutofill && !props.hasAutofillResult && props.onRequestAutofill && (
+            <button className="ghost" onClick={props.onRequestAutofill}
+              style={{fontSize: 12, padding: "6px 12px"}}>
+              ✨ 不知道填啥？AI 帮拟一版（~15s）
+            </button>
+          )}
+        </div>
       </div>
+      {props.selectedGoal && (
+        <div style={{
+          marginTop: 8, padding: 8, background: "var(--primary-soft)",
+          borderRadius: 6, fontSize: 12.5,
+        }}>
+          <b>{props.selectedGoal.emoji} 起号目标 ：{props.selectedGoal.name}</b>
+          <span className="muted" style={{marginLeft: 8}}>{props.selectedGoal.description}</span>
+        </div>
+      )}
       <p className="muted" style={{fontSize: 12, margin: "4px 0 12px"}}>
         所有字段都可以直接填。AI 帮拟只是给你个起点 — 改一改再启动也行。
       </p>
@@ -1051,18 +1112,36 @@ function SpecField({label, hint, value, onChange, options}: {
   );
 }
 
-function DirectionsList({directions, chosenIdx, onPick, onReset, onBack, slotCount}: {
+function DirectionsList({directions, chosenIdx, chosenIdxs, setChosenIdxs, onPick, onReset, onBack, slotCount}: {
   directions: StrategicDirectionDTO[];
   chosenIdx: number | null;
+  chosenIdxs: number[];
+  setChosenIdxs: (idxs: number[]) => void;
   onPick: (i: number) => void;
   onReset: () => void;
   onBack: () => void;
   slotCount: number;
 }) {
+  // v0.59: 多选 — 用户可勾 2-5 个方向，slot 跨方向混排
+  function toggle(i: number) {
+    if (chosenIdxs.includes(i)) {
+      setChosenIdxs(chosenIdxs.filter(x => x !== i));
+    } else {
+      if (chosenIdxs.length >= 8) {
+        alert("最多 8 个方向 — 太分散就失去聚焦了");
+        return;
+      }
+      setChosenIdxs([...chosenIdxs, i]);
+    }
+  }
+
+  const canSubmit = chosenIdxs.length > 0;
+  const slotsPerDir = canSubmit ? Math.max(1, Math.floor(slotCount / chosenIdxs.length)) : 0;
+
   return (
     <div>
       <div className="spread" style={{marginBottom: 12}}>
-        <h2 style={{margin: 0}}>2. 选一个方向继续</h2>
+        <h2 style={{margin: 0}}>2. 多选 2-5 个方向 · 跨主题混排</h2>
         <div className="row" style={{gap: 6}}>
           <button className="ghost" onClick={onBack}
             title="返回填表页面，保留方向 — 想重新跑 propose 可改 brief 后再点出方向">
@@ -1076,64 +1155,106 @@ function DirectionsList({directions, chosenIdx, onPick, onReset, onBack, slotCou
         </div>
       </div>
       <p className="muted" style={{fontSize: 13, marginBottom: 16}}>
-        AI 团队基于你的初步定位 + 该平台爆款数据，提了 {directions.length} 个差异化方向。
-        每个方向都锚定 DNA 里的真实信号（蓝海词 / 用户原话 / 高表现 hook）。挑一个最来电的，下一步出完整周历 + 材料。
+        AI 给了 {directions.length} 个差异化方向。<b>v0.59 新逻辑 ：你可以多选 2-5 个相关方向</b>，
+        然后排期会把 {slotCount} 篇 slot 跨这几个方向混排（每周保留拉新/专业感/沉淀/转化 4 阶段意图，但每篇主题可不同 — 这样发散度更高）。
       </p>
+
+      {/* 选择状态条 */}
+      <div style={{
+        position: "sticky", top: 8, zIndex: 5,
+        padding: 12, background: "var(--primary-soft)",
+        border: "1px solid var(--primary)", borderRadius: 8, marginBottom: 14,
+      }}>
+        <div className="spread" style={{alignItems: "center", gap: 12}}>
+          <div style={{fontSize: 13.5}}>
+            {canSubmit ? (
+              <>
+                ✓ 已选 <b style={{fontSize: 16, color: "var(--primary)"}}>{chosenIdxs.length}</b> 个方向
+                <span className="muted" style={{marginLeft: 8, fontSize: 12}}>
+                  · 大致每个方向 ≈ {slotsPerDir} 篇 · 共 {slotCount} 篇
+                </span>
+              </>
+            ) : (
+              <span className="muted">未选任何方向 · 至少选 1 个（推荐 2-5 个相关方向）</span>
+            )}
+          </div>
+          <button
+            disabled={!canSubmit}
+            onClick={() => onPick(chosenIdxs[0] ?? 0)}
+            style={{fontSize: 14, padding: "10px 24px", fontWeight: 600}}>
+            🚀 用这 {chosenIdxs.length || "?"} 个方向出排期 →
+          </button>
+        </div>
+      </div>
+
       <div className="cards-grid" style={{gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))"}}>
-        {directions.map((d, i) => (
-          <div key={i} className="card" style={{
-            border: chosenIdx === i ? "2px solid var(--primary)" : undefined,
-            cursor: "pointer",
-            padding: "16px 18px",
-          }} onClick={() => onPick(i)}>
-            <div className="spread" style={{alignItems: "flex-start"}}>
-              <div style={{flex: 1}}>
+        {directions.map((d, i) => {
+          const isSel = chosenIdxs.includes(i);
+          const isLegacyChosen = chosenIdx === i && !isSel;
+          return (
+            <div key={i} className="card" style={{
+              border: isSel ? "2px solid var(--primary)"
+                : isLegacyChosen ? "2px dashed var(--primary)"
+                : "1px solid var(--border)",
+              background: isSel ? "var(--primary-soft)" : undefined,
+              cursor: "pointer",
+              padding: "16px 18px",
+              position: "relative",
+            }} onClick={() => toggle(i)}>
+              {/* 多选 checkbox */}
+              <div style={{
+                position: "absolute", top: 12, right: 12,
+                width: 24, height: 24, borderRadius: 4,
+                border: `2px solid ${isSel ? "var(--primary)" : "#ccc"}`,
+                background: isSel ? "var(--primary)" : "#fff",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                color: "#fff", fontSize: 14, fontWeight: 700,
+              }}>{isSel ? "✓" : ""}</div>
+
+              <div style={{paddingRight: 36}}>
                 <div style={{fontSize: 16, fontWeight: 600}}>{d.name}</div>
                 <div className="muted" style={{fontSize: 12, marginTop: 2}}>{d.positioning_statement}</div>
               </div>
+
               <div style={{
-                background: "var(--primary-soft)", color: "var(--primary)",
+                display: "inline-block", marginTop: 8,
+                background: "#fff8e6", color: "#a67700",
                 fontSize: 11, padding: "2px 8px", borderRadius: 10, fontWeight: 600,
-                whiteSpace: "nowrap",
               }}>潜力 {d.score?.toFixed(1) ?? "—"}/10</div>
-            </div>
 
-            <div style={{fontSize: 12.5, marginTop: 10}}>
-              <b>受众：</b>{d.target_audience}
-            </div>
+              <div style={{fontSize: 12.5, marginTop: 10}}>
+                <b>受众：</b>{d.target_audience}
+              </div>
 
-            {d.hook_angles?.length > 0 && (
-              <div style={{fontSize: 12, marginTop: 8}}>
-                <b style={{color: "#555"}}>hook 角度：</b>
-                <div style={{marginTop: 4}}>
-                  {d.hook_angles.map((h, j) => <span key={j} className="tag-pill" style={{marginBottom: 2}}>{h}</span>)}
+              {d.hook_angles?.length > 0 && (
+                <div style={{fontSize: 12, marginTop: 8}}>
+                  <b style={{color: "#555"}}>hook 角度：</b>
+                  <div style={{marginTop: 4}}>
+                    {d.hook_angles.map((h, j) => <span key={j} className="tag-pill" style={{marginBottom: 2}}>{h}</span>)}
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
 
-            {d.differentiator && (
-              <div style={{fontSize: 12, marginTop: 10}}>
-                <b style={{color: "#555"}}>差异化：</b>
-                <span className="muted">{d.differentiator}</span>
-              </div>
-            )}
-            {d.risk && (
-              <div style={{fontSize: 12, marginTop: 6}}>
-                <b style={{color: "var(--warn)"}}>风险：</b>
-                <span className="muted">{d.risk}</span>
-              </div>
-            )}
-            {d.why_works && (
-              <div style={{fontSize: 11.5, marginTop: 10, padding: 8, background: "#fafafa", borderRadius: 6, fontStyle: "italic"}}>
-                💡 {d.why_works}
-              </div>
-            )}
-
-            <button style={{width: "100%", marginTop: 12, fontSize: 14, padding: "10px 0"}}>
-              选这个方向 → 出 <b>{slotCount}</b> 篇带初稿正文
-            </button>
-          </div>
-        ))}
+              {d.differentiator && (
+                <div style={{fontSize: 12, marginTop: 10}}>
+                  <b style={{color: "#555"}}>差异化：</b>
+                  <span className="muted">{d.differentiator}</span>
+                </div>
+              )}
+              {d.risk && (
+                <div style={{fontSize: 12, marginTop: 6}}>
+                  <b style={{color: "var(--warn)"}}>风险：</b>
+                  <span className="muted">{d.risk}</span>
+                </div>
+              )}
+              {d.why_works && (
+                <div style={{fontSize: 11.5, marginTop: 10, padding: 8, background: "#fafafa", borderRadius: 6, fontStyle: "italic"}}>
+                  💡 {d.why_works}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -1224,9 +1345,41 @@ function PackView({pack, onReset, onBack, hasDirections}: {
       </div>
 
       <div className="card">
-        <h2>方向 · {pack.chosen_direction.name}</h2>
-        <p style={{margin: "4px 0", fontSize: 14}}>{pack.chosen_direction.positioning_statement}</p>
-        <p className="muted" style={{fontSize: 12}}>受众：{pack.chosen_direction.target_audience}</p>
+        {(pack.chosen_directions && pack.chosen_directions.length > 1) ? (
+          <>
+            <h2>方向 · {pack.chosen_directions.length} 个主题混排</h2>
+            <p className="muted" style={{fontSize: 12, margin: "4px 0 10px"}}>
+              v0.59 多方向起号 — 30 篇 slot 跨这 {pack.chosen_directions.length} 个方向混排，
+              每周保留拉新/专业感/沉淀/转化 4 阶段意图。
+            </p>
+            <div style={{display: "grid", gap: 8}}>
+              {pack.chosen_directions.map((d, i) => (
+                <div key={i} style={{
+                  padding: "8px 12px", background: "#fafafa", borderRadius: 6,
+                  borderLeft: `3px solid ${DIRECTION_COLORS[i % DIRECTION_COLORS.length]}`,
+                  fontSize: 13,
+                }}>
+                  <span style={{
+                    display: "inline-block", marginRight: 8, fontSize: 11,
+                    padding: "1px 6px", borderRadius: 3,
+                    background: DIRECTION_COLORS[i % DIRECTION_COLORS.length], color: "#fff",
+                    fontWeight: 600,
+                  }}>方向 #{i + 1}</span>
+                  <b>{d.name}</b>
+                  <div className="muted" style={{fontSize: 12, marginTop: 2}}>
+                    {d.positioning_statement} · 受众：{d.target_audience}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+          <>
+            <h2>方向 · {pack.chosen_direction.name}</h2>
+            <p style={{margin: "4px 0", fontSize: 14}}>{pack.chosen_direction.positioning_statement}</p>
+            <p className="muted" style={{fontSize: 12}}>受众：{pack.chosen_direction.target_audience}</p>
+          </>
+        )}
         {pack.series_thesis && (
           <p style={{fontStyle: "italic", color: "var(--muted)", fontSize: 13, marginTop: 8}}>
             主线：{pack.series_thesis}
@@ -1271,7 +1424,8 @@ function PackView({pack, onReset, onBack, hasDirections}: {
         <div style={{display: "grid", gap: 12}}>
           {schedule.map((s, i) => (
             <SlotCard key={i} slot={s} idx={i} onCompose={goCompose}
-              cycleStartDate={pack.input.cycle_start_date} />
+              cycleStartDate={pack.input.cycle_start_date}
+              chosenDirections={pack.chosen_directions ?? []} />
           ))}
           {schedule.length === 0 && (
             <div className="muted" style={{padding: 16, background: "#fafafa",
@@ -1447,20 +1601,37 @@ function IterateCard({pack}: {pack: StrategyPackDTO}) {
   );
 }
 
-function SlotCard({slot, idx, onCompose, cycleStartDate}: {
+function SlotCard({slot, idx, onCompose, cycleStartDate, chosenDirections}: {
   slot: any; idx: number;
   onCompose: (s: any, runImmediately: boolean) => void;
   cycleStartDate?: string;
+  chosenDirections?: StrategicDirectionDTO[];
 }) {
   // v0.55: compute real calendar date if a cycle anchor is set; falls back
   // to the relative "W1 · 周三" tag if no anchor.
   const dateInfo = slotDate(cycleStartDate, slot.week, slot.day_of_week);
+  // v0.59: 多方向 slot 的颜色 badge
+  const dirIdx = typeof slot.direction_idx === "number" ? slot.direction_idx : -1;
+  const dirInfo = (dirIdx >= 0 && chosenDirections && dirIdx < chosenDirections.length)
+    ? { idx: dirIdx, name: chosenDirections[dirIdx]?.name, color: DIRECTION_COLORS[dirIdx % DIRECTION_COLORS.length] }
+    : null;
   return (
-    <div style={{padding: 14, borderRadius: 10, border: "1px solid var(--border)",
-                 background: "#fff"}}>
+    <div style={{
+      padding: 14, borderRadius: 10,
+      border: dirInfo ? `1px solid var(--border)` : "1px solid var(--border)",
+      borderLeft: dirInfo ? `4px solid ${dirInfo.color}` : "1px solid var(--border)",
+      background: "#fff",
+    }}>
       <div className="row" style={{justifyContent: "space-between", alignItems: "flex-start", gap: 12}}>
         <div style={{flex: 1, minWidth: 0}}>
           <div className="row" style={{gap: 8, marginBottom: 4, flexWrap: "wrap"}}>
+            {dirInfo && (
+              <span className="tag-pill" style={{
+                background: dirInfo.color, color: "#fff", fontWeight: 600,
+              }}>
+                方向 #{dirInfo.idx + 1}{dirInfo.name ? ` · ${dirInfo.name.slice(0, 12)}` : ""}
+              </span>
+            )}
             {dateInfo ? (
               <span className="tag-pill" style={{
                 background: "var(--primary-soft)", color: "var(--primary)",
@@ -1827,6 +1998,89 @@ function ProductContextCard({contexts, onChanged}: {
           </details>
         </div>
       )}
+    </div>
+  );
+}
+
+// v0.59: 起号目标分类选择 — 第 0 步，决定后续表单字段 + voice + 是否
+// 强制要求产品上下文。8 大目标的细分见 studio/strategy/goals.py。
+function GoalPicker({goals, selected, onPick}: {
+  goals: GoalTypeDTO[];
+  selected: string;
+  onPick: (key: string) => void;
+}) {
+  return (
+    <div className="card">
+      <h2 style={{margin: "0 0 6px"}}>1. 先选起号目标 ─ AI 据此调整后续整套策略</h2>
+      <p className="muted" style={{fontSize: 12.5, margin: "0 0 16px"}}>
+        不同目标的起号打法差别极大 ：情感账号弱转化、产品/SaaS 强卖点 + 产品上下文必填、
+        学术干货走方法论、教学走结构化课程。AI 据此调整 voice / 阶段权重 / required 字段。
+      </p>
+
+      {goals.length === 0 && <div className="muted">加载中…</div>}
+
+      <div className="cards-grid" style={{gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12}}>
+        {goals.map(g => {
+          const isSel = selected === g.key;
+          return (
+            <div key={g.key} onClick={() => onPick(g.key)}
+              className="card"
+              style={{
+                cursor: "pointer", margin: 0, padding: "14px 16px",
+                border: isSel ? "2px solid var(--primary)" : "1px solid var(--border)",
+                background: isSel ? "var(--primary-soft)" : "#fff",
+                transition: "border-color 0.15s, background 0.15s",
+              }}>
+              <div style={{fontSize: 28, marginBottom: 4}}>{g.emoji}</div>
+              <div style={{fontWeight: 700, fontSize: 15}}>{g.name}</div>
+              <div className="muted" style={{fontSize: 12, marginTop: 4, lineHeight: 1.6}}>
+                {g.description}
+              </div>
+
+              <div style={{marginTop: 10, fontSize: 11, lineHeight: 1.6}}>
+                <div className="muted">📅 阶段权重 ：{g.phase_emphasis}</div>
+                {g.requires_product_context && (
+                  <div style={{color: "#c44", marginTop: 3, fontWeight: 600}}>
+                    ⚠️ 产品上下文必填
+                  </div>
+                )}
+                {!g.requires_product_context && g.recommended_product_context && (
+                  <div style={{color: "#a67700", marginTop: 3}}>
+                    💡 推荐填产品上下文
+                  </div>
+                )}
+              </div>
+
+              {g.example_directions.length > 0 && (
+                <div style={{marginTop: 10}}>
+                  <div className="muted" style={{fontSize: 10.5, marginBottom: 3}}>
+                    示例方向 ：
+                  </div>
+                  <div style={{display: "flex", flexWrap: "wrap", gap: 3}}>
+                    {g.example_directions.slice(0, 4).map(ex => (
+                      <span key={ex} className="tag-pill" style={{fontSize: 10.5, padding: "1px 6px"}}>
+                        {ex}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div style={{
+                marginTop: 12, textAlign: "right", fontSize: 12,
+                color: isSel ? "var(--primary)" : "var(--muted)",
+                fontWeight: isSel ? 700 : 400,
+              }}>
+                {isSel ? "✓ 已选 · 进入下一步 →" : "选这个 →"}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="muted" style={{fontSize: 11.5, marginTop: 14, textAlign: "center"}}>
+        选完后可以在下一步表单里改 / 也能回来重选 — 这只是起点，不锁死。
+      </div>
     </div>
   );
 }

@@ -287,6 +287,22 @@ export interface AccountInputDTO {
   expected_angles?: string[];
   /** v0.55: ISO date 'YYYY-MM-DD' for the first day of the cycle. Empty = next Monday. */
   cycle_start_date?: string;
+  /** v0.59: 起号目标分类 — personal_share / emotional / academic / product_saas / 等。Empty = 通用。 */
+  goal_type?: string;
+}
+
+/** v0.59: 8 大起号目标分类，前端 GoalPicker 渲染用。 */
+export interface GoalTypeDTO {
+  key: string;
+  emoji: string;
+  name: string;
+  description: string;
+  voice_hint: string;
+  phase_emphasis: string;
+  requires_product_context: boolean;
+  recommended_product_context: boolean;
+  example_directions: string[];
+  prompt_addendum: string;
 }
 
 export interface StrategicDirectionDTO {
@@ -315,6 +331,8 @@ export interface TopicSlotDTO {
   content_format?: string;  // 图文 / 短视频 / 长视频 / 直播 / 纯文本
   /** v0.55: ≤30 字 LLM explanation for why this time-slot suits this slot's content type. */
   publish_rationale?: string;
+  /** v0.59: which user-picked direction this slot belongs to (0-indexed). -1 = legacy / untagged. */
+  direction_idx?: number;
 }
 
 export interface WeekThemeDTO {
@@ -337,6 +355,8 @@ export interface StrategyPackDTO {
   materials_checklist: string[];
   risks_and_mitigations: string[];
   success_metrics: string[];
+  /** v0.59: 多选 — 用户选了 N 个 directions 全部存这里。Empty 数组 = 单方向旧包。 */
+  chosen_directions?: StrategicDirectionDTO[];
 }
 
 export interface StrategyListItem {

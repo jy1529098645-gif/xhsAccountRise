@@ -4,7 +4,7 @@ import type {
   AccountInputDTO, StrategicDirectionDTO, StrategyDetail, StrategyListItem, StrategyPackDTO,
   ProjectDTO, InsightReportDTO,
   ComplianceCheck, ComplianceHit, TrackingFetchResult, PromptProposal,
-  ProductContextDTO,
+  ProductContextDTO, GoalTypeDTO,
 } from "./types";
 
 const STATIC_PLATFORMS: Platform[] = [
@@ -478,8 +478,22 @@ export const api = {
     if (!result) throw new HttpError(500, "stream ended without complete event");
     return result;
   },
-  expandStrategy: (packId: string, chosenIdx: number, opts?: { topicgen_spec?: string; scheduler_spec?: string; resourcer_spec?: string; restart?: boolean }, signal?: AbortSignal) =>
-    postJson<StrategyExpandResult>(`/api/strategy/${packId}/expand`, { chosen_direction_idx: chosenIdx, ...opts }, signal),
+  // v0.59: chosenIdx kept as legacy single-direction param; new chosenIdxs is
+  // the multi-direction array. Backend reads chosen_direction_idxs first,
+  // falls back to chosen_direction_idx for old callers.
+  expandStrategy: (packId: string, chosenIdx: number, opts?: {
+    topicgen_spec?: string; scheduler_spec?: string; resourcer_spec?: string;
+    restart?: boolean; chosenIdxs?: number[];
+  }, signal?: AbortSignal) =>
+    postJson<StrategyExpandResult>(`/api/strategy/${packId}/expand`, {
+      chosen_direction_idx: chosenIdx,
+      chosen_direction_idxs: opts?.chosenIdxs ?? [],
+      topicgen_spec: opts?.topicgen_spec, scheduler_spec: opts?.scheduler_spec,
+      resourcer_spec: opts?.resourcer_spec, restart: opts?.restart,
+    }, signal),
+  // v0.59: 起号目标分类（GoalPicker step 用）
+  listStrategyGoals: () =>
+    getJson<GoalTypeDTO[]>("/api/strategy/goals").catch(() => []),
   listStrategies: () => getJson<StrategyListItem[]>("/api/strategy", "strategies.json").catch(() => [] as StrategyListItem[]),
   getStrategy: (packId: string) => getJson<StrategyDetail>(`/api/strategy/${packId}`),
   deleteStrategy: async (packId: string) => {

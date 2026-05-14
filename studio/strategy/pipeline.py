@@ -159,6 +159,7 @@ async def propose(inp: AccountInput, positioner_spec: str = "openai:gpt-4o") -> 
 
     from ..insight.pipeline import full_reference_block_for_prompt
     from .. import product_context as _pc
+    from .goals import goal_voice_block
     report_ctx = full_reference_block_for_prompt()
     report_block = f"\n\n{report_ctx}\n" if report_ctx else ""
     pctx = _pc.context_block()
@@ -166,13 +167,17 @@ async def propose(inp: AccountInput, positioner_spec: str = "openai:gpt-4o") -> 
         f"\n\n【⭐ 你的产品/账号定位（强约束 — 反复引用其中的真实功能 / 用户原话 / 经典叙事）】\n{pctx}\n"
         if pctx else ""
     )
+    # v0.59: goal-type aware voice + addendum.
+    goal_block = goal_voice_block(getattr(inp, "goal_type", "") or "")
+    goal_section = f"\n\n{goal_block}\n" if goal_block else ""
 
     user_text = (
         f"【用户初步定位】\n{prompts.input_blurb(inp)}"
+        f"{goal_section}"
         f"{pctx_block}"
         f"{report_block}\n"
         f"【该平台爆款 DNA】\n{prompts.dna_blurb(dna)}\n\n"
-        f"输出 8-12 个差异化的账号定位方向（宁多勿少 ；用户需要足够的选项来挑）。"
+        f"输出 12-20 个差异化的账号定位方向（宁多勿少 ；用户会多选 2-5 个组合执行）。"
         + ("\n\n⭐ **产品上下文强约束** ：每个方向必须能映射到产品上下文里的至少 1 个真实功能 / 1 句经典叙事 / "
            "1 类目标用户。**绝对不要发明产品上下文里没提的功能名 / 工具名**。"
            "如果产品上下文里写了具体的「核心叙事三句话」/「场景金句」/「禁忌词」，方向的 why_works 必须照搬这些原话。"
@@ -219,13 +224,14 @@ async def propose(inp: AccountInput, positioner_spec: str = "openai:gpt-4o") -> 
         con.execute(
             "INSERT INTO studio_strategies"
             " (pack_id, library_id, platform, created_at, updated_at, status,"
-            "  input_json, directions_json, elapsed_s, project_id)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "  input_json, directions_json, elapsed_s, project_id, goal_type)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 pack_id, lib_id, inp.platform, now, now, "directions",
                 json.dumps(asdict(inp), ensure_ascii=False),
                 json.dumps([asdict(d) for d in directions], ensure_ascii=False),
                 elapsed, pid,
+                getattr(inp, "goal_type", "") or None,
             ),
         )
 
@@ -285,24 +291,24 @@ async def propose_stream(
 
     from ..insight.pipeline import full_reference_block_for_prompt
     from .. import product_context as _pc
+    from .goals import goal_voice_block
     report_ctx = full_reference_block_for_prompt()
     report_block = f"\n\n{report_ctx}\n" if report_ctx else ""
-    # v0.58: product context — the operator's own description of "what this
-    # product actually is". Project-level, persisted across all strategy /
-    # compose / insight runs. Heavily prompted so the LLM doesn't fall back
-    # to generic AI-tool marketing copy or hallucinate feature names.
     pctx = _pc.context_block()
     pctx_block = (
         f"\n\n【⭐ 你的产品/账号定位（强约束 — 反复引用其中的真实功能 / 用户原话 / 经典叙事）】\n{pctx}\n"
         if pctx else ""
     )
+    goal_block = goal_voice_block(getattr(inp, "goal_type", "") or "")
+    goal_section = f"\n\n{goal_block}\n" if goal_block else ""
 
     user_text = (
         f"【用户初步定位】\n{prompts.input_blurb(inp)}"
+        f"{goal_section}"
         f"{pctx_block}"
         f"{report_block}\n"
         f"【该平台爆款 DNA】\n{prompts.dna_blurb(dna)}\n\n"
-        f"输出 8-12 个差异化的账号定位方向（宁多勿少）。\n"
+        f"输出 12-20 个差异化的账号定位方向（宁多勿少 ；用户会多选 2-5 个组合执行）。\n"
         f"**直接输出一个 JSON 对象** ：{{\"directions\": [ ... ]}}，每条方向格式参考 system prompt。"
         f" 不要任何额外文字、解释、markdown 包裹。"
         + ("\n\n⭐ 报告强约束（同 propose 非流式版）：每个独到观点都要在方向里找到落地点 ；"
@@ -391,13 +397,14 @@ async def propose_stream(
         con.execute(
             "INSERT INTO studio_strategies"
             " (pack_id, library_id, platform, created_at, updated_at, status,"
-            "  input_json, directions_json, elapsed_s, project_id)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "  input_json, directions_json, elapsed_s, project_id, goal_type)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 pack_id, lib_id, inp.platform, now, now, "directions",
                 json.dumps(asdict(inp), ensure_ascii=False),
                 json.dumps([asdict(d) for d in directions], ensure_ascii=False),
                 elapsed, pid,
+                getattr(inp, "goal_type", "") or None,
             ),
         )
 
@@ -488,6 +495,7 @@ _SCHEDULE_SCHEMA = {
                     "publish_slot": {"type": "string"},
                     "publish_rationale": {"type": "string"},
                     "content_format": {"type": "string"},
+                    "direction_idx": {"type": "integer"},
                 },
             },
         },
@@ -520,8 +528,13 @@ async def expand(
     # POST. Useful when user clicked the direction again because the
     # previous run was stuck or producing unsatisfactory results.
     restart: bool = False,
+    # v0.59: multi-direction support. When provided, slots distribute across
+    # ALL chosen directions instead of being locked to a single one. Frontend
+    # passes this as a list of indices. None = legacy behavior (single
+    # chosen_idx).
+    chosen_idxs: list[int] | None = None,
 ) -> dict[str, Any]:
-    """Phase 2: turn a chosen direction into a full StrategyPack."""
+    """Phase 2: turn N chosen directions into a full StrategyPack."""
     db.apply_migrations(verbose=False)
     t0 = time.time()
     with db.connect(read_only=True) as con:
@@ -533,9 +546,28 @@ async def expand(
         raise LookupError(f"strategy pack not found: {pack_id}")
     inp_data = json.loads(row["input_json"])
     directions_data = json.loads(row["directions_json"])
-    if chosen_idx < 0 or chosen_idx >= len(directions_data):
-        raise IndexError(f"chosen direction out of range: {chosen_idx}")
-    chosen = StrategicDirection(**directions_data[chosen_idx])
+
+    # v0.59: resolve chosen_idxs (multi-direction) or fall back to chosen_idx.
+    if chosen_idxs:
+        # Validate every idx.
+        for idx in chosen_idxs:
+            if idx < 0 or idx >= len(directions_data):
+                raise IndexError(f"chosen direction out of range: {idx}")
+        # Dedupe preserve order.
+        chosen_idxs = list(dict.fromkeys(chosen_idxs))
+        if len(chosen_idxs) == 0:
+            raise IndexError("chosen_idxs is empty")
+        if len(chosen_idxs) > 8:
+            raise IndexError("too many chosen directions (max 8)")
+    else:
+        if chosen_idx < 0 or chosen_idx >= len(directions_data):
+            raise IndexError(f"chosen direction out of range: {chosen_idx}")
+        chosen_idxs = [chosen_idx]
+    # The "primary" chosen direction (for backward compat fields) is the first.
+    chosen = StrategicDirection(**directions_data[chosen_idxs[0]])
+    chosen_directions: list[StrategicDirection] = [
+        StrategicDirection(**directions_data[i]) for i in chosen_idxs
+    ]
     inp = AccountInput(**inp_data)
     lib_id = row["library_id"] or library.active_lib_id()
     platform = row["platform"] or inp.platform
@@ -589,20 +621,32 @@ async def expand(
     # Mark as 'expanding' so the frontend can detect "still in progress" if
     # its HTTPS-to-localhost connection drops mid-call (60-180s requests are
     # routinely killed by browser / mixed-content / wifi blip).
+    # v0.59: persist chosen_direction_idxs (multi) alongside legacy single
+    # chosen_direction_idx so old readers still work.
     with db.connect() as con:
         con.execute(
-            "UPDATE studio_strategies SET status='expanding', chosen_direction_idx=?,"
-            " updated_at=? WHERE pack_id=?",
-            (chosen_idx, int(time.time()), pack_id),
+            "UPDATE studio_strategies"
+            " SET status='expanding', chosen_direction_idx=?,"
+            " chosen_direction_idxs=?, updated_at=? WHERE pack_id=?",
+            (chosen_idxs[0], json.dumps(chosen_idxs),
+             int(time.time()), pack_id),
         )
 
     from .. import jobs
     job_id = f"expand:{pack_id}"
+    label = (
+        chosen.name if len(chosen_directions) == 1
+        else f"{chosen.name} +{len(chosen_directions)-1} 个方向"
+    )
     try:
-        async with jobs.tracked(job_id, kind="expand", label=chosen.name):
-            return await _expand_inner(pack_id, chosen_idx, chosen, inp, lib_id, platform,
-                                        topicgen_spec, scheduler_spec, resourcer_spec,
-                                        drafter_spec, t0, job_id=job_id)
+        async with jobs.tracked(job_id, kind="expand", label=label):
+            return await _expand_inner(
+                pack_id, chosen_idxs[0], chosen, inp, lib_id, platform,
+                topicgen_spec, scheduler_spec, resourcer_spec,
+                drafter_spec, t0, job_id=job_id,
+                chosen_directions=chosen_directions,
+                chosen_idxs=chosen_idxs,
+            )
     except (jobs.CancelRequested, asyncio.CancelledError):
         # User pressed pause. partial_state_json was already checkpointed
         # by _expand_inner at each stage boundary.
@@ -639,7 +683,13 @@ async def _expand_inner(
     inp: AccountInput, lib_id: str, platform: str,
     topicgen_spec: str, scheduler_spec: str, resourcer_spec: str,
     drafter_spec: str, t0: float, job_id: str | None = None,
+    chosen_directions: list[StrategicDirection] | None = None,
+    chosen_idxs: list[int] | None = None,
 ) -> dict[str, Any]:
+    # v0.59: multi-direction support. If caller passed N directions, slots
+    # distribute across them. Otherwise fall back to single-direction (legacy).
+    chosen_directions = chosen_directions or [chosen]
+    chosen_idxs = chosen_idxs or [chosen_idx]
     from .. import jobs
 
     def _check_cancel():
@@ -729,24 +779,57 @@ async def _expand_inner(
     # v0.58: pull product context into scheduler too — the most important
     # injection point since this generates the actual 30 篇排期 content.
     from .. import product_context as _pc
+    from .goals import goal_voice_block
     pctx = _pc.context_block()
     pctx_block = (
         f"\n\n【⭐⭐⭐ 你的产品/账号定位（每篇必须真正引用其中的功能/叙事/受众）】\n{pctx}\n"
         if pctx else ""
     )
+    goal_block = goal_voice_block(getattr(inp, "goal_type", "") or "")
+    goal_section = f"\n\n{goal_block}\n" if goal_block else ""
 
     # v0.58 phase rules — 4 阶段硬性约束（之前只是软建议，导致 4 周内容看不出差异化）。
     # 按 cycle_weeks 切分阶段并把规则塞进 prompt。
     cw = inp.cycle_weeks
     phase_rules = _build_phase_rules(cw)
 
+    # v0.59: multi-direction block. When user picked N directions, build a
+    # detailed block listing all of them + assignment guidance.
+    if len(chosen_directions) > 1:
+        dir_lines = ["【⭐ 用户已选 {n} 个方向 — 排期必须把 slots 均匀分布到这几个方向上】".format(
+            n=len(chosen_directions))]
+        for i, d in enumerate(chosen_directions):
+            dir_lines.append(
+                f"\n  ▸ direction #{i + 1} ：{d.name}\n"
+                f"    positioning: {d.positioning_statement}\n"
+                f"    target_audience: {d.target_audience}\n"
+                f"    hook_angles: {d.hook_angles}\n"
+                f"    differentiator: {d.differentiator}"
+            )
+        chosen_block = "\n".join(dir_lines)
+        per_dir = max(1, topic_count // len(chosen_directions))
+        multi_dir_directive = (
+            f"\n\n⭐ **多方向分配硬约束** ：\n"
+            f"  · 用户选了 {len(chosen_directions)} 个方向，总共 {topic_count} 篇 slot\n"
+            f"  · 大致每个方向 ≈ {per_dir} 篇（最后 1-2 篇可以混搭跨方向）\n"
+            f"  · 每个 slot 必须在 schedule 输出里加一个 `direction_idx` 字段（0-indexed，指向用户选的方向）\n"
+            f"  · 同一周内尽量混合不同方向，**不要一周全是同一个方向**（这正是用户想避免的「一周锁死一主题」）\n"
+            f"  · 但同一阶段意图（拉新/专业感/沉淀/转化）内的不同方向可以互相借势"
+        )
+    else:
+        chosen_block = (
+            f"【已选定的账号方向】\n"
+            f"name: {chosen.name}\n"
+            f"positioning: {chosen.positioning_statement}\n"
+            f"target_audience: {chosen.target_audience}\n"
+            f"hook_angles: {chosen.hook_angles}\n"
+            f"differentiator: {chosen.differentiator}"
+        )
+        multi_dir_directive = ""
+
     sched_user = (
-        f"【已选定的账号方向】\n"
-        f"name: {chosen.name}\n"
-        f"positioning: {chosen.positioning_statement}\n"
-        f"target_audience: {chosen.target_audience}\n"
-        f"hook_angles: {chosen.hook_angles}\n"
-        f"differentiator: {chosen.differentiator}"
+        f"{chosen_block}"
+        f"{goal_section}"
         f"{pctx_block}"
         f"{report_block}\n"
         f"【运营约束】cycle_weeks={inp.cycle_weeks}, posts_per_week={inp.posts_per_week}"
@@ -766,6 +849,7 @@ async def _expand_inner(
            "不要因为「这条不像亮点」就丢。schedule 里至少 60% 要能直接溯源到上传报告的具体内容。"
            if report_ctx else "")
         + angle_directive
+        + multi_dir_directive
     )
     scheduler_gen = registry.build(scheduler_spec)[0]
     async def _try_scheduler(user_payload: str, max_tokens: int = 6000):
@@ -905,6 +989,7 @@ async def _expand_inner(
             intent=str(s.get("intent", "")),
             content_format=str(s.get("content_format", "")),
             publish_rationale=str(s.get("publish_rationale", "")),
+            direction_idx=int(s.get("direction_idx", -1)) if s.get("direction_idx") is not None else -1,
         )
         for _raw in schedule_raw
         for s in [_to_slot_dict(_raw)]
@@ -1087,6 +1172,9 @@ async def _expand_inner(
     pack.materials_checklist = _coerce_list(res_parsed.get("materials_checklist"))
     pack.risks_and_mitigations = _coerce_list(res_parsed.get("risks_and_mitigations"))
     pack.success_metrics = _coerce_list(res_parsed.get("success_metrics"))
+    # v0.59: persist ALL chosen directions for multi-direction packs.
+    # Legacy clients can still read pack.chosen_direction (=first one).
+    pack.chosen_directions = chosen_directions
 
     elapsed_total = int(time.time() - t0)
     now = int(time.time())

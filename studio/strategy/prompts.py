@@ -302,7 +302,8 @@ SCHEDULER_SYSTEM = """\
       "materials_needed": ["..."],
       "intent": "拉新",
       "content_format": "图文" | "短视频" | "长视频" | "直播" | "纯文本",
-      "publish_rationale": "<≤30 字说明为什么本 slot 选这个时段>"
+      "publish_rationale": "<≤30 字说明为什么本 slot 选这个时段>",
+      "direction_idx": <整数, 0-indexed, 指向用户选的 direction; 单方向场景填 0>
     }
   ]
 }
