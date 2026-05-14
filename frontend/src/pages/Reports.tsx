@@ -609,48 +609,61 @@ export default function Reports() {
           </>
         )}
 
-        {/* v0.61.9 ：整合卡永远渲染（哪怕 externals 为空），给用户「这功能存在」
-            的可见 affordance。空状态按钮 disabled + 提示「先上传 1 份」。 */}
-        <div style={{
-          marginTop: 12, padding: 12,
-          background: externals.length > 0 ? "var(--primary-soft)" : "#fafafa",
-          borderRadius: 8,
-          border: externals.length > 0 ? "1px solid var(--primary)" : "1px dashed #ddd",
-          opacity: externals.length === 0 ? 0.85 : 1,
-        }}>
-          <div className="spread" style={{alignItems: "flex-start", gap: 10}}>
-            <div style={{flex: 1}}>
-              <b>🪄 整合所选 {selectedSourceIds.size} 份 → 一份共识报告</b>
-              <div className="muted" style={{fontSize: 11.5, marginTop: 4}}>
-                {externals.length === 0
-                  ? "上传 ≥ 2 份外部报告后，让 GPT-4o 跨报告找共识 + 分歧 → 生成统一稿。"
-                  : "跨报告找共识 + 分歧 → 一份统一稿，下游 Strategy / Composer 自动读最新整合稿。"}
+        {/* v0.61.9/10 ：整合卡永远渲染（哪怕 externals 为空），给用户「这功能
+            存在」的可见 affordance。整合阈值 = 至少 2 份（1 份没什么可整合的）。 */}
+        {(() => {
+          const n = externals.length;
+          const sel = selectedSourceIds.size;
+          const ready = n >= 2 && sel >= 2;
+          const hint =
+            n === 0 ? "上传 ≥ 2 份外部报告后，让 GPT-4o 跨报告找共识 + 分歧 → 统一稿"
+            : n === 1 ? "再上传 1 份就能整合 — 跨报告找共识 + 分歧 = 一份统一稿"
+            : sel < 2 ? "勾选 ≥ 2 份准备整合（默认全选 — 反勾不想要的）"
+            : "跨报告找共识 + 分歧 → 统一稿，下游 Strategy / Composer 自动读最新整合稿";
+          const btnText =
+            integrating ? "🤖 整合中…"
+            : n === 0 ? "⏳ 等你上传报告"
+            : n === 1 ? "⏳ 还差 1 份"
+            : sel < 2 ? "⏳ 至少勾选 2 份"
+            : `🚀 整合所选 ${sel} 份`;
+          return (
+            <div style={{
+              marginTop: 12, padding: 12,
+              background: ready ? "var(--primary-soft)" : "#fafafa",
+              borderRadius: 8,
+              border: ready ? "1px solid var(--primary)" : "1px dashed #ddd",
+              opacity: ready ? 1 : 0.9,
+            }}>
+              <div className="spread" style={{alignItems: "flex-start", gap: 10}}>
+                <div style={{flex: 1}}>
+                  <b>🪄 整合外部报告 → 一份共识 {n > 0 && `· 已有 ${n} 份`}</b>
+                  <div className="muted" style={{fontSize: 11.5, marginTop: 4}}>
+                    {hint}
+                  </div>
+                  {n >= 2 && (
+                    <label style={{display: "inline-flex", alignItems: "center", gap: 6,
+                                    fontSize: 12, marginTop: 8, cursor: "pointer"}}>
+                      <input type="checkbox" checked={includeOwnConsensus}
+                        onChange={e => setIncludeOwnConsensus(e.target.checked)} />
+                      一起融合工具自出共识（如有）
+                    </label>
+                  )}
+                </div>
+                <div className="row" style={{gap: 6}}>
+                  <button onClick={runIntegrate}
+                    disabled={!ready || integrating || offline}
+                    style={{minWidth: 160}}>
+                    {btnText}
+                  </button>
+                  {integrating && (
+                    <button className="ghost" onClick={pauseIntegrate}
+                      style={{padding: "8px 14px", fontSize: 13}}>⏸ 暂停</button>
+                  )}
+                </div>
               </div>
-              {externals.length > 0 && (
-                <label style={{display: "inline-flex", alignItems: "center", gap: 6,
-                                fontSize: 12, marginTop: 8, cursor: "pointer"}}>
-                  <input type="checkbox" checked={includeOwnConsensus}
-                    onChange={e => setIncludeOwnConsensus(e.target.checked)} />
-                  一起融合工具自出共识（如有）
-                </label>
-              )}
             </div>
-            <div className="row" style={{gap: 6}}>
-              <button onClick={runIntegrate}
-                disabled={integrating || selectedSourceIds.size === 0 || offline}
-                title={externals.length === 0 ? "先上传 ≥ 1 份外部报告" : ""}
-                style={{minWidth: 160}}>
-                {integrating ? "🤖 整合中…"
-                : externals.length === 0 ? "⏳ 等你上传报告"
-                : "🚀 整合所选"}
-              </button>
-              {integrating && (
-                <button className="ghost" onClick={pauseIntegrate}
-                  style={{padding: "8px 14px", fontSize: 13}}>⏸ 暂停</button>
-              )}
-            </div>
-          </div>
-        </div>
+          );
+        })()}
 
         {integrated.length > 0 && (
           <div style={{marginTop: 16}}>
