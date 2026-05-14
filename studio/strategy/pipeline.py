@@ -475,6 +475,11 @@ _SCHEDULE_SCHEMA = {
                     "direction_idx": {"type": "integer"},
                     "decision_rationale": {"type": "string"},
                     "flexible_window": {"type": "string"},
+                    # v0.62 ：每个 slot 输出 2 个 alternative_versions
+                    "alternative_versions": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                    },
                 },
             },
         },
@@ -518,6 +523,11 @@ async def expand(
     # passes this as a list of indices. None = legacy behavior (single
     # chosen_idx).
     chosen_idxs: list[int] | None = None,
+    # v0.62 ：body_drafter 池开关。默认 False ：Strategy 不再批量生成 body draft，
+    # 改为只生 schedule 大纲 + alternatives。每篇的实际正文由用户在 Composer 多
+    # agent 流程里逐篇生成（critic + refiner 把关 = 更高质量 + 节省 ~30 篇 LLM 调用）。
+    # 老用户想要旧行为可以传 True 强制生成 body drafts。
+    generate_body_drafts: bool = False,
 ) -> dict[str, Any]:
     """Phase 2: turn N chosen directions into a full StrategyPack."""
     db.apply_migrations(verbose=False)
@@ -1065,6 +1075,12 @@ async def _expand_inner(
             direction_idx=int(s.get("direction_idx", -1)) if s.get("direction_idx") is not None else -1,
             decision_rationale=str(s.get("decision_rationale", "")),
             flexible_window=str(s.get("flexible_window", "")),
+            # v0.62 ：alternative_versions — LLM 给的 2 个次选方案 list of dict。
+            # 类型保留为原始 dict，UI 自己 render。空 list 兼容老 pack。
+            alternative_versions=[
+                dict(a) for a in (s.get("alternative_versions") or [])
+                if isinstance(a, dict)
+            ],
         )
         for _raw in schedule_raw
         for s in [_to_slot_dict(_raw)]
@@ -1168,6 +1184,11 @@ async def _expand_inner(
     resourcer_gen = registry.build(resourcer_spec)[0]
 
     async def _drafter_pool():
+        # v0.62 ：默认不再批量生成 body drafts。schedule 只输出大纲 + 替代方案，
+        # 用户进 Composer 多 agent 流程逐篇写（critic + refiner 把关 = 高质量）。
+        # 节省 ：~30 篇 × Sonnet $0.01 ≈ $0.30 / 30s × ~6 batches ≈ 3 分钟。
+        if not generate_body_drafts:
+            return []
         if "drafter" in saved and isinstance(saved["drafter"], list):
             return [(item.get("idx"), item.get("body") or "", item.get("err"))
                     for item in saved["drafter"] if isinstance(item, dict)]

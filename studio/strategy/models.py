@@ -99,6 +99,14 @@ class TopicSlot:
     # 推荐窗口（"周三-周五任一晚 / 21:00-23:00"），告诉用户可以在这个范围内自由选发。
     # 只锁极端早晨/深夜这种明显不合适的时段。空 = 老 pack 或 AI 没给（向后兼容）。
     flexible_window: str = ""
+    # v0.62 ：每个 slot 的 2-3 个替代方案。让用户选 ：同一天不同时段 / 同一时段
+    # 不同角度 / 不同 content_format。每个 alt 是个 dict ：
+    #   { "label": "次选 A", "publish_slot": "周四 21:00", "angle": "段子",
+    #     "hook_type": "段子型", "content_format": "短视频",
+    #     "outline": ["...", "..."], "why_alt": "AI 一句话说为啥这是个备选" }
+    # 用户在 PackView 上选哪个 alt → goCompose 带那个 alt 的 metadata 进 Composer。
+    # 空 list = 老 pack 没生成 alternatives（向后兼容）。
+    alternative_versions: list[dict] = field(default_factory=list)
 
 
 @dataclass

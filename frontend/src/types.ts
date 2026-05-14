@@ -348,6 +348,17 @@ export interface TopicSlotDTO {
   decision_rationale?: string;
   /** v0.61: AI 推荐的发布窗口（不是死锁单日单时段）. 例 "周三-周五任一晚 / 21:00-23:00". */
   flexible_window?: string;
+  /** v0.62: 每个 slot 的 2 个次选方案。用户在 PackView 上选哪个 alt 后进 Composer。 */
+  alternative_versions?: Array<{
+    label?: string;
+    publish_slot?: string;
+    angle?: string;
+    hook_type?: string;
+    content_format?: string;
+    title?: string;
+    mini_outline?: string[];
+    why_alt?: string;
+  }>;
 }
 
 export interface WeekThemeDTO {

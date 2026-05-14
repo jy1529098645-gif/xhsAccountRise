@@ -1462,33 +1462,54 @@ function PackView({pack, onReset, onBack, hasDirections}: {
   const totalSlots = schedule.length;
   const navigate = useNavigate();
 
-  function goCompose(slot: any, _runImmediately: boolean) {
-    // Build a Brief from the slot + the chosen direction. Stashed in
-    // sessionStorage rather than location.state — the latter combined with
-    // a navigate(replace) inside Composer's mount effect was wedging the
-    // app such that subsequent navigations to /libraries / /dashboard
-    // also rendered blank.
+  // v0.62 ：altIdx 参数 ：-1（默认）= 走主 slot；>=0 = 走 slot.alternative_versions[altIdx]
+  function goCompose(slot: any, _runImmediately: boolean, altIdx: number = -1) {
+    // 选了 alt 就用 alt 的 metadata 覆盖主 slot 的对应字段
+    const alts = Array.isArray(slot.alternative_versions) ? slot.alternative_versions : [];
+    const alt = (altIdx >= 0 && altIdx < alts.length) ? alts[altIdx] : null;
+    const effective = alt ? {
+      title: alt.title || slot.title,
+      angle: alt.angle || slot.angle,
+      hook_type: alt.hook_type || slot.hook_type,
+      content_format: alt.content_format || slot.content_format,
+      outline: Array.isArray(alt.mini_outline) ? alt.mini_outline : slot.outline,
+      publish_slot: alt.publish_slot || slot.publish_slot,
+      intent: slot.intent,  // 意图 / 受众 都是主 slot 的，alt 不覆盖
+      materials_needed: slot.materials_needed,
+      body_draft: "",  // alt 没 body_draft，老主 slot 的 body 也不带（v0.62 不再预生成）
+    } : {
+      title: slot.title,
+      angle: slot.angle,
+      hook_type: slot.hook_type,
+      content_format: slot.content_format,
+      outline: slot.outline,
+      publish_slot: slot.publish_slot,
+      intent: slot.intent,
+      materials_needed: slot.materials_needed,
+      body_draft: slot.body_draft || "",  // 老 pack 仍带 body_draft 当 hint
+    };
+
     const briefPrefill = {
-      topic: slot.title || "",
-      // Composer's <select> only accepts these 9 angles — anything else gets
-      // dropped on the prefill side. Don't force a value the select can't show.
-      angle: slot.angle || "",
+      topic: effective.title || "",
+      angle: effective.angle || "",
       target_length: 600,
-      // cta_strength expects "none"|"soft"|"strong"; slot.intent is "拉新"
-      // etc. Default to "soft" — the intent shows up in extra_constraints
-      // anyway, so the LLM still sees it.
       cta_strength: "soft" as const,
       niche: pack.chosen_direction?.positioning_statement || "",
       extra_constraints: [
-        slot.content_format ? `内容形式 ：${slot.content_format}（按此格式写！图文/短视频脚本/长视频章节差别很大）` : "",
-        slot.intent ? `意图 ：${slot.intent}` : "",
-        slot.hook_type ? `hook_type: ${slot.hook_type}` : "",
-        slot.outline?.length ? "大纲：" + slot.outline.join(" / ") : "",
-        slot.materials_needed?.length ? "需要材料：" + slot.materials_needed.join("、") : "",
-        slot.body_draft ? `已有初稿：\n${slot.body_draft}` : "",
+        alt ? `🎯 从 Strategy ${alt.label || "次选"} 进入 ：${alt.why_alt || ""}` : "",
+        effective.content_format ? `内容形式 ：${effective.content_format}（按此格式写！图文/短视频脚本/长视频章节差别很大）` : "",
+        effective.intent ? `意图 ：${effective.intent}` : "",
+        effective.hook_type ? `hook_type: ${effective.hook_type}` : "",
+        effective.publish_slot ? `发布时段 ：${effective.publish_slot}` : "",
+        effective.outline?.length ? "大纲：" + effective.outline.join(" / ") : "",
+        effective.materials_needed?.length ? "需要材料：" + effective.materials_needed.join("、") : "",
+        effective.body_draft ? `已有初稿（仅供参考，Composer 会重写）：\n${effective.body_draft}` : "",
         pack.chosen_direction?.target_audience ? `目标受众：${pack.chosen_direction.target_audience}` : "",
       ].filter(Boolean).join("\n\n"),
       platform: pack.platform,
+      note: alt
+        ? `从「${alt.label || "次选方案"}」一键带入 — ${alt.why_alt || "AI 替代方案"}`
+        : `从 Strategy 推荐方案一键带入`,
     };
     try {
       sessionStorage.setItem("composer.briefPrefill", JSON.stringify(briefPrefill));
@@ -1783,7 +1804,8 @@ function IterateCard({pack}: {pack: StrategyPackDTO}) {
 
 function SlotCard({slot, idx, onCompose, cycleStartDate, chosenDirections}: {
   slot: any; idx: number;
-  onCompose: (s: any, runImmediately: boolean) => void;
+  // v0.62 ：onCompose 加一个可选 altIdx 参数 ；-1 = 主 slot；>=0 = 哪个 alternative
+  onCompose: (s: any, runImmediately: boolean, altIdx?: number) => void;
   cycleStartDate?: string;
   chosenDirections?: StrategicDirectionDTO[];
 }) {
@@ -1852,11 +1874,84 @@ function SlotCard({slot, idx, onCompose, cycleStartDate, chosenDirections}: {
             </div>
           )}
         </div>
-        <button onClick={() => onCompose(slot, false)} style={{whiteSpace: "nowrap"}}>
-          ✍️ 出这一篇 →
+        <button onClick={() => onCompose(slot, false, -1)} style={{whiteSpace: "nowrap"}}>
+          ✍️ 写这个 →
         </button>
       </div>
 
+      {/* v0.62 ：alternative_versions 替代方案选择器。每个 alt 是个迷你卡，
+          点 「✍️ 写这个 →」 进 Composer 携带该 alt 的 metadata。 */}
+      {Array.isArray(slot.alternative_versions) && slot.alternative_versions.length > 0 && (
+        <div style={{marginTop: 12, paddingTop: 10, borderTop: "1px dashed #ddd"}}>
+          <div className="muted" style={{fontSize: 11, marginBottom: 6, fontWeight: 600}}>
+            💡 也可以从次选方案里选（AI 给的其它角度 / 时段 / 格式）：
+          </div>
+          <div style={{display: "grid", gap: 8}}>
+            {slot.alternative_versions.map((alt: any, ai: number) => (
+              <div key={ai} style={{
+                padding: "8px 10px", background: "#fafafa", borderRadius: 6,
+                borderLeft: "3px solid #a855f7",
+              }}>
+                <div className="row" style={{justifyContent: "space-between", alignItems: "flex-start", gap: 8}}>
+                  <div style={{flex: 1, minWidth: 0}}>
+                    <div className="row" style={{gap: 6, flexWrap: "wrap", marginBottom: 4}}>
+                      <span className="tag-pill" style={{
+                        background: "#a855f7", color: "#fff",
+                        fontWeight: 600, fontSize: 10.5,
+                      }}>
+                        {alt.label || `次选 ${ai === 0 ? "A" : "B"}`}
+                      </span>
+                      {alt.publish_slot && (
+                        <span className="tag-pill" style={{fontSize: 10.5}}>⏰ {alt.publish_slot}</span>
+                      )}
+                      {alt.angle && (
+                        <span className="tag-pill" style={{fontSize: 10.5}}>{alt.angle}</span>
+                      )}
+                      {alt.content_format && (
+                        <span className="tag-pill" style={{
+                          fontSize: 10.5,
+                          background: FORMAT_COLORS[alt.content_format]?.bg ?? "#eef2ff",
+                          color: FORMAT_COLORS[alt.content_format]?.fg ?? "#4338ca",
+                        }}>
+                          {FORMAT_ICONS[alt.content_format] ?? "📄"} {alt.content_format}
+                        </span>
+                      )}
+                      {alt.hook_type && (
+                        <span className="tag-pill" style={{fontSize: 10.5}}>{alt.hook_type}</span>
+                      )}
+                    </div>
+                    {alt.title && (
+                      <div style={{fontSize: 13, fontWeight: 600, marginBottom: 3}}>
+                        {alt.title}
+                      </div>
+                    )}
+                    {Array.isArray(alt.mini_outline) && alt.mini_outline.length > 0 && (
+                      <ul style={{margin: "2px 0 0 18px", fontSize: 11.5, lineHeight: 1.55, color: "#555"}}>
+                        {alt.mini_outline.map((o: string, j: number) => <li key={j}>{o}</li>)}
+                      </ul>
+                    )}
+                    {alt.why_alt && (
+                      <div className="muted" style={{fontSize: 11, marginTop: 4, fontStyle: "italic"}}>
+                        💡 {alt.why_alt}
+                      </div>
+                    )}
+                  </div>
+                  <button onClick={() => onCompose(slot, false, ai)}
+                    className="ghost"
+                    style={{
+                      whiteSpace: "nowrap", fontSize: 11.5, padding: "4px 10px",
+                      borderColor: "#a855f7", color: "#a855f7", fontWeight: 600,
+                    }}>
+                    ✍️ 写这个 →
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 老 pack 才有 body_draft；新 pack 改为不预生成正文（v0.62） */}
       {slot.body_draft && (
         <details open style={{marginTop: 10}}>
           <summary style={{cursor: "pointer", fontSize: 12.5, fontWeight: 600, color: "var(--primary)"}}>

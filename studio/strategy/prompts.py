@@ -292,12 +292,21 @@ SCHEDULER_SYSTEM = """\
 
 5. weekly_themes 也给每周一个 main theme + intent。
 
+6. **alternative_versions（v0.62 新增 · 关键字段）**：为每个 slot 输出 **2 个次选方案**。
+   用户在 UI 上能在「推荐」+「次选」之间挑选后才进 Composer 写正文。
+   每个 alt 是 1 个 mini-slot，跟主 slot **要有明显差异化**（不是稍微改改）：
+     - 不同时段（早 vs 晚） / 或 不同 angle / 或 不同 content_format / 或 不同 hook_type
+     - 给 1-3 条 mini_outline（骨架）+ 一句 why_alt 说为啥这是个值得考虑的备选
+   例 ：主 slot 是「周三 21:00 痛点 图文」，alt 1 可能是「周四 12:30 段子 短视频」（午休时段 + 不同 voice），
+        alt 2 可能是「周三 21:00 测评 图文」（同时段同格式但角度差异）。
+
 **绝对底线（不可商量）**：
 - 红线词不许出现（合规闸门会兜底，但你也别故意触）
 - 产品/品牌/工具名 verbatim，绝不编造
 - 不能 100% slot 全产品 / 全同一角度 / 全同一时段（同质化 → 算法降权）
 
-**这一步只输出结构（标题/大纲/材料/时段/格式/理由），不要写正文**。正文由专门写手按 content_format 拼。
+**这一步只输出结构（标题/大纲/材料/时段/格式/理由 + alternatives），不要写正文**。
+正文由用户在 Composer 多 agent 流程里逐篇写（每篇 critic + refiner 把关，比这里批量写质量高）。
 
 最终输出 JSON：
 {
@@ -319,13 +328,38 @@ SCHEDULER_SYSTEM = """\
       "publish_rationale": "<≤30 字 为什么这个时段窗口>",
       "flexible_window": "<推荐发布窗口，例如 '周三-周五任一晚 / 21:00-23:00'>",
       "decision_rationale": "<≤40 字 为什么排这一周 + 这个角度>",
-      "direction_idx": <整数, 0-indexed, 指向用户选的 direction; 单方向场景填 0>
+      "direction_idx": <整数, 0-indexed, 指向用户选的 direction; 单方向场景填 0>,
+      "alternative_versions": [
+        {
+          "label": "次选 A · 不同时段",
+          "publish_slot": "<不同的时段，例如 '周四 12:30'>",
+          "angle": "<可以同主 slot 也可以不同>",
+          "hook_type": "...",
+          "content_format": "...",
+          "title": "<次选标题，差异化>",
+          "mini_outline": ["...", "..."],
+          "why_alt": "<≤30 字 为啥这是个值得考虑的备选>"
+        },
+        {
+          "label": "次选 B · 不同角度",
+          "publish_slot": "...",
+          "angle": "<跟主 slot 不同的 angle>",
+          "hook_type": "...",
+          "content_format": "...",
+          "title": "...",
+          "mini_outline": ["...", "..."],
+          "why_alt": "..."
+        }
+      ]
     }
   ]
 }
 
-严格保证 schedule 长度 = cycle_weeks × posts_per_week。候选不够你自己补，但要标 [自补] 在 title 末尾。
-outline 要 3-6 条，是写手据此扩成正文的「骨架」。
+严格保证 ：
+- schedule 长度 = cycle_weeks × posts_per_week
+- 每个 slot 必须给 **正好 2 个** alternative_versions（用户得到 ≥ 3 选项 = 推荐 + 2 备选）
+- 候选不够你自己补，但要标 [自补] 在 title 末尾
+- outline 3-6 条 ；alt 的 mini_outline 1-3 条
 """
 
 
