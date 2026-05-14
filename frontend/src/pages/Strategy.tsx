@@ -190,12 +190,29 @@ export default function Strategy() {
   }
 
   // Save in-progress input to localStorage as user types.
+  // v0.58: trigger expanded — also save when user only changes angles /
+  // cycle_start_date / cycle_weeks / posts_per_week etc. without filling
+  // the text fields. Previously the save was gated on positioning OR
+  // target_audience OR personal_strengths being non-empty, so picking a
+  // date or angles would silently get reset on refresh.
   useEffect(() => {
     if (phase !== "input") return;
     try {
       const trimmed = { ...input };
-      // Don't persist trivial empty state.
-      if (trimmed.positioning || trimmed.target_audience || trimmed.personal_strengths) {
+      const def = emptyInput();
+      const hasMeaningfulEdit =
+        !!trimmed.positioning ||
+        !!trimmed.target_audience ||
+        !!trimmed.personal_strengths ||
+        !!trimmed.constraints ||
+        (trimmed.expected_angles?.length ?? 0) > 0 ||
+        trimmed.cycle_weeks !== def.cycle_weeks ||
+        trimmed.posts_per_week !== def.posts_per_week ||
+        // cycle_start_date check is loose — defaultCycleStartDate() depends
+        // on today, so just save if a value is set.
+        !!trimmed.cycle_start_date ||
+        !!trimmed.platform;
+      if (hasMeaningfulEdit) {
         localStorage.setItem(DRAFT_KEY, JSON.stringify(trimmed));
       }
     } catch { /* ignore quota etc. */ }

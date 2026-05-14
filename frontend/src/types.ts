@@ -331,7 +331,7 @@ export interface StrategyListItem {
   platform: string | null;
   created_at: number;
   updated_at: number;
-  status: "directions" | "expanded";
+  status: "directions" | "expanded" | "expanding" | "expand_failed" | "paused";
   input: AccountInputDTO;
   chosen_direction_idx: number | null;
   elapsed_s: number | null;
@@ -343,7 +343,7 @@ export interface StrategyDetail {
   platform: string | null;
   created_at: number;
   updated_at: number;
-  status: "directions" | "expanded";
+  status: "directions" | "expanded" | "expanding" | "expand_failed" | "paused";
   input: AccountInputDTO;
   directions: StrategicDirectionDTO[];
   chosen_direction_idx: number | null;
