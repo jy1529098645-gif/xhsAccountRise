@@ -466,8 +466,17 @@ _HUMOR_PATTERN_CATEGORIES: dict[str, list[str]] = {
         "大无语", "什么鬼", "搞笑", "蚌埠住", "蚌住",
         "麻了", "我就是个", "废物", "摆烂",
     ],
+    # v0.57: 沙雕 / 玩梗 / 互联网梗 — 跟「自嘲反讽」有重叠但更偏轻松抽象。
+    # 这类语气在年轻人圈层（B站 / 小红书 / X / Lemon8）传播力极强。
+    "沙雕/玩梗": [
+        "我宣布", "好家伙", "绝绝子", "yyds", "爷青回", "人间真实",
+        "小丑竟是我自己", "绝望的文盲", "整活", "活久见", "狂喜",
+        "乐了", "乐死", "笑不活了", "我直接好家伙", "我直接当场", "我哭死",
+        "栓Q", "栓 Q", "笑出鹅叫", "笑出猪叫", "我直接", "下饭", "上头",
+        "卷王", "凡尔赛", "破防", "yysy", "tcl",
+    ],
     "崩溃情绪 emoji": ["😭", "🥹", "😱", "🥺", "💔", "🆘"],
-    "戏谑 emoji":     ["😎", "🤡", "🙃", "😅", "🫠", "🤣", "🤪"],
+    "戏谑 emoji":     ["😎", "🤡", "🙃", "😅", "🫠", "🤣", "🤪", "🤯", "💀"],
     "夸张数字":       [
         "9999", "1000000", "一百万", "巨爽", "超绝", "贼", "贼好",
     ],
@@ -601,6 +610,73 @@ def analyse_humor_signals(min_likes: int = 100) -> dict[str, Any]:
     }
 
 
+# --- 10. Content format distribution (v0.57) -------------------------------
+#
+# SCHEDULER_SYSTEM 之前用硬编码 platform → ratio 表（xhs 70/30 etc.）。
+# 那个比例是 platform-level 通用经验值，但 AcademiCats 的实际库 99.7%
+# 图文 / 0.3% 视频。再按 70/30 排会逼运营拍视频，跟实际语料背离。
+#
+# 这个分析器读真实库：
+#   - notes.type ('normal' | 'video')
+#   - notes.video_duration_ms (短视频 < 90s / 长视频 >= 90s)
+#   - notes.image_count (= 0 + normal → 纯文本，其它 normal → 图文)
+# 输出每种 content_format 的占比 + 互动表现，让 Scheduler 拿真数据排，
+# 同时保留少量 secondary format 强制多样性（不至于 99% 图文绝对统一）。
+
+def analyse_content_format(min_likes: int = 100) -> dict[str, Any]:
+    """Format distribution + per-format engagement among high-like notes."""
+    import statistics
+    SHORT_VIDEO_MAX_MS = 90_000  # >= 90s 算长视频
+    with db.connect(read_only=True) as con:
+        rows = list(con.execute(
+            "SELECT type, image_count, video_duration_ms, liked_count"
+            " FROM notes WHERE liked_count >= ?",
+            (min_likes,),
+        ))
+    n_total = len(rows)
+    if n_total == 0:
+        return {
+            "min_likes": min_likes, "n_notes": 0,
+            "by_format": {}, "dominant_format": None,
+            "diversity_warning": "no data",
+        }
+
+    likes_by_fmt: dict[str, list[int]] = {}
+    counts: dict[str, int] = {}
+
+    for r in rows:
+        likes = r["liked_count"] or 0
+        if r["type"] == "video":
+            dur_ms = r["video_duration_ms"] or 0
+            fmt = "短视频" if 0 < dur_ms < SHORT_VIDEO_MAX_MS else "长视频"
+        elif (r["image_count"] or 0) == 0:
+            fmt = "纯文本"
+        else:
+            fmt = "图文"
+        counts[fmt] = counts.get(fmt, 0) + 1
+        likes_by_fmt.setdefault(fmt, []).append(likes)
+
+    by_format = {}
+    for fmt, n in counts.items():
+        likes_list = likes_by_fmt[fmt]
+        by_format[fmt] = {
+            "n": n,
+            "prevalence": round(n / n_total, 4),
+            "avg_likes": int(statistics.mean(likes_list)),
+            "median_likes": int(statistics.median(likes_list)),
+            "p90_likes": int(_percentile(likes_list, 0.9) if likes_list else 0),
+        }
+    dominant = max(by_format.items(), key=lambda kv: kv[1]["n"])[0]
+
+    return {
+        "min_likes": min_likes,
+        "n_notes": n_total,
+        "by_format": by_format,
+        "dominant_format": dominant,
+        "dominant_prevalence": by_format[dominant]["prevalence"],
+    }
+
+
 def build_dna(version: str | None = None) -> dict[str, Any]:
     """Run all sections, return the assembled artifact dict.
 
@@ -632,6 +708,7 @@ def build_dna(version: str | None = None) -> dict[str, Any]:
         ("comment_demand",    analyse_comment_demand),
         ("top_performers",    analyse_top_performers),
         ("humor_signals",     analyse_humor_signals),
+        ("content_format",    analyse_content_format),
     ]
     for name, fn in sections:
         try:

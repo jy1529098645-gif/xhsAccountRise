@@ -22,7 +22,7 @@ const COMPOSE_STAGES: TimelineStage[] = [
   { label: "🤖 计划师产发布计划", durationSec: 20 },
 ];
 
-const ANGLES = ["教程", "痛点", "故事", "工具评测", "对比", "感悟", "数字", "种草", "建议", "段子"];
+const ANGLES = ["教程", "痛点", "故事", "工具评测", "对比", "感悟", "数字", "种草", "建议", "段子", "科普", "避雷", "测评"];
 
 // v0.51 → v0.52: persist the user's form state across navigation. Now also
 // stores `angles` (multi-select). `angle` is kept as the primary fallback so

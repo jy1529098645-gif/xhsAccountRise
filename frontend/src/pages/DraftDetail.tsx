@@ -614,7 +614,7 @@ function renderWithHits(text: string, hits: ComplianceHit[]) {
 }
 
 // ---------- Variant fan-out -----------------------------------
-const ALL_ANGLES = ["教程","痛点","故事","工具评测","对比","感悟","数字","种草","建议","段子"];
+const ALL_ANGLES = ["教程","痛点","故事","工具评测","对比","感悟","数字","种草","建议","段子","科普","避雷","测评"];
 
 function VariantFanOutCard({draftId, existing, published, onSpawned}: {
   draftId: string; existing: VariantChild[]; published: boolean; onSpawned: () => void;

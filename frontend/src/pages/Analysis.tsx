@@ -112,6 +112,7 @@ export default function Analysis() {
   const shape = sections.body_and_shape ?? {};
   const comments = sections.comment_demand ?? {};
   const humor = sections.humor_signals ?? null;
+  const contentFormat = sections.content_format ?? null;
 
   return (
     <div>
@@ -263,6 +264,87 @@ export default function Analysis() {
           <HumorSignals data={humor} />
         </Section>
       )}
+
+      {contentFormat && contentFormat.n_notes > 0 && (
+        <Section title="9 · 内容形式分布（决定排期 content_format 配比）">
+          <ContentFormatSection data={contentFormat} />
+        </Section>
+      )}
+    </div>
+  );
+}
+
+function ContentFormatSection({data}: {data: any}) {
+  const byFmt: [string, any][] = Object.entries(data.by_format ?? {});
+  byFmt.sort((a, b) => (b[1]?.n ?? 0) - (a[1]?.n ?? 0));
+  const dom = data.dominant_format;
+  const domPrev = data.dominant_prevalence ?? 0;
+  const policy = (() => {
+    if (domPrev > 0.8) return {
+      text: `主形式 ${dom} 占比 ${(domPrev*100).toFixed(1)}% > 80%，AI 排期会 75-85% 用 ${dom}，剩下 15-20% 强制次要形式（多样性）`,
+      bg: "#fff8e6", color: "#a67700",
+    };
+    if (domPrev > 0.6) return {
+      text: `主形式 ${dom} 占比 ${(domPrev*100).toFixed(1)}%（60-80%），AI 排期会按数据大致比例排`,
+      bg: "#f6fbe8", color: "#5a6c00",
+    };
+    return {
+      text: `主形式 ${dom} 占比 ${(domPrev*100).toFixed(1)}% < 60%，AI 排期完全按数据真实比例排`,
+      bg: "#f5f5f5", color: "#555",
+    };
+  })();
+  const maxN = byFmt[0]?.[1]?.n ?? 1;
+
+  return (
+    <div>
+      <p className="muted" style={{fontSize: 13, lineHeight: 1.7}}>
+        基于 <b>{data.n_notes?.toLocaleString?.()}</b> 篇高赞笔记（≥{data.min_likes} 赞），
+        看每种 content_format（图文 / 短视频 / 长视频 / 纯文本）的占比和互动表现。
+        <b style={{color: "var(--primary)"}}>AI 排期会按真实库比例分配 — 不再按 platform 硬编码 70/30。</b>
+      </p>
+
+      <div style={{
+        margin: "12px 0", padding: 10, borderRadius: 8,
+        background: policy.bg, borderLeft: `4px solid ${policy.color}`,
+        fontSize: 13, fontWeight: 600, color: policy.color,
+      }}>
+        🤖 AI 排期策略 ：{policy.text}
+      </div>
+
+      <table className="table">
+        <thead>
+          <tr>
+            <th>内容形式</th>
+            <th className="num">笔记数</th>
+            <th className="num">占比</th>
+            <th>分布</th>
+            <th className="num">均赞</th>
+            <th className="num">中位赞</th>
+            <th className="num">P90 赞</th>
+          </tr>
+        </thead>
+        <tbody>
+          {byFmt.map(([fmt, d]) => (
+            <tr key={fmt}>
+              <td>
+                <b>{fmt}</b>
+                {fmt === dom && (
+                  <span className="tag-pill" style={{
+                    marginLeft: 6, fontSize: 10,
+                    background: "var(--primary-soft)", color: "var(--primary)",
+                  }}>主导</span>
+                )}
+              </td>
+              <td className="num">{d.n}</td>
+              <td className="num">{((d.prevalence ?? 0) * 100).toFixed(1)}%</td>
+              <td><MiniBar value={d.n} max={maxN} /></td>
+              <td className="num">{fmtLikes(d.avg_likes ?? 0)}</td>
+              <td className="num">{fmtLikes(d.median_likes ?? 0)}</td>
+              <td className="num">{fmtLikes(d.p90_likes ?? 0)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

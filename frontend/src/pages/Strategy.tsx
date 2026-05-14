@@ -507,6 +507,21 @@ export default function Strategy() {
     if (urlPackId) navigate("/strategy");
   }
 
+  // v0.57: 返回上一步但保留所有状态。reset() 是 nuke 全部重来，这两个
+  // 只切 phase，不动 input/directions/pack — 用户可以来回切。
+  // 如果切回 input 后改了字段重新「出方向」，directions 自然被新结果覆盖。
+  function backToInput() {
+    setPhase("input"); setErr(null); setInfo(null);
+  }
+  function backToDirections() {
+    if (directions.length === 0) {
+      // 没有 directions 在内存里（比如直接访问 /strategy/{packId}）→ 回到 input
+      backToInput();
+      return;
+    }
+    setPhase("directions"); setErr(null); setInfo(null);
+  }
+
   function startNew(useAi = true) {
     setPhase("input"); setPackId(null); setDirections([]);
     setChosenIdx(null); setPack(null); setErr(null); setInfo(null);
@@ -677,7 +692,7 @@ export default function Strategy() {
       {phase === "directions" && (
         <DirectionsList
           directions={directions} chosenIdx={chosenIdx}
-          onPick={pickDirection} onReset={reset}
+          onPick={pickDirection} onReset={reset} onBack={backToInput}
           slotCount={input.cycle_weeks * input.posts_per_week}
         />
       )}
@@ -697,7 +712,8 @@ export default function Strategy() {
       )}
 
       {phase === "pack" && pack && (
-        <PackView pack={pack} onReset={reset} />
+        <PackView pack={pack} onReset={reset} onBack={backToDirections}
+          hasDirections={directions.length > 0} />
       )}
     </div>
   );
@@ -1003,18 +1019,29 @@ function SpecField({label, hint, value, onChange, options}: {
   );
 }
 
-function DirectionsList({directions, chosenIdx, onPick, onReset, slotCount}: {
+function DirectionsList({directions, chosenIdx, onPick, onReset, onBack, slotCount}: {
   directions: StrategicDirectionDTO[];
   chosenIdx: number | null;
   onPick: (i: number) => void;
   onReset: () => void;
+  onBack: () => void;
   slotCount: number;
 }) {
   return (
     <div>
       <div className="spread" style={{marginBottom: 12}}>
         <h2 style={{margin: 0}}>2. 选一个方向继续</h2>
-        <button className="ghost" onClick={onReset}>↺ 重新填表</button>
+        <div className="row" style={{gap: 6}}>
+          <button className="ghost" onClick={onBack}
+            title="返回填表页面，保留方向 — 想重新跑 propose 可改 brief 后再点出方向">
+            ← 返回填表（保留方向）
+          </button>
+          <button className="ghost" onClick={onReset}
+            style={{color: "var(--danger)"}}
+            title="清空所有数据从头开始">
+            🗑️ 清空重来
+          </button>
+        </div>
       </div>
       <p className="muted" style={{fontSize: 13, marginBottom: 16}}>
         AI 团队基于你的初步定位 + 该平台爆款数据，提了 {directions.length} 个差异化方向。
@@ -1080,7 +1107,10 @@ function DirectionsList({directions, chosenIdx, onPick, onReset, slotCount}: {
   );
 }
 
-function PackView({pack, onReset}: {pack: StrategyPackDTO; onReset: () => void}) {
+function PackView({pack, onReset, onBack, hasDirections}: {
+  pack: StrategyPackDTO; onReset: () => void;
+  onBack: () => void; hasDirections: boolean;
+}) {
   // Defensive: a legacy pack from before the resourcer-output coercion fix
   // can have risks_and_mitigations or success_metrics stored as a single
   // JSON-encoded string. .map on a string throws and would blank the
@@ -1148,7 +1178,16 @@ function PackView({pack, onReset}: {pack: StrategyPackDTO; onReset: () => void})
           </div>
         </div>
         <div className="row" style={{gap: 6}}>
-          <button className="secondary" onClick={onReset}>新建策略</button>
+          {hasDirections && (
+            <button className="ghost" onClick={onBack}
+              title="回到方向列表，可换一个方向重新出排期。当前排期保留在内存里。">
+              ← 重新选方向（保留排期）
+            </button>
+          )}
+          <button className="secondary" onClick={onReset}
+            title="清空所有数据从头开始">
+            🆕 新建策略
+          </button>
         </div>
       </div>
 

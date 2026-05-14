@@ -102,10 +102,37 @@ def dna_blurb(dna: dict[str, Any]) -> str:
                 "  · 该库笑点信号弱，主打干货 / 共鸣 / 教程为佳"
             )
 
+    # v0.57: content_format distribution — 让 SCHEDULER 知道这个库实际是
+    # 图文/短视频/长视频/纯文本 哪种为主，而不是按 platform 硬塞 70/30。
+    cf = sections.get("content_format", {}) or {}
+    cf_lines: list[str] = []
+    if cf and cf.get("n_notes"):
+        cf_lines.append(
+            f"  · 高赞笔记 {cf['n_notes']} 篇，dominant={cf.get('dominant_format')} "
+            f"({(cf.get('dominant_prevalence') or 0)*100:.1f}%)"
+        )
+        by_fmt = cf.get("by_format", {})
+        for fmt, d in sorted(by_fmt.items(), key=lambda kv: -kv[1].get("n", 0)):
+            cf_lines.append(
+                f"      · {fmt} ：{d['n']} 篇 ({d['prevalence']*100:.1f}%), "
+                f"avg_likes {d['avg_likes']}, median {d['median_likes']}"
+            )
+        dom_prev = cf.get("dominant_prevalence", 0)
+        if dom_prev > 0.8:
+            cf_lines.append(
+                f"  · ⚠️ 主形式占比 >80%，排期里 75-85% 用 {cf.get('dominant_format')}，"
+                f"剩下 15-20% 强制次要形式（多样性）"
+            )
+        elif dom_prev > 0.6:
+            cf_lines.append("  · 主形式占 60-80%，按数据大致比例排即可")
+        else:
+            cf_lines.append("  · 主形式占比 <60%，完全按数据真实比例排")
+
     parts = []
     if bo_lines: parts.append("【蓝海关键词】\n" + "\n".join(bo_lines))
     if title_lines: parts.append("【Top 标题示例】\n" + "\n".join(title_lines))
     if hook_lines: parts.append("【hook 分布】\n" + "\n".join(hook_lines))
+    if cf_lines: parts.append("【内容形式分布 ：决定 content_format 配比】\n" + "\n".join(cf_lines))
     if humor_lines: parts.append("【笑点/梗/夸张信号 ：决定段子风权重】\n" + "\n".join(humor_lines))
     if demand_lines: parts.append("【用户高频询问】\n" + "\n".join(demand_lines))
     if tag_lines: parts.append("【高表现 tag】\n" + "\n".join(tag_lines))
@@ -172,8 +199,14 @@ TOPICGEN_SYSTEM = """\
 
 每个选题要包含：
 - title：候选标题（按平台风格写，可顺手给 2 个 variants）
-- angle：教程 / 痛点 / 故事 / 工具评测 / 对比 / 感悟 / 数字 / 种草 / 建议 / **段子**
-- hook_type：数字型 / 工具型 / 种草型 / 建议型 / 痛点型 / 对比型 / 教程型 / 故事型 / 问句型 / 列表型 / 感悟型 / **段子型 / 反讽型 / 夸张戏谑型 / 自嘲型 / 玩梗型**
+- angle：教程 / 痛点 / 故事 / 工具评测 / 对比 / 感悟 / 数字 / 种草 / 建议 / **段子 / 科普 / 避雷 / 测评**
+- hook_type：数字型 / 工具型 / 种草型 / 建议型 / 痛点型 / 对比型 / 教程型 / 故事型 / 问句型 / 列表型 / 感悟型 / **段子型 / 反讽型 / 夸张戏谑型 / 自嘲型 / 玩梗型 / 沙雕型 / 避雷型 / 科普型**
+
+⚠️ angle 之间的语义区别（不要混用）：
+- 教程 = 「怎么做」step-by-step；科普 = 「是什么 / 为什么」知识点
+- 痛点 = 「我懂你的崩溃」共鸣；避雷 = 「踩过的坑别再踩」主动警告
+- 工具评测 = 单产品深度测；测评 = 多产品横向打分
+- 段子 = 反讽 / 自嘲 / 夸张戏谑 / 沙雕 / 玩梗 等娱乐化语气
 - outline：3-5 条分点内容大纲（不是写正文，只是骨架）
 - materials_needed：拍这条需要准备什么（截图 / 工具账号 / 真人录屏 / 数据 / 案例）
 - intent：拉新 / 互动 / 转化 / 沉淀
@@ -237,17 +270,18 @@ SCHEDULER_SYSTEM = """\
    - 示例 ：「教程类 13-16 点是上班划水黄金期，DNA 热力图本时段中位赞 +40%」
 5. **每篇必须指定 content_format**（图文 / 短视频 / 长视频 / 直播 / 纯文本），按平台特性混搭。
 
-**平台 content_format 推荐配比**（必须遵守，可按内容主题微调）：
-- xiaohongshu / 小红书：**图文 70% + 短视频 30%**（封面 9:16，60s 内 vlog 引流）
-- douyin / 抖音：**短视频 90% + 直播预告 10%**（15-60s 竖屏脚本）
-- kuaishou / 快手：**短视频 85% + 直播预告 15%**
-- bilibili / B站：**长视频 60% + 短视频 30% + 图文 10%**（横屏，3-15 分钟带章节）
-- youtube：**长视频 80% + 短视频 20%**（Shorts 60s 内 + 长视频带 chapters）
-- reddit：**纯文本 90% + 图文 10%**（英文 markdown）
-- x / twitter：**纯文本 80% + 图文 20%**（thread 长帖）
-- other：图文为主，按内容自然选择
+**content_format 配比 — 数据驱动**（v0.57：硬编码 platform 比例已废弃）：
+读 DNA 里的【内容形式分布】section，按真实库的 `by_format` 数据排：
+  · dominant_prevalence > 80% → 主形式占 75-85%，次要形式强制保 15-20%（多样性，避免单一形式疲劳）
+  · 60% < dominant_prevalence ≤ 80% → 大致按数据比例排
+  · dominant_prevalence ≤ 60% → 完全按数据比例排
 
-**混搭策略**：不要 90% 同一种格式，否则用户疲劳。比如小红书可以 ：2 篇图文 + 1 篇短视频 vlog（哪天活人感强用 vlog）。**每个 slot 要标明 content_format 字段**。
+⚠️ 关键 ：**不要再按 platform 硬塞 70/30** — 即使是 xhs，AcademiCats 库 99.7% 图文，强行加 30% 短视频会逼运营拍他根本不会拍的视频。
+真实数据说什么形式 work，就用什么。
+
+候选 content_format 值 ：图文 / 短视频 / 长视频 / 直播 / 纯文本
+
+**混搭策略**：即使 dominant 是 99% 图文也要给 1-2 篇短视频或纯文本，强制多样性，防止账号格式过于单调。**每个 slot 要标明 content_format 字段**。
 
 **重要**：这一步只输出结构（标题/大纲/材料/时段/格式），**不要写正文**。正文会在下一步由专门的写手按 content_format 写不同的格式。
 
