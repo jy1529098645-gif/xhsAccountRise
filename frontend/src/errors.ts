@@ -65,9 +65,27 @@ export function humaniseError(e: unknown): string {
     return "AI 调用超时，可能模型那边在排队。稍等再点一次。";
   }
 
-  // Quota / billing
-  if (/Insufficient Balance|quota|rate.?limit|429/i.test(raw)) {
-    return "API 配额不够（DeepSeek 或 OpenAI 账户余额不足 / 触发限速）。去对应平台充值或换 LLM 配置。";
+  // v0.62.7 ：把「余额不足」和「限速」分开 — 之前合在一条提示，用户
+  // 充了钱也看到「去充值」，把真问题（限速）掩盖了。
+
+  // DeepSeek 402 余额不足（错误体包含 "Insufficient Balance"）
+  if (/Insufficient Balance|insufficient_balance|余额不足/i.test(raw)) {
+    return "💰 DeepSeek 余额不足 — 去 platform.deepseek.com 充值。\n（如果你刚充值，等 1-2 分钟让账户同步再重试。）";
+  }
+
+  // OpenAI 账号 quota 用完（即使开了自动续费，monthly hard cap 仍可能触发）
+  if (/insufficient_quota|exceeded.*quota|You exceeded your current quota/i.test(raw)) {
+    return "💰 OpenAI quota 用完 — 检查 platform.openai.com/usage：\n  · 月度 hard limit 撞顶 → 提额\n  · payment method 失败 → 改卡\n  · 自动续费没触发 → 手动充";
+  }
+
+  // 限速（429 + rate-limit 关键词）— 多 agent 并发常见，不是钱的问题
+  if (/rate.?limit|rate_limit_exceeded|Too Many Requests|429/i.test(raw)) {
+    return "⏳ API 限速触发（RPM 或 TPM 超了，不是余额）。\n常见原因 ：起号策略 / 出稿同时并发了 3-5 家 LLM 把请求打爆。\n→ 等 30-60s 直接 ↻ 重试；或在「设置」里把并发模型砍到 1-2 家。";
+  }
+
+  // 模糊的 quota 提示（找不到具体类型时兜底）
+  if (/quota/i.test(raw)) {
+    return "API quota 报错（具体类型分不清）。原始信息 ：\n" + (raw.length > 200 ? raw.slice(0, 200) + "…" : raw);
   }
   if (/401|403|invalid.*api.*key/i.test(raw)) {
     return "API key 不对或失效。检查后端 .env 里的 ANTHROPIC_API_KEY / OPENAI_API_KEY / DEEPSEEK_API_KEY 并重启后端。";

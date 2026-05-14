@@ -16,6 +16,7 @@ Key features:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any
@@ -27,11 +28,38 @@ from .generators.base import Generator
 # gpt-4o is universally available without org verification.
 _OPENAI_FALLBACK_CHAIN: tuple[str, ...] = ("gpt-4o",)
 
+# v0.62.7 ：429 rate limit retry. Multi-agent pipelines fire 3-5 LLMs in
+# parallel — when one provider's RPM cap trips, the whole job dies. Soft
+# retry with exponential backoff so a single throttle doesn't bring down
+# Strategy expand / Composer run.
+_RATE_LIMIT_RETRY_DELAYS = (3.0, 8.0, 20.0)  # seconds; total wait ≤ 31s
+
 
 def _mask_secret(text: str) -> str:
     """Strip secret tokens from error text."""
     return re.sub(r"(sk-(?:ant-|proj-)?\w{6})\w+", r"\1***",
                   re.sub(r"(gho_)\w+", r"\1***", text or ""))
+
+
+def _is_rate_limit_error(err: Exception) -> bool:
+    """Detect transient 429 / rate-limit errors across SDKs (OpenAI/Anthropic/DeepSeek).
+
+    Matches by string because all 3 SDKs surface the status code + reason in
+    the exception str, and we don't want SDK-specific imports here.
+
+    NOT matched ：402 Insufficient Balance, 401/403 auth errors — those are
+    permanent, retrying just burns time.
+    """
+    s = str(err).lower()
+    if "insufficient balance" in s or "insufficient_balance" in s:
+        return False  # 402 余额不足，重试无意义
+    if "insufficient_quota" in s:
+        return False  # OpenAI quota 撞月度顶，重试无意义
+    return any(t in s for t in (
+        "rate limit", "rate_limit", "ratelimit",
+        "too many requests",
+        "429",
+    ))
 
 
 def _coerce_json(text: str) -> dict[str, Any]:
@@ -86,29 +114,31 @@ async def call_for_json(
 
     # ---- Anthropic / Claude ---------------------------------------------
     if family == "claude":
-        if tool_name and schema:
-            resp = await client.messages.create(
+        async def _claude_call():
+            if tool_name and schema:
+                return await client.messages.create(
+                    model=gen.model, max_tokens=max_tokens, system=system,
+                    messages=[{"role": "user", "content": user}],
+                    tools=[{
+                        "name": tool_name,
+                        "description": "Submit structured JSON.",
+                        "input_schema": schema,
+                    }],
+                    tool_choice={"type": "tool", "name": tool_name},
+                )
+            return await client.messages.create(
                 model=gen.model, max_tokens=max_tokens, system=system,
-                messages=[{"role": "user", "content": user}],
-                tools=[{
-                    "name": tool_name,
-                    "description": "Submit structured JSON.",
-                    "input_schema": schema,
+                messages=[{
+                    "role": "user",
+                    "content": user + "\n\n严格输出一个 JSON 对象，不要任何其它文字。",
                 }],
-                tool_choice={"type": "tool", "name": tool_name},
             )
+        resp = await _with_rate_limit_retry(family, _claude_call)
+        if tool_name and schema:
             for block in resp.content:
                 if getattr(block, "type", None) == "tool_use":
                     return block.input
             raise RuntimeError("no tool_use block in Claude response")
-        # Plain JSON via prose
-        resp = await client.messages.create(
-            model=gen.model, max_tokens=max_tokens, system=system,
-            messages=[{
-                "role": "user",
-                "content": user + "\n\n严格输出一个 JSON 对象，不要任何其它文字。",
-            }],
-        )
         text = "".join(
             b.text for b in resp.content if getattr(b, "type", None) == "text"
         )
@@ -126,32 +156,56 @@ async def call_for_json(
     ]
 
     for model in models_to_try:
-        try:
+        async def _oai_call(m=model):
             try:
-                resp = await client.chat.completions.create(
-                    model=model, messages=messages,
+                return await client.chat.completions.create(
+                    model=m, messages=messages,
                     response_format={"type": "json_object"},
                     max_tokens=max_tokens,
                 )
             except Exception as fmt_err:
-                # Some models don't accept response_format; retry without it.
                 msg = str(fmt_err)
                 if "response_format" in msg or "json_object" in msg:
-                    resp = await client.chat.completions.create(
-                        model=model, messages=messages, max_tokens=max_tokens,
+                    return await client.chat.completions.create(
+                        model=m, messages=messages, max_tokens=max_tokens,
                     )
-                else:
-                    raise
-            # If we ended up using a fallback, pin it for the rest of the run
+                raise
+        try:
+            resp = await _with_rate_limit_retry(family, _oai_call)
             if model != gen.model:
                 gen.model = model
             return _coerce_json(resp.choices[0].message.content or "{}")
         except Exception as e:
             last_err = e
             if _is_model_access_error(e) and len(models_to_try) > 1:
-                continue  # try next fallback
+                continue
             raise RuntimeError(_mask_secret(f"{family} call failed: {e}"))
 
     raise RuntimeError(
         _mask_secret(f"all models exhausted ({models_to_try!r}): {last_err}")
     )
+
+
+async def _with_rate_limit_retry(family: str, fn):
+    """Retry transient 429s with exponential backoff. Other errors bubble up.
+
+    Used by call_for_json wrappers around the actual SDK invocations. Total
+    retry budget ~31s ：3s, 8s, 20s. After that the error surfaces to user
+    (frontend humaniser will say 「限速、等一会再点」 instead of 「余额不足」).
+    """
+    last_err: Exception | None = None
+    for attempt, delay in enumerate((0.0,) + _RATE_LIMIT_RETRY_DELAYS):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            return await fn()
+        except Exception as e:
+            last_err = e
+            if not _is_rate_limit_error(e):
+                raise
+            if attempt == len(_RATE_LIMIT_RETRY_DELAYS):
+                # exhausted retries — let the 429 bubble up so the frontend
+                # gets the 「等一会」 message instead of pretending it worked
+                raise
+            # else loop and wait the next delay
+    raise last_err if last_err else RuntimeError(f"{family} no response")
