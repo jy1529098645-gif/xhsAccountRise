@@ -7,7 +7,7 @@ import ProgressTimeline, { Stage as TimelineStage } from "../components/Progress
 import NextStepCard from "../components/NextStepCard";
 import { humaniseError, humaniseErrorAsync } from "../errors";
 import { isAborted, cancelBackendJob } from "../api";
-import { startJob, getJob, cancelJob as cancelLocalJob, useJob } from "../lib/jobs";
+import { startJob, getJob, cancelJob as cancelLocalJob, clearJob as clearLocalJob, useJob } from "../lib/jobs";
 import { LLM_CATALOG } from "../catalog";
 import type {
   AccountInputDTO, Library, Platform, StrategicDirectionDTO, StrategyPackDTO,
@@ -140,6 +140,7 @@ export default function Strategy() {
   const [resourcerSpec, setResourcerSpec] = useState("claude:opus");
   const [autofill, setAutofill] = useState<AutofillResult | null>(null);
   const [autofillErr, setAutofillErr] = useState<string | null>(null);
+  const [proposeSeen, setProposeSeen] = useState<number>(0);  // SSE progress: how many directions visible so far
   const [lastFailedAction, setLastFailedAction] = useState<
     { kind: "autofill" } | { kind: "propose" } | { kind: "expand"; idx: number } | null
   >(null);
@@ -308,13 +309,18 @@ export default function Strategy() {
     // user-flow fix: forcing users to write positioning before AI suggests
     // any was illogical.
     setErr(null); setInfo(null); setPhase("loading-propose");
+    setProposeSeen(0);
     const proposeJob = startJob<any>(
       "propose:current", "propose",
-      (signal) => api.proposeStrategy({
-        ...input,
-        platform: platform,
-        positioner_spec: positionerSpec,
-      }, signal),
+      (signal) => api.proposeStrategyStream(
+        { ...input, platform: platform, positioner_spec: positionerSpec },
+        (kind, data) => {
+          if (kind === "progress" && typeof data?.n_seen === "number") {
+            setProposeSeen(data.n_seen);
+          }
+        },
+        signal,
+      ),
     );
     activeJobIdRef.current = "propose:current";
     try {
@@ -323,6 +329,7 @@ export default function Strategy() {
       setDirections(res.directions);
       setLastFailedAction(null);
       setPhase("directions");
+      setProposeSeen(0);
       // Persist URL so reload/bookmark works
       navigate(`/strategy/${res.pack_id}`, { replace: true });
       api.listStrategies().then(setHistory).catch(() => {});
@@ -340,10 +347,22 @@ export default function Strategy() {
     }
   }
 
-  async function pickDirection(idx: number) {
+  async function pickDirection(idx: number, restart: boolean = false) {
     if (!packId) return;
     setChosenIdx(idx); setErr(null);
-    setInfo("AI 正在生成 N 周完整排期 + 材料清单（约 60-180s）…");
+    // If a job for this pack is already running locally, cancel it before
+    // starting a new one (the backend restart=true also handles this on
+    // its side; we do both for snappy UX).
+    const existingId = `expand:${packId}`;
+    const existing = getJob(existingId);
+    if (existing && existing.status === "running") {
+      cancelLocalJob(existingId);
+      clearLocalJob(existingId, true);  // force-clear so startJob doesn't dedupe
+      restart = true;
+    }
+    setInfo(restart
+      ? "🔄 取消之前的，重新跑（约 60-90s）…"
+      : "AI 正在生成 N 周完整排期 + 材料清单（约 60-90s）…");
     setPhase("loading-expand");
     activeJobIdRef.current = `expand:${packId}`;
     const expandJob = startJob<any>(
@@ -352,8 +371,9 @@ export default function Strategy() {
         topicgen_spec: topicgenSpec,
         scheduler_spec: schedulerSpec,
         resourcer_spec: resourcerSpec,
+        restart,
       }, signal),
-      { pack_id: packId, idx },
+      { pack_id: packId, idx, restart },
     );
     try {
       const res: any = await expandJob.promise;
@@ -586,11 +606,18 @@ export default function Strategy() {
           <div className="spread" style={{alignItems: "flex-start"}}>
             <div>
               <h2 style={{margin: "0 0 4px"}}>🤖 AI 在为你拟候选方向</h2>
-              <p className="muted" style={{margin: 0}}>读 brief → 解析爆款 DNA → 输出 8-12 个差异化定位</p>
+              <p className="muted" style={{margin: 0}}>流式输出 · 读 brief → 解析 DNA → 8-12 个方向边写边出</p>
             </div>
             <button className="ghost" onClick={pauseCurrent}
               style={{padding: "6px 12px", fontSize: 13}}>⏸ 暂停</button>
           </div>
+          {proposeSeen > 0 && (
+            <div className="banner info" style={{marginTop: 10,
+                                                  background: "var(--primary-soft)",
+                                                  borderColor: "var(--primary)"}}>
+              ✨ 已生成 <b>{proposeSeen}</b> 个方向中…（目标 8-12 个）
+            </div>
+          )}
           <ProgressTimeline stages={PROPOSE_STAGES} currentIndex={-1} auto />
         </div>
       )}

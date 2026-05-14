@@ -156,6 +156,151 @@ async def propose(inp: AccountInput, positioner_spec: str = "claude:sonnet") -> 
     }
 
 
+# ---- Phase 1 streaming variant ------------------------------------------
+# Same prompt + persistence as propose(), but uses Claude's text-streaming
+# API and yields SSE-formatted bytes. Frontend renders directions
+# incrementally as they appear. Compared to the blocking variant the
+# wall-clock isn't faster, but perceived latency drops a lot (first
+# direction visible in ~5-10s instead of waiting 30-50s for the whole
+# blob).
+#
+# Note: not using tool_use here because streaming tool_use deltas is
+# clunkier — we just ask the LLM for prose JSON and parse on completion.
+
+async def propose_stream(
+    inp: AccountInput,
+    positioner_spec: str = "claude:sonnet",
+):
+    """Async generator yielding SSE-formatted bytes ('event: ...\\ndata: ...\\n\\n').
+
+    Events:
+      - 'delta'    {text}              text chunk arrived
+      - 'progress' {n_complete, total} estimated complete direction count
+      - 'complete' {pack_id, directions, elapsed_s}  done; full structured result
+      - 'error'    {message}           irrecoverable failure
+    """
+    db.apply_migrations(verbose=False)
+    pack_id = uuid.uuid4().hex[:16]
+    t0 = time.time()
+    lib_id = library.active_lib_id()
+    dna = _latest_dna_payload()
+
+    from ..insight.pipeline import full_reference_block_for_prompt
+    report_ctx = full_reference_block_for_prompt()
+    report_block = f"\n\n{report_ctx}\n" if report_ctx else ""
+
+    user_text = (
+        f"【用户初步定位】\n{prompts.input_blurb(inp)}"
+        f"{report_block}\n"
+        f"【该平台爆款 DNA】\n{prompts.dna_blurb(dna)}\n\n"
+        f"输出 8-12 个差异化的账号定位方向（宁多勿少）。\n"
+        f"**直接输出一个 JSON 对象** ：{{\"directions\": [ ... ]}}，每条方向格式参考 system prompt。"
+        f" 不要任何额外文字、解释、markdown 包裹。"
+        + ("\n\n⭐ 报告强约束（同 propose 非流式版）：每个独到观点都要在方向里找到落地点 ；"
+           "矛盾观点保留两种 ；70% 候选可溯源到报告。"
+           if report_ctx else "")
+    )
+
+    gen = registry.build(positioner_spec)[0]
+    try:
+        client = gen._ensure_client()  # noqa: SLF001
+    except Exception as e:
+        yield f"event: error\ndata: {json.dumps({'message': str(e)}, ensure_ascii=False)}\n\n".encode()
+        return
+
+    full_text = ""
+    last_progress = -1
+    try:
+        async with client.messages.stream(
+            model=gen.model,
+            max_tokens=8000,
+            system=prompts.POSITIONER_SYSTEM,
+            messages=[{"role": "user", "content": user_text}],
+        ) as stream:
+            async for chunk in stream.text_stream:
+                if not chunk:
+                    continue
+                full_text += chunk
+                yield (
+                    f"event: delta\ndata: "
+                    + json.dumps({"text": chunk}, ensure_ascii=False)
+                    + "\n\n"
+                ).encode("utf-8")
+                # Lightweight progress: count complete `"name": "..."` keys
+                # which signal one direction's preamble is done.
+                n = full_text.count('"name"')
+                if n != last_progress and n > 0:
+                    last_progress = n
+                    yield (
+                        f"event: progress\ndata: "
+                        + json.dumps({"n_seen": n}, ensure_ascii=False)
+                        + "\n\n"
+                    ).encode("utf-8")
+    except Exception as e:
+        yield f"event: error\ndata: {json.dumps({'message': repr(e)}, ensure_ascii=False)}\n\n".encode()
+        return
+
+    # Parse the accumulated JSON.
+    parsed: dict[str, Any] = {}
+    try:
+        s, e = full_text.find("{"), full_text.rfind("}")
+        if s != -1 and e != -1 and e > s:
+            parsed = json.loads(full_text[s:e + 1])
+    except Exception as e:
+        yield (
+            f"event: error\ndata: "
+            + json.dumps({"message": f"JSON parse failed: {e!r}", "raw": full_text[:500]},
+                         ensure_ascii=False)
+            + "\n\n"
+        ).encode()
+        return
+
+    raw_directions = parsed.get("directions") or []
+    directions: list[StrategicDirection] = []
+    for d in raw_directions:
+        if not isinstance(d, dict):
+            continue
+        directions.append(StrategicDirection(
+            name=str(d.get("name", ""))[:48],
+            positioning_statement=str(d.get("positioning_statement", "")),
+            target_audience=str(d.get("target_audience", "")),
+            hook_angles=[str(x) for x in (d.get("hook_angles") or [])],
+            differentiator=str(d.get("differentiator", "")),
+            risk=str(d.get("risk", "")),
+            score=float(d.get("score") or 0),
+            why_works=str(d.get("why_works", "")),
+        ))
+
+    elapsed = int(time.time() - t0)
+    now = int(time.time())
+    from .. import project as _project
+    pid = _project.active_project_id()
+    with db.connect() as con:
+        con.execute(
+            "INSERT INTO studio_strategies"
+            " (pack_id, library_id, platform, created_at, updated_at, status,"
+            "  input_json, directions_json, elapsed_s, project_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                pack_id, lib_id, inp.platform, now, now, "directions",
+                json.dumps(asdict(inp), ensure_ascii=False),
+                json.dumps([asdict(d) for d in directions], ensure_ascii=False),
+                elapsed, pid,
+            ),
+        )
+
+    payload = {
+        "pack_id": pack_id,
+        "directions": [asdict(d) for d in directions],
+        "elapsed_s": elapsed,
+    }
+    yield (
+        f"event: complete\ndata: "
+        + json.dumps(payload, ensure_ascii=False)
+        + "\n\n"
+    ).encode("utf-8")
+
+
 # ---- Phase 2: expand ----------------------------------------------------
 
 _TOPICS_SCHEMA = {
@@ -257,6 +402,11 @@ async def expand(
     resourcer_spec: str = "claude:sonnet",
     # Per-slot body drafts (300-600 chars) — Sonnet plenty.
     drafter_spec: str = "claude:sonnet",
+    # If True, cancel any in-flight expand for the same pack_id and start
+    # fresh. Without this, the idempotency guard would 409 the duplicate
+    # POST. Useful when user clicked the direction again because the
+    # previous run was stuck or producing unsatisfactory results.
+    restart: bool = False,
 ) -> dict[str, Any]:
     """Phase 2: turn a chosen direction into a full StrategyPack."""
     db.apply_migrations(verbose=False)
@@ -277,20 +427,50 @@ async def expand(
     lib_id = row["library_id"] or library.active_lib_id()
     platform = row["platform"] or inp.platform
 
+    from .. import jobs as _jobs
+    job_id = f"expand:{pack_id}"
+
     # Idempotency guard: reject a duplicate expand if one is already in flight.
     # Without this, repeated clicks / network-retry loops accumulate parallel
     # LLM call storms (12 body-drafters × N concurrent expands) that hammer
     # Anthropic rate limits and wedge uvicorn's connection pool.
+    #
+    # When restart=True, cancel the existing run first + drop its partial
+    # state so this attempt starts truly fresh (no leftover topic-pool or
+    # half-written drafter results from the previous attempt's checkpoint).
+    if restart:
+        try:
+            _jobs.cancel(job_id)
+        except Exception:
+            pass
+        # Wait a moment for the cancelled task's cleanup to land in DB
+        # so the idempotency check below doesn't see 'expanding'.
+        await asyncio.sleep(2)
+        # Clear partial state so we don't accidentally resume from a stale
+        # checkpoint when the user explicitly asked for a restart.
+        try:
+            with db.connect() as con:
+                con.execute(
+                    "UPDATE studio_strategies"
+                    " SET partial_state_json = NULL, paused_at_stage = NULL,"
+                    " status = 'directions', updated_at = ?"
+                    " WHERE pack_id = ?",
+                    (int(time.time()), pack_id),
+                )
+        except Exception:
+            pass
+
     with db.connect(read_only=True) as con:
         cur_row = con.execute(
             "SELECT status, updated_at FROM studio_strategies WHERE pack_id = ?",
             (pack_id,),
         ).fetchone()
-    if cur_row and cur_row["status"] == "expanding":
+    if cur_row and cur_row["status"] == "expanding" and not restart:
         age_s = int(time.time()) - int(cur_row["updated_at"] or 0)
         if age_s < 8 * 60:  # 8 min stale-protect window
             raise RuntimeError(
                 f"expand 已经在跑了（已 {age_s}s）。前端会自动 poll 等结果，请不要重复点。"
+                f" 如果你想从头重跑，传 restart=true。"
             )
 
     # Mark as 'expanding' so the frontend can detect "still in progress" if

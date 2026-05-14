@@ -169,10 +169,12 @@ export function cancelJob(id: string): boolean {
   return true;
 }
 
-/** Remove a finished job from the registry. */
-export function clearJob(id: string): void {
+/** Remove a job from the registry. Refuses to drop a live one unless
+ * force=true (the caller has already cancelled and wants the slot free
+ * so startJob() with the same id won't dedupe). */
+export function clearJob(id: string, force: boolean = false): void {
   const job = _jobs.get(id);
-  if (job && job.status === "running") return; // refuse to drop a live one
+  if (job && job.status === "running" && !force) return;
   _jobs.delete(id);
   notify();
 }

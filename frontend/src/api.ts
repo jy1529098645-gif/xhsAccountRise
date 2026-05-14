@@ -395,7 +395,63 @@ export const api = {
     }>("/api/strategy/autofill", opts ?? {}, signal),
   proposeStrategy: (req: Partial<AccountInputDTO> & { positioning: string; target_audience: string; positioner_spec?: string }, signal?: AbortSignal) =>
     postJson<StrategyProposeResult>("/api/strategy/propose", req, signal),
-  expandStrategy: (packId: string, chosenIdx: number, opts?: { topicgen_spec?: string; scheduler_spec?: string; resourcer_spec?: string }, signal?: AbortSignal) =>
+
+  /** Streaming variant of proposeStrategy.
+   * onEvent fires for each SSE event ('delta' / 'progress' / 'complete' / 'error').
+   * Returns the final StrategyProposeResult (resolved from the 'complete' event)
+   * or throws on 'error'. */
+  proposeStrategyStream: async (
+    req: Partial<AccountInputDTO> & { positioning: string; target_audience: string; positioner_spec?: string },
+    onEvent: (kind: string, data: any) => void,
+    signal?: AbortSignal,
+  ): Promise<StrategyProposeResult> => {
+    const backend = backendUrl();
+    if (!backend) throw new HttpError(0, "需要本地后端");
+    const res = await fetch(`${backend}/api/strategy/propose/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
+      body: JSON.stringify(req),
+      signal,
+    });
+    if (!res.ok || !res.body) {
+      const t = await res.text().catch(() => "");
+      throw new HttpError(res.status, `propose stream → ${res.status}: ${t.slice(0, 400)}`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let result: StrategyProposeResult | null = null;
+    let lastError: string | null = null;
+
+    // Parse SSE: events delimited by blank line; lines 'event: X' + 'data: Y'.
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      // Pull complete event blocks (delimited by \n\n).
+      let idx: number;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const block = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        let kind = "message";
+        const dataLines: string[] = [];
+        for (const line of block.split("\n")) {
+          if (line.startsWith("event:")) kind = line.slice(6).trim();
+          else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+        }
+        const dataStr = dataLines.join("\n");
+        let data: any = dataStr;
+        try { data = JSON.parse(dataStr); } catch { /* keep raw */ }
+        onEvent(kind, data);
+        if (kind === "complete") result = data as StrategyProposeResult;
+        if (kind === "error") lastError = data?.message ?? "stream error";
+      }
+    }
+    if (lastError) throw new HttpError(500, lastError);
+    if (!result) throw new HttpError(500, "stream ended without complete event");
+    return result;
+  },
+  expandStrategy: (packId: string, chosenIdx: number, opts?: { topicgen_spec?: string; scheduler_spec?: string; resourcer_spec?: string; restart?: boolean }, signal?: AbortSignal) =>
     postJson<StrategyExpandResult>(`/api/strategy/${packId}/expand`, { chosen_direction_idx: chosenIdx, ...opts }, signal),
   listStrategies: () => getJson<StrategyListItem[]>("/api/strategy", "strategies.json").catch(() => [] as StrategyListItem[]),
   getStrategy: (packId: string) => getJson<StrategyDetail>(`/api/strategy/${packId}`),

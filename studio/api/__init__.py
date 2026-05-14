@@ -30,7 +30,7 @@ from typing import Any
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .. import config, db, library, project
@@ -919,6 +919,7 @@ class StrategyExpandRequest(BaseModel):
     scheduler_spec: str = "claude:sonnet"
     resourcer_spec: str = "claude:sonnet"
     drafter_spec: str = "claude:sonnet"
+    restart: bool = False  # cancel any in-flight expand for this pack + restart fresh
 
 
 class StrategyAutofillRequest(BaseModel):
@@ -974,6 +975,31 @@ async def strategy_propose(req: StrategyInput) -> dict[str, Any]:
     return result
 
 
+@app.post("/api/strategy/propose/stream")
+async def strategy_propose_stream(req: StrategyInput):
+    """Same as /api/strategy/propose but streams the LLM's output via SSE.
+    First direction visible in ~5-10s instead of blocking the whole 30-50s.
+    See pipeline.propose_stream for event format."""
+    plat = req.platform
+    if not plat:
+        meta = library.get_meta(library.active_lib_id())
+        plat = meta.platform if meta else "xiaohongshu"
+    inp = AccountInput(
+        positioning=req.positioning,
+        target_audience=req.target_audience,
+        cycle_weeks=req.cycle_weeks,
+        posts_per_week=req.posts_per_week,
+        personal_strengths=req.personal_strengths,
+        constraints=req.constraints,
+        platform=library.normalise_platform(plat),
+    )
+    return StreamingResponse(
+        strategy_pipeline.propose_stream(inp, positioner_spec=req.positioner_spec),
+        media_type="text/event-stream",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
+
+
 @app.post("/api/strategy/{pack_id}/expand")
 async def strategy_expand(pack_id: str, req: StrategyExpandRequest) -> dict[str, Any]:
     try:
@@ -983,6 +1009,7 @@ async def strategy_expand(pack_id: str, req: StrategyExpandRequest) -> dict[str,
             scheduler_spec=req.scheduler_spec,
             resourcer_spec=req.resourcer_spec,
             drafter_spec=req.drafter_spec,
+            restart=req.restart,
         )
     except LookupError as e:
         raise HTTPException(404, str(e))
