@@ -584,7 +584,7 @@ class ComposeRequest(BaseModel):
     niche: str = ""
     extra_constraints: str = ""
     platform: str | None = None  # auto-inherit from active library if None
-    strategist_spec: str = "claude:opus"
+    strategist_spec: str = "claude:sonnet"
     drafter_spec: str = "claude:sonnet,deepseek,openai"
     critic_spec: str = "claude:sonnet,deepseek"
     refiner_spec: str = "claude:sonnet"
@@ -896,7 +896,7 @@ class StrategyInput(BaseModel):
     personal_strengths: str = ""
     constraints: str = ""
     platform: str | None = None
-    positioner_spec: str = "claude:opus"
+    positioner_spec: str = "claude:sonnet"
 
 
 class StrategyExpandRequest(BaseModel):
@@ -912,7 +912,7 @@ class StrategyAutofillRequest(BaseModel):
     constraints_hint: str = ""
     claude_spec: str = "claude:sonnet"
     openai_spec: str = "openai"
-    moderator_spec: str = "claude:opus"
+    moderator_spec: str = "claude:sonnet"
 
 
 @app.post("/api/strategy/autofill")
@@ -1107,7 +1107,7 @@ def list_published_drafts(library_id: str | None = None) -> list[dict[str, Any]]
 class RetroAnalyzeRequest(BaseModel):
     draft_ids: list[str] | None = None
     library_id: str | None = None
-    model_spec: str = "claude:opus"
+    model_spec: str = "claude:sonnet"
 
 
 @app.post("/api/retrospective/analyze")
@@ -1163,7 +1163,7 @@ def list_strategy_performance(pack_id: str) -> list[dict[str, Any]]:
 
 class StrategyIterateRequest(BaseModel):
     feedback_id: str
-    iterator_spec: str = "claude:opus"
+    iterator_spec: str = "claude:sonnet"
 
 
 @app.post("/api/strategy/{pack_id}/iterate")

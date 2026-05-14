@@ -27,14 +27,20 @@ export default function ConnectionBanner() {
   useEffect(() => {
     let cancel = false;
     async function tick() {
+      if (document.hidden) return;
       const url = backendUrl();
       if (!url) { if (!cancel) setStatus("down"); return; }
       const h = await api.health();
       if (!cancel) setStatus(h.ok ? "ok" : "down");
     }
     tick();
-    const t = setInterval(tick, 8000);
-    return () => { cancel = true; clearInterval(t); };
+    const t = setInterval(tick, 20_000);  // was 8s — too aggressive
+    function onVisible() { if (!document.hidden) tick(); }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancel = true; clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
 
   if (status !== "down") return null;

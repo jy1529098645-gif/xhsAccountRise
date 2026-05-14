@@ -109,16 +109,19 @@ def _build_dna_context(dna: dict[str, Any]) -> str:
         ))
 
     # ---- Raw-content snapshot ------------------------------------------
-    # Always include schema + actual data samples. AIs need to see the
-    # real content, not just DNA-derived statistics.
+    # Show schema + a handful of top-performing samples per table. We used
+    # to dump 20+ rows per table with full JSON; that ballooned every prompt
+    # to 60-70 KB / 20k+ input tokens and was the #1 cause of insight calls
+    # taking 250s. Now ~3-5k chars total.
     raw = dna.get("raw_schema") or {}
     raw_tables = raw.get("tables") or []
     if raw_tables:
         sch_lines: list[str] = []
-        for tbl in raw_tables[:6]:
+        # Only the top 3 tables (was 6) — most libs only have 1-2 with notes.
+        for tbl in raw_tables[:3]:
             cols = ", ".join(
                 f"{c['name']}({c.get('type','')})"
-                for c in (tbl.get("columns") or [])[:20]
+                for c in (tbl.get("columns") or [])[:12]   # was 20
             )
             header = f"━━━ 表 `{tbl['name']}` ({tbl.get('row_count', 0)} 行)"
             if tbl.get("engagement_col"):
@@ -128,30 +131,33 @@ def _build_dna_context(dna: dict[str, Any]) -> str:
 
             aggs = tbl.get("aggregates") or {}
             if aggs:
-                sch_lines.append("  aggregate stats:")
-                for cn, a in list(aggs.items())[:8]:
-                    if "avg" in a:  # numeric
-                        sch_lines.append(
-                            f"    · {cn}: n={a.get('non_null')} avg={a.get('avg')} "
-                            f"min={a.get('min')} max={a.get('max')}"
-                        )
-                    else:  # text
-                        sch_lines.append(
-                            f"    · {cn}: distinct={a.get('distinct')} "
-                            f"avg_len={a.get('avg_len')}"
-                        )
+                key_stats = []
+                for cn, a in list(aggs.items())[:5]:   # was 8
+                    if "avg" in a:
+                        key_stats.append(f"{cn}: avg={a.get('avg')} max={a.get('max')}")
+                    else:
+                        key_stats.append(f"{cn}: distinct={a.get('distinct')}")
+                if key_stats:
+                    sch_lines.append("  stats: " + " · ".join(key_stats))
 
-            top = tbl.get("top_rows") or []
+            # Only top 5 rows (was unbounded). Trim each row's values to 200
+            # chars so a single 8000-char title field doesn't explode prompt.
+            def _trim_row(row: dict) -> dict:
+                out = {}
+                for k, v in row.items():
+                    if isinstance(v, str) and len(v) > 200:
+                        out[k] = v[:200] + "…"
+                    else:
+                        out[k] = v
+                return out
+
+            top = (tbl.get("top_rows") or [])[:5]   # was unbounded
             if top:
-                sch_lines.append(f"  ── 按 {tbl['engagement_col']} 排序的 top {len(top)} 行 ──")
+                sch_lines.append(f"  ── top {len(top)} 行 ──")
                 for i, r in enumerate(top, 1):
-                    sch_lines.append(f"    [#{i}] " + json.dumps(r, ensure_ascii=False))
-
-            samples = tbl.get("samples") or []
-            if samples:
-                sch_lines.append(f"  ── 随机/前 {len(samples)} 行样本 ──")
-                for i, r in enumerate(samples, 1):
-                    sch_lines.append(f"    [{i}] " + json.dumps(r, ensure_ascii=False))
+                    sch_lines.append(f"    [#{i}] " + json.dumps(_trim_row(r), ensure_ascii=False))
+            # Skip the random-sample block entirely — top_rows is enough
+            # signal, and it was the bulk of the 70 KB context.
         parts.append("【原始数据快照（真实数据，请直接看这里下结论）】\n"
                      + "\n".join(sch_lines))
 

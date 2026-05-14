@@ -80,7 +80,7 @@ _DIRECTIONS_SCHEMA = {
 }
 
 
-async def propose(inp: AccountInput, positioner_spec: str = "claude:opus") -> dict[str, Any]:
+async def propose(inp: AccountInput, positioner_spec: str = "claude:sonnet") -> dict[str, Any]:
     """Phase 1: propose strategic directions. Persists a 'directions' pack."""
     db.apply_migrations(verbose=False)
     pack_id = uuid.uuid4().hex[:16]

@@ -42,16 +42,15 @@ from .synthesizer import SynthesizerAgent
 
 @dataclass
 class PipelineConfig:
-    # LLM tiers — opus reserved for "needs reasoning + finality", sonnet for
-    # bulk / mechanical work. Cuts cost ~50% and runtime ~30% with no quality
-    # loss on the things sonnet handles fine (revision passes / scheduling /
-    # consolidation).
-    strategist_spec: str = "claude:opus"                # strategic decisions → opus
-    drafter_spec: str = "claude:sonnet,deepseek,openai"  # creative bulk → sonnet
-    critic_spec: str = "claude:sonnet,deepseek"          # already sonnet
-    refiner_spec: str = "claude:sonnet"                  # rewrite-on-feedback → sonnet
-    synthesizer_spec: str = "claude:opus"                # final fusion → opus
-    planner_spec: str = "claude:sonnet"                  # publish schedule → sonnet
+    # LLM tiers — Opus reserved ONLY for the final consumer-facing fusion.
+    # Everything else is fast-mid (Sonnet / cheaper). Pre-rebalance the
+    # average compose call burned ~6× Opus calls; now it's 1.
+    strategist_spec: str = "claude:sonnet"               # strategic planning, Sonnet is plenty
+    drafter_spec: str = "claude:sonnet,deepseek,openai"  # creative bulk
+    critic_spec: str = "claude:sonnet,deepseek"          # scoring + critique
+    refiner_spec: str = "claude:sonnet"                  # rewrite on feedback
+    synthesizer_spec: str = "claude:opus"                # FINAL user-facing fusion — keep Opus
+    planner_spec: str = "claude:sonnet"                  # publish schedule, mechanical
     k_refs: int = 8
     n_comments: int = 15
     top_hooks: int = 6

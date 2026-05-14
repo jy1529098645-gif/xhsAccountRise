@@ -157,11 +157,11 @@ _CONSENSUS_SCHEMA = {
 async def autofill(
     personal_hint: str = "",
     constraints_hint: str = "",
-    # Autofill = quick first draft of the form. Sonnet handles it well;
-    # moderator that fuses the two still uses Opus for the final call.
+    # Autofill = quick first draft of the form. Sonnet for everything;
+    # the moderator is just merging two compact proposals.
     claude_spec: str = "claude:sonnet",
     openai_spec: str = "openai",
-    moderator_spec: str = "claude:opus",
+    moderator_spec: str = "claude:sonnet",
 ) -> dict[str, Any]:
     """Run the 2-LLM debate and return a starter AccountInput + rationale."""
     db.apply_migrations(verbose=False)

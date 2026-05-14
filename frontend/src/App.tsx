@@ -42,10 +42,13 @@ export default function App() {
   }, []);
 
   // Theme: re-apply on every render. Cheap (just sets CSS vars) and picks
-  // up the active library's platform whenever it changes.
+  // up the active library's platform whenever it changes. Throttled to
+  // 60s (theme rarely changes) and paused entirely when the tab is hidden
+  // — previously this fired every 5s × N tabs, saturating uvicorn.
   useEffect(() => {
     let cancel = false;
     async function syncTheme() {
+      if (document.hidden) return;
       try {
         const libs = await api.libraries();
         if (cancel) return;
@@ -54,9 +57,15 @@ export default function App() {
       } catch { applyTheme(undefined); }
     }
     syncTheme();
-    // Re-sync periodically so the theme updates when a different lib is activated
-    const t = setInterval(syncTheme, 5000);
-    return () => { cancel = true; clearInterval(t); };
+    const t = setInterval(syncTheme, 60_000);
+    // Re-sync immediately when the tab becomes visible again (so a lib
+    // change made in another tab is picked up promptly).
+    function onVisible() { if (!document.hidden) syncTheme(); }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancel = true; clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
 
   return (
