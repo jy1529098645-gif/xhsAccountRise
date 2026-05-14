@@ -37,3 +37,23 @@ export function platformLabel(id: string | undefined): string {
   if (!id) return "—";
   return PLATFORM_LABELS[id] ?? id;
 }
+
+// Compose pipeline 里 7 个 Agent 的英文名 → 用户友好的中文名。
+// `agent_name` 在 trace 里通常是 "researcher" / "drafter:gpt-4o[教程]" 等。
+const AGENT_ROLE_LABELS: Record<string, string> = {
+  strategist: "策略师",
+  researcher: "调研员",
+  drafter: "起草",
+  critic: "审稿",
+  refiner: "改稿师",
+  synthesizer: "融合师",
+  planner: "计划师",
+};
+
+export function roleName(agentName: string | undefined): string {
+  if (!agentName) return "—";
+  // Format: "drafter:gpt-4o[教程]"  → base="drafter", rest="gpt-4o[教程]"
+  const [base, rest] = agentName.split(":");
+  const label = AGENT_ROLE_LABELS[base] ?? base;
+  return rest ? `${label}·${rest}` : label;
+}

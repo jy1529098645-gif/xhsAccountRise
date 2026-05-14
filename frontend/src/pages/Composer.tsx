@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
-import { fmtLikes } from "../format";
+import { fmtLikes, roleName } from "../format";
 import AgentConfigPanel, {
   AgentSelection, defaultSelection, selectionToSpecs,
 } from "../components/AgentConfigPanel";
@@ -456,21 +456,6 @@ function ComposeResult({bundle}: {bundle: ComposeBundle}) {
       />
     </>
   );
-}
-
-const ROLE_LABELS: Record<string, string> = {
-  strategist: "策略师",
-  researcher: "调研员",
-  drafter: "起草",
-  critic: "审稿",
-  refiner: "改稿师",
-  synthesizer: "融合师",
-  planner: "计划师",
-};
-function roleName(agentName: string): string {
-  const [base, llm] = agentName.split(":");
-  const label = ROLE_LABELS[base] ?? base;
-  return llm ? `${label}·${llm}` : label;
 }
 
 function SBox({label, value}: {label: string; value?: string}) {

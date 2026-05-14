@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
-import { fmtTime } from "../format";
+import { fmtTime, roleName } from "../format";
 import PlatformPill from "../components/PlatformPill";
 import type { ComplianceHit, RagRef, RagComment, RagHook, VariantChild,
               TrackingFetchResult } from "../types";
@@ -80,7 +80,7 @@ export default function DraftDetail() {
             {trace.map((s: any) => (
               <div key={s.trace_id} className={`step ${s.error ? "err" : ""}`}>
                 <span>#{s.step_index}</span>
-                <span className="agent">{s.agent_name}</span>
+                <span className="agent">{roleName(s.agent_name)}</span>
                 <span>{s.error || s.output_summary}</span>
                 <span style={{textAlign: "right"}}>{s.latency_ms}ms</span>
               </div>
