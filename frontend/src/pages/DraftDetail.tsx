@@ -53,7 +53,7 @@ export default function DraftDetail() {
       </div>
       <Link to="/drafts">← 全部历史出稿</Link>
 
-      <ComplianceBanner finalCand={finalCand} />
+      <ComplianceBanner finalCand={finalCand} draftId={d.draft_id} onApplied={reload} />
 
       {d.parent_draft_id && (
         <div className="banner info" style={{marginTop: 10}}>
@@ -436,7 +436,9 @@ function NumIn({label, v, setV}: {label: string; v: string; setV: (s: string) =>
 // =============================================================
 
 // ---------- Compliance ----------------------------------------
-function ComplianceBanner({finalCand}: {finalCand: any}) {
+function ComplianceBanner({finalCand, draftId, onApplied}: {
+  finalCand: any; draftId: string; onApplied?: () => void;
+}) {
   if (!finalCand) return null;
   const comp = finalCand.compliance;
   if (!comp || comp.severity === "pass") return null;
@@ -451,24 +453,66 @@ function ComplianceBanner({finalCand}: {finalCand: any}) {
         {isBlock ? "⛔ 合规闸门：发布前必须改" : "⚠️ 合规闸门：建议修改"}
       </h2>
       <p className="muted" style={{fontSize: 12, margin: "6px 0 12px"}}>
-        命中策略报告 6.4 红线词 {comp.hit_count} 处。点开看具体位置 + 一键替换。
+        命中策略报告 6.4 红线词 {comp.hit_count} 处。下面是具体位置 + 一键安全改写。
       </p>
-      <ComplianceHitTable hits={comp.hits ?? []} candidateId={finalCand.candidate_id} />
+      <ComplianceHitTable hits={comp.hits ?? []}
+        finalCand={finalCand} draftId={draftId} onApplied={onApplied} />
     </div>
   );
 }
 
-function ComplianceHitTable({hits, candidateId}: {hits: ComplianceHit[]; candidateId: string}) {
-  const [rewriteState, setRewriteState] = useState<Record<string, string>>({});
+function ComplianceHitTable({hits, finalCand, draftId, onApplied}: {
+  hits: ComplianceHit[];
+  finalCand: any;
+  draftId: string;
+  onApplied?: () => void;
+}) {
+  // Per-where rewrite preview state. Key is just the where; values are the
+  // resulting text after server-side rewrite_safe.
+  const [rewritten, setRewritten] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<string | null>(null);
 
   if (hits.length === 0) return null;
 
-  async function rewriteAll(where: "title" | "body", text: string) {
+  // Read live text from the candidate so we don't need user paste — this was
+  // a UX bug in v0.53.0 where we asked the user to manually paste their own
+  // body back into a prompt() dialog.
+  function liveTextFor(where: string): string {
+    if (where === "title") return finalCand?.title ?? "";
+    if (where === "body") return finalCand?.body ?? "";
+    if (where === "cover_prompt") return finalCand?.cover_prompt ?? "";
+    return "";
+  }
+
+  async function rewriteWhere(where: "title" | "body" | "cover_prompt") {
+    const text = liveTextFor(where);
+    if (!text) {
+      alert(`${where} 是空的，没法改写`);
+      return;
+    }
+    setBusy(where);
     try {
-      const r = await api.complianceRewrite(text, where);
-      setRewriteState(prev => ({...prev, [`${candidateId}:${where}`]: r.rewritten}));
+      // The /rewrite endpoint only knows 'title' | 'body'; cover_prompt
+      // shares body rules.
+      const apiWhere = (where === "title") ? "title" : "body";
+      const r = await api.complianceRewrite(text, apiWhere);
+      setRewritten(prev => ({...prev, [where]: r.rewritten}));
+      if (!r.changed) {
+        alert("没有命中红线词需要替换。");
+      }
     } catch (e: any) {
-      alert("一键改写失败: " + e.message);
+      alert("改写失败: " + e.message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function copyToClipboard(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      alert("✓ 已复制到剪贴板");
+    } catch {
+      alert("复制失败 — 请手动选中并 Ctrl+C");
     }
   }
 
@@ -483,15 +527,17 @@ function ComplianceHitTable({hits, candidateId}: {hits: ComplianceHit[]; candida
     <div style={{display: "grid", gap: 10}}>
       {Object.entries(byWhere).map(([where, ws]) => (
         <div key={where} style={{background: "#fff", padding: 10, borderRadius: 6}}>
-          <div style={{fontSize: 12, fontWeight: 600, marginBottom: 6}}>
-            {where} · {ws.length} 命中
-            {(where === "title" || where === "body") && (
-              <button className="ghost" style={{marginLeft: 8, fontSize: 11, padding: "2px 8px"}}
-                onClick={() => {
-                  const text = window.prompt(`粘贴当前的${where}文本：`);
-                  if (text) rewriteAll(where as any, text);
-                }}>
-                一键改写
+          <div style={{display: "flex", alignItems: "center", flexWrap: "wrap",
+                       gap: 8, marginBottom: 6}}>
+            <span style={{fontSize: 12, fontWeight: 600}}>
+              {where} · {ws.length} 命中
+            </span>
+            {(where === "title" || where === "body" || where === "cover_prompt") && (
+              <button className="ghost"
+                style={{fontSize: 11, padding: "2px 10px"}}
+                disabled={busy === where}
+                onClick={() => rewriteWhere(where as any)}>
+                {busy === where ? "改写中…" : "🔧 一键改写"}
               </button>
             )}
           </div>
@@ -509,10 +555,14 @@ function ComplianceHitTable({hits, candidateId}: {hits: ComplianceHit[]; candida
               <div className="muted" style={{fontSize: 11, marginTop: 2}}>{h.rationale}</div>
             </div>
           ))}
-          {rewriteState[`${candidateId}:${where}`] && (
+          {rewritten[where] && (
             <div style={{marginTop: 8, padding: 8, background: "#f6fff0", borderRadius: 4, fontSize: 12}}>
               <div className="muted" style={{marginBottom: 4}}>改写后：</div>
-              <code style={{whiteSpace: "pre-wrap"}}>{rewriteState[`${candidateId}:${where}`]}</code>
+              <div style={{whiteSpace: "pre-wrap", fontFamily: "monospace"}}>{rewritten[where]}</div>
+              <button className="ghost" style={{marginTop: 6, fontSize: 11, padding: "2px 10px"}}
+                onClick={() => copyToClipboard(rewritten[where])}>
+                📋 复制改写后的文本
+              </button>
             </div>
           )}
         </div>

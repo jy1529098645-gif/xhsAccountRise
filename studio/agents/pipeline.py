@@ -297,11 +297,18 @@ def _persist(ctx: AgentContext, cfg: PipelineConfig,
         except Exception:
             _check_cand = None  # defensive
         if _check_cand is not None:
-            all_cands = list(ctx.drafts)
-            if ctx.refined and ctx.refined not in all_cands:
-                all_cands.append(ctx.refined)
-            if ctx.final and ctx.final not in all_cands:
-                all_cands.append(ctx.final)
+            # Dedup by candidate_id (same convention as the candidates loop
+            # above) — using object identity instead would silently break
+            # if a future refactor ever reuses GeneratedCandidate objects.
+            seen_cids: set[str] = set()
+            all_cands: list = []
+            for c in (list(ctx.drafts)
+                      + ([ctx.refined] if ctx.refined else [])
+                      + ([ctx.final] if ctx.final else [])):
+                if c is None or c.candidate_id in seen_cids:
+                    continue
+                seen_cids.add(c.candidate_id)
+                all_cands.append(c)
             for c in all_cands:
                 if c is None or c.error:
                     continue

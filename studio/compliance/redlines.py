@@ -38,12 +38,35 @@ class RedlineRule:
 # ⚠️  Order matters: earlier rules apply first when overlapping matches occur.
 #     Block-severity rules should be listed before warn-severity for the same
 #     family of terms (so the harsher hit wins).
+#
+# Why the negative lookbehinds are this ugly:
+#   代写 / 包过 / 降到 0 / 枪手 are all suffixes of legitimate compound words in
+#   Chinese (现代写 / 红包过 / 把成本降到 0 / 玩枪手感). The original v0.53 patterns
+#   without context guards generated ~50% false positives on realistic copy.
+#   v0.53.1 adds:
+#     - fixed-width negative lookbehind for time-period prefixes (现/古/当/年/时/朝/近/后/世/几)
+#       on 代写/代笔/代做 (which all suffer the same 现代+verb false positive)
+#     - negative lookbehind for common 包-compounds (红/福/礼/面/荷/钱/皮/腰/背/书/牙/吊/挎/邮)
+#       on 包过 — covers 红包/面包/钱包/etc. + 过期/过滤
+#     - negative lookahead (?!记|本) on 代笔 so 代笔记录 doesn't fire
+#     - drops bare 枪\s*手 (catches sports/games) — keeps 找枪手 / 请枪手
+#     - tightens 降到 0 to require %  or 率 suffix (essay/AI context guarantee)
+#     - tightens 100%过 to require 稿|关|审|线 suffix (drops 100% 过敏 etc)
 REDLINES: tuple[RedlineRule, ...] = (
     # --- 学术诚信 / 代写灰产 (策略报告 6.4 一类红线) -------------------------
     RedlineRule(
         rule_id="ghostwriting",
-        # 注意：不在 (英) 字符序列内 — 用 negative lookbehind 防止 "代写作家"被误中
-        patterns=(r"代\s*写", r"代\s*笔", r"代\s*做", r"枪\s*手", r"找枪手"),
+        patterns=(
+            # 代写 — guard against 现代写/古代写/当代写/年代写/时代写/朝代写/近代写/后代写/世代写/几代写
+            r"(?<![现古当年时朝近后世几])代\s*写",
+            # 代笔 — same period guard; reject 代笔记 (代笔+记录) and 代笔本 (sketchpad)
+            r"(?<![现古当年时朝近后世几])代\s*笔(?!记|本)",
+            # 代做 — same period guard
+            r"(?<![现古当年时朝近后世几])代\s*做",
+            # 找枪手 / 请枪手 — bare 枪手 is too sport-game heavy
+            r"找\s*枪\s*手",
+            r"请\s*枪\s*手",
+        ),
         category="学术诚信",
         severity="block",
         safe_alternative="AI 辅助写作框架",
@@ -51,8 +74,15 @@ REDLINES: tuple[RedlineRule, ...] = (
     ),
     RedlineRule(
         rule_id="guaranteed_pass",
-        patterns=(r"包\s*过", r"保\s*过", r"稳\s*过", r"100\s*%\s*通过",
-                  r"100\s*%\s*过(?:稿|关|审)?"),
+        patterns=(
+            # 包过 — guard against 红包/福包/礼包/面包/荷包/钱包/皮包/腰包/背包/书包/牙包/吊包/挎包/邮包
+            r"(?<![红福礼面荷钱皮腰背书牙吊挎邮])包\s*过",
+            r"保\s*过",
+            r"稳\s*过",
+            r"100\s*%\s*通过",
+            # 100%过-suffix — must end in 稿|关|审|线 (drop bare 过敏/过期)
+            r"100\s*%\s*过(?:稿|关|审|线)",
+        ),
         category="违规承诺",
         severity="block",
         safe_alternative="高通过率 / 已帮 N 同学成功",
@@ -60,10 +90,15 @@ REDLINES: tuple[RedlineRule, ...] = (
     ),
     RedlineRule(
         rule_id="ai_rate_to_zero",
-        patterns=(r"降\s*[AaＡａ]\s*[IiＩｉ]\s*率?\s*到?\s*0",
-                  r"降到\s*0\s*%?",
-                  r"AI\s*率\s*0\s*%",
-                  r"AIGC?\s*率?\s*0\s*%?"),
+        patterns=(
+            # AI率到0 / AI率0% — explicit AI mention in pattern
+            r"[AaＡａ]\s*[IiＩｉ]\s*率?\s*(?:降|到)\s*到?\s*0",
+            r"降\s*[AaＡａ]\s*[IiＩｉ]\s*率?\s*到?\s*0",
+            r"AI\s*率\s*0\s*%?",
+            r"AIGC?\s*率?\s*0\s*%?",
+            # 降到 0 — generic, requires % or 率 suffix so 把成本降到0 doesn't fire
+            r"降\s*到\s*0\s*(?:%|率)",
+        ),
         category="检测规避",
         severity="block",
         safe_alternative="降到个位数 / 学术表达自然度提升",
