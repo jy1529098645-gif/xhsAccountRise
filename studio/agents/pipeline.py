@@ -68,6 +68,10 @@ class PipelineConfig:
     # + 4o 结构 + DeepSeek 下沉摊平成中庸版）。用户在 UI 上还能一键选其它候选
     # 覆盖。设 fuse_synthesizer=True 恢复旧的 LLM 融合行为。
     fuse_synthesizer: bool = False
+    # v0.61.22 ：角度 → 专属 model spec 映射。{} = 全部走 drafter_spec 轮转
+    # （默认）。映射里有的角度会用对应 spec 覆写 round-robin。
+    # 例 ：{"教程": "claude:sonnet", "段子": "deepseek"} 钉死这两条角度。
+    angle_models: dict[str, str] = field(default_factory=dict)
     # v0.50 fast_mode: collapse to 2 LLM calls.
     #   Stage 1 = drafter (does its own strategy decisions inline)
     #   Stage 2 = synthesizer ∥ planner (no separate critic, no refiner)
@@ -113,7 +117,8 @@ async def run_pipeline(
     researcher = ResearcherAgent(
         k_refs=cfg.k_refs, n_comments=cfg.n_comments, top_hooks=cfg.top_hooks,
     )
-    drafter_pool = DrafterPoolAgent(drafters)
+    # v0.61.22 ：DrafterPoolAgent 同时接受 round-robin pool + 每角度 override。
+    drafter_pool = DrafterPoolAgent(drafters, angle_models=cfg.angle_models)
     critics = registry.build(cfg.critic_spec) if not cfg.skip_critics else []
     critic_pool = CriticPoolAgent(critics) if critics else None
     refiner = (

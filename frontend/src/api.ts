@@ -665,6 +665,8 @@ export const api = {
     skip_refiner?: boolean;
     skip_synthesizer?: boolean;
     skip_planner?: boolean;
+    /** v0.61.22 ：每角度专属 model spec 覆写。{} = 全部 round-robin。 */
+    angle_models?: Record<string, string>;
   }, signal?: AbortSignal) => postJson<ComposeBundle>("/api/compose", req, signal),
 };
 

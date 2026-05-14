@@ -65,10 +65,14 @@ def _augmented_user(brief: Brief, ctx: AgentContext, angle_override: str | None 
 class DrafterPoolAgent(Agent):
     name = "drafter"
 
-    def __init__(self, generators: list[Generator]):
+    def __init__(self, generators: list[Generator],
+                 angle_models: dict[str, str] | None = None):
         if not generators:
             raise ValueError("at least one generator required")
         self.generators = generators
+        # v0.61.22 ：可选 角度→model spec 覆写映射。运行时 spec → 实际 Generator
+        # 通过 registry.build 解析；解析失败的 spec 会被忽略走默认 round-robin。
+        self.angle_models: dict[str, str] = dict(angle_models or {})
 
     async def run(self, ctx: AgentContext) -> None:
         # v0.53: pick the active prompt version from DB so retrospective-driven
@@ -80,9 +84,23 @@ class DrafterPoolAgent(Agent):
         # different-angle candidates (each is a fresh call). For multi-LLM
         # pools, the assignment also rotates so each angle hits a different
         # family if possible.
+        # v0.61.22 ：angle_models 里有的角度用专属 spec，其它走 round-robin。
+        from ..generators import registry as _registry
         angles = list(ctx.brief.all_angles())
+
+        def _generator_for_angle(angle: str, fallback_idx: int) -> Generator:
+            spec = (self.angle_models.get(angle) or "").strip()
+            if spec and spec.lower() not in ("auto", ""):
+                try:
+                    gens = _registry.build(spec)
+                    if gens:
+                        return gens[0]
+                except Exception:
+                    pass  # fall through to round-robin
+            return self.generators[fallback_idx % len(self.generators)]
+
         tasks: list[tuple[str, Generator]] = [
-            (angles[i], self.generators[i % len(self.generators)])
+            (angles[i], _generator_for_angle(angles[i], i))
             for i in range(len(angles))
         ]
 

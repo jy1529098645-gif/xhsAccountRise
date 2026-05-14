@@ -683,6 +683,10 @@ class ComposeRequest(BaseModel):
     skip_planner: bool = False
     # v0.61.19 ：默认 false = pick-best；true = LLM 重写融合（旧行为）
     fuse_synthesizer: bool = False
+    # v0.61.22 ：每角度专属 model spec。{}  = 全部走 drafter_spec 轮转（默认行为）。
+    # 例 ：{"教程": "claude:sonnet", "段子": "deepseek"}  → 这两条角度钉死，
+    # 其它角度仍按 drafter_spec round-robin。覆写优先级高于 round-robin。
+    angle_models: dict[str, str] = Field(default_factory=dict)
     fast_mode: bool = True  # default 2-stage pipeline (drafter → synth ∥ planner)
 
 
@@ -718,6 +722,7 @@ async def compose(req: ComposeRequest) -> dict[str, Any]:
         skip_synthesizer=req.skip_synthesizer,
         skip_planner=req.skip_planner,
         fuse_synthesizer=req.fuse_synthesizer,
+        angle_models=req.angle_models,
         fast_mode=req.fast_mode,
     )
     bundle = await agent_pipeline.run_pipeline(brief, cfg)

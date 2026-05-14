@@ -10,6 +10,7 @@ import NextStepCard from "../components/NextStepCard";
 import { humaniseError, humaniseErrorAsync } from "../errors";
 import { isAborted } from "../api";
 import { startJob, getJob, cancelJob, useJob } from "../lib/jobs";
+import { LLM_CATALOG } from "../catalog";
 import type { ComposeBundle, DraftCandidate, Library, Platform } from "../types";
 
 const COMPOSE_STAGES: TimelineStage[] = [
@@ -22,7 +23,12 @@ const COMPOSE_STAGES: TimelineStage[] = [
   { label: "🤖 计划师产发布计划", durationSec: 20 },
 ];
 
-const ANGLES = ["教程", "痛点", "故事", "工具评测", "对比", "感悟", "数字", "种草", "建议", "段子", "科普", "避雷", "测评"];
+const ANGLES = [
+  "教程", "痛点", "故事", "工具评测", "对比", "感悟", "数字", "种草", "建议",
+  "段子", "科普", "避雷", "测评",
+  // v0.61.22 新增 5 个 ：盘点 / 复盘 / 问答 / 打卡 / 教训
+  "盘点", "复盘", "问答", "打卡", "教训",
+];
 
 // v0.51 → v0.52: persist the user's form state across navigation. Now also
 // stores `angles` (multi-select). `angle` is kept as the primary fallback so
@@ -40,10 +46,12 @@ interface ComposerFormState {
   topic: string; angle: string; angles: string[]; length: number;
   cta: "none" | "soft" | "strong";
   niche: string; extra: string; platform: string;
+  /** v0.61.22 ：每角度专属 model spec。空 string / 缺失 = "auto"（用 round-robin）。 */
+  angleModels?: Record<string, string>;
 }
 const COMPOSER_FORM_DEFAULT: ComposerFormState = {
   topic: "降AI率技巧", angle: "教程", angles: ["教程"], length: 600, cta: "soft",
-  niche: "", extra: "", platform: "",
+  niche: "", extra: "", platform: "", angleModels: {},
 };
 function loadComposerForm(): ComposerFormState {
   try {
@@ -84,6 +92,18 @@ export default function Composer() {
   const [niche, setNiche] = useState(initialForm.niche);
   const [extra, setExtra] = useState(initialForm.extra);
   const [platform, setPlatform] = useState<string>(initialForm.platform);
+  // v0.61.22 ：每角度专属 model spec。""/缺失 = auto = round-robin。
+  const [angleModels, setAngleModels] = useState<Record<string, string>>(
+    initialForm.angleModels ?? {}
+  );
+  function setAngleModel(angle: string, spec: string) {
+    setAngleModels(prev => {
+      const next = { ...prev };
+      if (!spec || spec === "auto") delete next[angle];
+      else next[angle] = spec;
+      return next;
+    });
+  }
 
   function toggleAngle(a: string) {
     setAngles(prev => {
@@ -133,9 +153,10 @@ export default function Composer() {
     try {
       localStorage.setItem(composerFormKey(), JSON.stringify({
         topic, angle: angles[0] || "教程", angles, length, cta, niche, extra, platform,
+        angleModels,
       }));
     } catch { /* quota — ignore */ }
-  }, [topic, angles, length, cta, niche, extra, platform]);
+  }, [topic, angles, length, cta, niche, extra, platform, angleModels]);
 
   // ---- Pre-fill from Strategy "出这一篇 →" navigation ---------------------
   // Reads sessionStorage instead of location.state. The old location.state
@@ -191,6 +212,10 @@ export default function Composer() {
         target_length: length, cta_strength: cta,
         niche, extra_constraints: extra,
         platform: platform || undefined,
+        // v0.61.22 ：只发已选角度的非 auto 映射，省 payload。
+        angle_models: Object.fromEntries(
+          Object.entries(angleModels).filter(([a, s]) => angles.includes(a) && s && s !== "auto")
+        ),
         ...selectionToSpecs(agentConfig),
       }, signal),
       { topic },
@@ -325,6 +350,41 @@ export default function Composer() {
             <div className="muted" style={{fontSize: 11, marginTop: 4}}>
               已选 {angles.length} 个角度 → 起草团会出 {angles.length} 份候选（每份一个角度）
             </div>
+            {/* v0.61.22 ：每角度专属 model（可选 ：默认 auto = 3 家轮转） */}
+            {angles.length > 0 && (
+              <details style={{marginTop: 8}}>
+                <summary style={{cursor: "pointer", fontSize: 11.5, color: "var(--muted)"}}>
+                  ▾ 高级 ：钉死某个角度用哪家 LLM（默认 auto = 自动轮转 3 家）
+                </summary>
+                <div style={{
+                  marginTop: 8, padding: "8px 10px",
+                  background: "#fafafa", borderRadius: 6, display: "grid",
+                  gridTemplateColumns: "1fr 1fr", gap: 6,
+                }}>
+                  {angles.map(a => (
+                    <div key={a} className="row" style={{gap: 6, alignItems: "center"}}>
+                      <span style={{
+                        flex: "0 0 60px", fontSize: 12, fontWeight: 600,
+                        color: "var(--primary)",
+                      }}>{a}</span>
+                      <select value={angleModels[a] || "auto"}
+                        onChange={e => setAngleModel(a, e.target.value)}
+                        style={{flex: 1, fontSize: 12, padding: "3px 4px"}}>
+                        <option value="auto">🤖 auto · 自动轮转</option>
+                        {LLM_CATALOG.map(o => (
+                          <option key={o.id} value={o.id}>
+                            {o.label} {o.cost === "high" ? "💸" : o.cost === "mid" ? "·" : "🪙"}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+                <div className="muted" style={{fontSize: 10.5, marginTop: 6}}>
+                  钉死的角度直接用对应 LLM 写；其它角度仍按 drafter_spec 默认轮转。
+                </div>
+              </details>
+            )}
           </div>
           <div style={{marginBottom: 8}}>
             <label>正文字数</label>
