@@ -39,6 +39,10 @@ export interface DnaArtifact {
     keyword_blueocean: any;
     comment_demand: any;
     top_performers: any;
+    /** v0.56: 笑点/梗/夸张戏谑 signal — added to DNA later. */
+    humor_signals?: any;
+    /** v0.57: 内容形式分布 (图文/短视频/长视频/...) — added to DNA later. */
+    content_format?: any;
   };
 }
 

@@ -375,7 +375,7 @@ export default function Reports() {
             stages={UPLOAD_STAGES}
             currentIndex={-1}
             auto
-            done={stage === "done"}
+            done={false /* busy block 内 stage 永远不是 'done'，TS 也这么推断 */}
             error={err}
           />
         )}
