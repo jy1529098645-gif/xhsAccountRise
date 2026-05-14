@@ -261,10 +261,10 @@ export default function Strategy() {
   const platform = input.platform || activeLib?.platform || "xiaohongshu";
 
   async function submitInput() {
-    if (!input.positioning.trim() || !input.target_audience.trim()) {
-      setErr("「账号定位」和「目标受众」都得填");
-      return;
-    }
+    // No required-fields gate. positioning + target_audience are now optional
+    // hints; if empty, propose runs on DNA + reports alone. This is the
+    // user-flow fix: forcing users to write positioning before AI suggests
+    // any was illogical.
     setErr(null); setInfo(null); setPhase("loading-propose");
     abortRef.current = new AbortController();
     try {
@@ -618,14 +618,14 @@ function InputForm(props: {
         所有字段都可以直接填。AI 帮拟只是给你个起点 — 改一改再启动也行。
       </p>
 
-      <FieldWithRationale label="账号定位（一句话说清楚做什么）" required
+      <FieldWithRationale label="账号定位（可选 · 留空让 AI 自由推荐）"
         rationale={props.fieldRationale.positioning}
         onAlt={(v) => set("positioning", v)}>
         <input value={i.positioning} onChange={e => set("positioning", e.target.value)}
           placeholder="比如：留学生写论文工具种草 / 考研一战经验分享 / AI 学术副业" />
       </FieldWithRationale>
 
-      <FieldWithRationale label="目标受众" required
+      <FieldWithRationale label="目标受众（可选）"
         rationale={props.fieldRationale.target_audience}
         onAlt={(v) => set("target_audience", v)}>
         <input value={i.target_audience} onChange={e => set("target_audience", e.target.value)}
@@ -696,9 +696,9 @@ function InputForm(props: {
         </div>
       )}
 
-      <button onClick={props.onSubmit} disabled={!i.positioning.trim() || !i.target_audience.trim()}
+      <button onClick={props.onSubmit}
         style={{width: "100%", fontSize: 15, padding: "10px 0"}}>
-        🚀 启动 AI 团队 → 出 3-5 个候选方向
+        🚀 让 AI 推荐 8-12 个方向（你上面的字段全部可选 ；空着也行）
       </button>
 
       {(props.consensusNotes.length > 0 || props.singleSideViews.length > 0) && (

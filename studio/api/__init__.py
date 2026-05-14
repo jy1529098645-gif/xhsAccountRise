@@ -892,8 +892,12 @@ def score_candidate(draft_id: str, candidate_id: str, req: ScoreRequest) -> dict
 # ---------------- strategy (起号策略) -----------------
 
 class StrategyInput(BaseModel):
-    positioning: str
-    target_audience: str
+    # User-flow fix: positioning + target_audience used to be REQUIRED before
+    # propose would run. But the user shouldn't have to know their positioning
+    # before AI suggests it — that's literally what propose is for. Both are
+    # now hints (empty = let AI propose with no user bias).
+    positioning: str = ""
+    target_audience: str = ""
     cycle_weeks: int = Field(default=4, ge=1, le=24)
     posts_per_week: int = Field(default=3, ge=1, le=14)
     personal_strengths: str = ""
