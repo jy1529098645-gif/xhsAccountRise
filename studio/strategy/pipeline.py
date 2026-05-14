@@ -449,18 +449,29 @@ async def _expand_inner(
             + (f"- 需要的素材：{', '.join(slot.materials_needed)}\n" if slot.materials_needed else "")
             + "\n请按 system 给的 schema 输出这一篇的 body_draft。"
         )
-        try:
-            r = await asyncio.wait_for(
-                _call_json(
-                    drafter_chosen, prompts.BODY_DRAFTER_SYSTEM, slot_prompt,
-                    max_tokens=1200,
-                    tool_name="submit_body_draft", schema=_BODY_DRAFT_SCHEMA,
-                ),
-                timeout=120,
-            )
-            return slot_idx, str(r.get("body_draft", "")).strip(), None
-        except Exception as e:
-            return slot_idx, "", str(e)
+        # Two-shot retry: bursts of N parallel Sonnet calls sometimes return
+        # empty body_draft (rate-limit / throttle / SDK quirk). Retry once
+        # after a short jittered delay before declaring failure.
+        last_err: str | None = None
+        for attempt in (1, 2):
+            try:
+                r = await asyncio.wait_for(
+                    _call_json(
+                        drafter_chosen, prompts.BODY_DRAFTER_SYSTEM, slot_prompt,
+                        max_tokens=2000,
+                        tool_name="submit_body_draft", schema=_BODY_DRAFT_SCHEMA,
+                    ),
+                    timeout=180,
+                )
+                body = str(r.get("body_draft", "")).strip()
+                if body:
+                    return slot_idx, body, None
+                last_err = "empty body_draft returned"
+            except Exception as e:
+                last_err = repr(e)
+            # Backoff with jitter so retries don't all hammer at once.
+            await asyncio.sleep(2 + slot_idx * 0.4)
+        return slot_idx, "", last_err
 
     drafter_errors: list[str] = []
     if schedule:

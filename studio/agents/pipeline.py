@@ -157,12 +157,21 @@ def _persist(ctx: AgentContext, cfg: PipelineConfig) -> dict[str, Any]:
         )
 
         # Drafter candidates
+        inserted_ids: set[str] = set()
         for c in ctx.drafts:
             _insert_candidate(con, draft_id, c, now, chosen=False)
-        if ctx.refined:
+            inserted_ids.add(c.candidate_id)
+        if ctx.refined and ctx.refined.candidate_id not in inserted_ids:
             _insert_candidate(con, draft_id, ctx.refined, now, chosen=False)
+            inserted_ids.add(ctx.refined.candidate_id)
+        # Synthesizer often produces a fresh candidate (its own candidate_id);
+        # if so it isn't in ctx.drafts or ctx.refined yet, so insert it too.
+        # Otherwise the UPDATE below targets a row that doesn't exist and the
+        # 'chosen' marker silently drops.
+        if ctx.final and ctx.final.candidate_id not in inserted_ids:
+            _insert_candidate(con, draft_id, ctx.final, now, chosen=False)
+            inserted_ids.add(ctx.final.candidate_id)
         if ctx.final:
-            # Final may be the refined candidate or one of the originals; mark it.
             con.execute(
                 "UPDATE studio_draft_candidates SET chosen=1 WHERE candidate_id=?",
                 (ctx.final.candidate_id,),
