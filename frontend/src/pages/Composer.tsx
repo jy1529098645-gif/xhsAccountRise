@@ -553,13 +553,19 @@ function ComposeResult({bundle}: {bundle: ComposeBundle}) {
       )}
 
       {/* v0.61.19 ：「★ 最终稿」section 现在显示用户选的那一条（默认 = critic
-          最高分）。点上面任一候选的 「★ 选这条」可换。 */}
+          最高分）。点上面任一候选的 「★ 选这条」可换。
+          v0.61.21 ：加复制按钮（标题 / 正文 / 全文 三种）— 直接拿去发不用手抄。 */}
       {chosenDraft && (
         <div className="card" id="composer-step-4" style={{borderTop: "3px solid var(--primary)"}}>
-          <h2>★ 当前 final 稿 · 这条会进 Drafts 历史</h2>
-          <p className="muted" style={{fontSize: 12, marginTop: -4, marginBottom: 8}}>
-            想换 final ？回到 「📑 候选」section 点别条的 「★ 选这条」。
-          </p>
+          <div className="row" style={{justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 6}}>
+            <div style={{flex: 1, minWidth: 0}}>
+              <h2 style={{margin: 0}}>★ 当前 final 稿 · 这条会进 Drafts 历史</h2>
+              <p className="muted" style={{fontSize: 12, margin: "4px 0 0"}}>
+                想换 final ？回到 「📑 候选」section 点别条的卡片。
+              </p>
+            </div>
+            <CopyButtons cand={chosenDraft as any} />
+          </div>
           <div className="candidate-grid">
             <Candidate c={chosenDraft as any} highlighted />
           </div>
@@ -636,6 +642,53 @@ function PlanCard({plan}: {plan: any}) {
           </ol>
         </>
       )}
+    </div>
+  );
+}
+
+// v0.61.21 ：复制按钮组 — 标题 / 正文 / 全文 三个。最常用的是「全文」=
+// 标题 + 正文 + tags 拼成一份可直接粘到小红书的格式。
+function CopyButtons({cand}: {cand: any}) {
+  const [done, setDone] = useState<string | null>(null);  // 哪个按钮刚被点
+  function copy(kind: "title" | "body" | "all") {
+    const p = cand?.payload ?? {};
+    const title = String(p.title ?? "");
+    const body = String(p.body ?? "");
+    const tags = Array.isArray(p.tags) ? p.tags.map((t: string) => `#${t}`).join(" ") : "";
+    let text = "";
+    if (kind === "title") text = title;
+    else if (kind === "body") text = body;
+    else text = [title, "", body, tags && "", tags].filter(Boolean).join("\n");
+    if (!text) return;
+    try {
+      navigator.clipboard?.writeText(text);
+      setDone(kind);
+      setTimeout(() => setDone(d => d === kind ? null : d), 1500);
+    } catch { /* clipboard unavailable */ }
+  }
+  function label(kind: "title" | "body" | "all", base: string) {
+    return done === kind ? "✓ 已复制" : base;
+  }
+  const baseBtn = {
+    padding: "5px 10px", fontSize: 11.5, fontWeight: 600,
+    background: "#fff", color: "var(--primary)",
+    border: "1px solid var(--primary)", borderRadius: 6, cursor: "pointer",
+    whiteSpace: "nowrap" as const,
+  };
+  const doneBtn = {
+    ...baseBtn, background: "var(--primary)", color: "#fff", borderColor: "var(--primary)",
+  };
+  return (
+    <div className="row" style={{gap: 6, flexShrink: 0, flexWrap: "wrap"}}>
+      <button onClick={() => copy("title")}
+        style={done === "title" ? doneBtn : baseBtn}>{label("title", "📋 标题")}</button>
+      <button onClick={() => copy("body")}
+        style={done === "body" ? doneBtn : baseBtn}>{label("body", "📋 正文")}</button>
+      <button onClick={() => copy("all")}
+        style={done === "all" ? {...doneBtn, fontWeight: 700} : {...baseBtn, fontWeight: 700}}
+        title="标题 + 正文 + tags 一起，拷贝去小红书粘贴框直接发">
+        {label("all", "📋 全文（标题+正文+tags）")}
+      </button>
     </div>
   );
 }
