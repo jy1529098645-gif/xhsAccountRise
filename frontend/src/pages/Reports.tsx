@@ -102,9 +102,10 @@ export default function Reports() {
   }
 
   async function load() {
-    // v0.61.5 ：用 allSettled 而不是 all — 单个 API fail（比如 listInsights
-    // 不见库时返回 4xx）不应该把整个 load 拽崩，导致 externals 永远不更新、
-    // 合并按钮和「下一步」按钮神秘消失。
+    // v0.61.5/6 ：用 allSettled — 单个 API fail（如 listExternalReports 后端
+    // 抛错）不应该把整个 load 拽崩，导致 externals 永远 0 长 → 合并/下一步
+    // 按钮神秘消失。listExternalReports 和 listIntegratedReports 不再 silent
+    // catch，真错误会冒泡 — 这里 surface 给用户。
     const [lsR, rsR, psR, extsR, intsR] = await Promise.allSettled([
       api.libraries(), api.listInsights(), api.platforms(),
       api.listExternalReports(), api.listIntegratedReports(),
@@ -117,13 +118,20 @@ export default function Reports() {
     }
     if (rsR.status === "fulfilled") setReports(rsR.value as any);
     if (psR.status === "fulfilled") setPlatforms(psR.value);
-    if (extsR.status === "fulfilled") setExternals(extsR.value as any);
-    if (intsR.status === "fulfilled") setIntegrated(intsR.value as any);
-    // 只把第一个真正失败的错误 surface 出来，且不阻塞别的状态更新
-    const firstFail = [lsR, rsR, psR, extsR, intsR].find(r => r.status === "rejected") as PromiseRejectedResult | undefined;
-    if (firstFail) {
+    if (extsR.status === "fulfilled") {
+      setExternals(extsR.value as any);
+      // v0.61.6 ：默认全选 — 用户上传完就能直接点「整合」，
+      // 不需要先记得手动勾选每一份（之前许多人以为按钮坏了，其实是 disabled）。
+      setSelectedSourceIds(new Set(extsR.value.map((e: any) => e.report_id)));
+    } else {
       // eslint-disable-next-line no-console
-      console.warn("[Reports] partial load failure:", firstFail.reason);
+      console.error("[Reports] listExternalReports failed:", extsR.reason);
+      setErr(`外部报告加载失败 ：${(extsR.reason as any)?.message ?? String(extsR.reason)}`);
+    }
+    if (intsR.status === "fulfilled") setIntegrated(intsR.value as any);
+    else {
+      // eslint-disable-next-line no-console
+      console.error("[Reports] listIntegratedReports failed:", intsR.reason);
     }
   }
   useEffect(() => { load(); }, []);

@@ -465,67 +465,147 @@ async def integrate(
 
 
 def get_integrated_report(integrated_id: str) -> dict[str, Any] | None:
+    """v0.61.6 ：跨所有 per-lib .db 找 integrated_id。"""
+    import sqlite3
+    from .. import config
+
     db.apply_migrations(verbose=False)
-    with db.connect(read_only=True) as con:
-        row = con.execute(
-            "SELECT * FROM studio_integrated_reports WHERE integrated_id = ?",
-            (integrated_id,),
-        ).fetchone()
-    if not row:
+    libs_dir = config.DATA_DIR / "libraries"
+    if not libs_dir.exists():
         return None
-    d = dict(row)
-    d["source_ids"] = json.loads(d.get("source_ids") or "[]")
-    d["consensus"] = json.loads(d.get("consensus_json") or "null")
-    d.pop("consensus_json", None)
-    return d
+    for lib_dir in libs_dir.iterdir():
+        if not lib_dir.is_dir():
+            continue
+        per_lib_db = lib_dir / "xhs.db"
+        if not per_lib_db.exists():
+            continue
+        try:
+            uri = f"file:{per_lib_db.as_posix()}?mode=ro"
+            con = sqlite3.connect(uri, uri=True)
+            con.row_factory = sqlite3.Row
+            try:
+                has = con.execute(
+                    "SELECT name FROM sqlite_master"
+                    " WHERE type='table' AND name='studio_integrated_reports'"
+                ).fetchone()
+                if not has:
+                    continue
+                row = con.execute(
+                    "SELECT * FROM studio_integrated_reports WHERE integrated_id = ?",
+                    (integrated_id,),
+                ).fetchone()
+                if row:
+                    d = dict(row)
+                    d["source_ids"] = json.loads(d.get("source_ids") or "[]")
+                    d["consensus"] = json.loads(d.get("consensus_json") or "null")
+                    d.pop("consensus_json", None)
+                    return d
+            finally:
+                con.close()
+        except Exception:
+            continue
+    return None
 
 
 def list_integrated_reports(library_id: str | None = None) -> list[dict[str, Any]]:
+    """v0.61.6 ：扫所有 per-lib .db 拼整合稿列表（同 list_external_reports 模式）。"""
+    import sqlite3
+    from .. import config
+
     db.apply_migrations(verbose=False)
     project.ensure_bootstrap()
     pid = project.active_project_id()
-    where = "WHERE (project_id = ? OR project_id IS NULL)"
-    args: list[Any] = [pid]
-    if library_id:
-        where += " AND (library_id = ? OR library_id IS NULL)"
-        args.append(library_id)
-    with db.connect(read_only=True) as con:
-        rows = list(con.execute(
-            f"SELECT integrated_id, project_id, library_id, created_at, status,"
-            f" source_ids, elapsed_s, error FROM studio_integrated_reports"
-            f" {where} ORDER BY created_at DESC",
-            args,
-        ))
-    out = []
-    for r in rows:
-        d = dict(r)
-        d["source_ids"] = json.loads(d.get("source_ids") or "[]")
-        out.append(d)
+    libs_dir = config.DATA_DIR / "libraries"
+    seen: dict[str, dict[str, Any]] = {}
+    if libs_dir.exists():
+        for lib_dir in libs_dir.iterdir():
+            if not lib_dir.is_dir():
+                continue
+            per_lib_db = lib_dir / "xhs.db"
+            if not per_lib_db.exists():
+                continue
+            try:
+                uri = f"file:{per_lib_db.as_posix()}?mode=ro"
+                con = sqlite3.connect(uri, uri=True)
+                con.row_factory = sqlite3.Row
+                try:
+                    has = con.execute(
+                        "SELECT name FROM sqlite_master"
+                        " WHERE type='table' AND name='studio_integrated_reports'"
+                    ).fetchone()
+                    if not has:
+                        continue
+                    where = "WHERE (project_id = ? OR project_id IS NULL)"
+                    args: list[Any] = [pid]
+                    if library_id:
+                        where += " AND (library_id = ? OR library_id IS NULL)"
+                        args.append(library_id)
+                    rows = list(con.execute(
+                        f"SELECT integrated_id, project_id, library_id, created_at, status,"
+                        f" source_ids, elapsed_s, error FROM studio_integrated_reports"
+                        f" {where}",
+                        args,
+                    ))
+                    for r in rows:
+                        d = dict(r)
+                        d["source_ids"] = json.loads(d.get("source_ids") or "[]")
+                        seen[d["integrated_id"]] = d
+                finally:
+                    con.close()
+            except Exception:
+                continue
+    out = sorted(seen.values(), key=lambda d: -(d.get("created_at") or 0))
     return out
 
 
 def latest_integrated_for_current_library() -> dict[str, Any] | None:
-    """Most recent successful integrated report — used by Strategy / Composer
-    to include it in prompts alongside (or instead of) the tool's own consensus.
-    """
+    """v0.61.6 ：跨所有 per-lib .db 找当前 project + lib 下最新完成的整合稿。"""
+    import sqlite3
+    from .. import config, library as _library
+
     db.apply_migrations(verbose=False)
     project.ensure_bootstrap()
     pid = project.active_project_id()
-    from .. import library as _library
     lib = _library.active_lib_id()
-    with db.connect(read_only=True) as con:
-        # Match on library if set; also accept library_id=NULL (global integration).
-        row = con.execute(
-            "SELECT consensus_json FROM studio_integrated_reports"
-            " WHERE (project_id = ? OR project_id IS NULL)"
-            " AND (library_id = ? OR library_id IS NULL)"
-            " AND status = 'completed'"
-            " ORDER BY created_at DESC LIMIT 1",
-            (pid, lib),
-        ).fetchone()
-    if not row or not row["consensus_json"]:
+    best: tuple[int, dict[str, Any]] | None = None  # (created_at, consensus)
+    libs_dir = config.DATA_DIR / "libraries"
+    if not libs_dir.exists():
         return None
-    try:
-        return json.loads(row["consensus_json"])
-    except json.JSONDecodeError:
-        return None
+    for lib_dir in libs_dir.iterdir():
+        if not lib_dir.is_dir():
+            continue
+        per_lib_db = lib_dir / "xhs.db"
+        if not per_lib_db.exists():
+            continue
+        try:
+            uri = f"file:{per_lib_db.as_posix()}?mode=ro"
+            con = sqlite3.connect(uri, uri=True)
+            con.row_factory = sqlite3.Row
+            try:
+                has = con.execute(
+                    "SELECT name FROM sqlite_master"
+                    " WHERE type='table' AND name='studio_integrated_reports'"
+                ).fetchone()
+                if not has:
+                    continue
+                row = con.execute(
+                    "SELECT consensus_json, created_at FROM studio_integrated_reports"
+                    " WHERE (project_id = ? OR project_id IS NULL)"
+                    " AND (library_id = ? OR library_id IS NULL)"
+                    " AND status = 'completed'"
+                    " ORDER BY created_at DESC LIMIT 1",
+                    (pid, lib),
+                ).fetchone()
+                if row and row["consensus_json"]:
+                    try:
+                        c = json.loads(row["consensus_json"])
+                        ts = int(row["created_at"] or 0)
+                        if best is None or ts > best[0]:
+                            best = (ts, c)
+                    except json.JSONDecodeError:
+                        pass
+            finally:
+                con.close()
+        except Exception:
+            continue
+    return best[1] if best else None

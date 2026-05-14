@@ -373,10 +373,14 @@ export const api = {
     return res.json();
   },
   listExternalReports: (libraryId?: string) =>
+    // v0.61.6 ：去掉 .catch(() => [])。这个 silent fallback 让任何 API/网络/
+    // 解析 error 都变成「externals 永远 0 长」，结果用户看不到整合按钮 +
+    // 下一步按钮，还以为是 UI bug。现在让错误真正抛出，调用方用 allSettled
+    // 包，错误进 console + 用户看到 banner。
     getJson<{
       report_id: string; library_id: string | null; name: string;
       source: string; format: string; content_chars: number; uploaded_at: number;
-    }[]>(`/api/external_reports${libraryId ? `?library_id=${libraryId}` : ""}`).catch(() => []),
+    }[]>(`/api/external_reports${libraryId ? `?library_id=${libraryId}` : ""}`),
   getExternalReport: (id: string) =>
     getJson<{ report_id: string; name: string; content: string; format: string; source: string; library_id: string | null; uploaded_at: number }>(`/api/external_reports/${id}`),
   deleteExternalReport: async (id: string) => {
@@ -396,10 +400,11 @@ export const api = {
     consensus: any;  // same shape as insight consensus
   }>("/api/external_reports/integrate", req, signal),
   listIntegratedReports: (libraryId?: string) =>
+    // v0.61.6 ：去 silent .catch(() => []) — 让真错误冒泡。
     getJson<{
       integrated_id: string; library_id: string | null; created_at: number;
       status: string; source_ids: string[]; elapsed_s: number | null; error: string | null;
-    }[]>(`/api/integrated_reports${libraryId ? `?library_id=${libraryId}` : ""}`).catch(() => []),
+    }[]>(`/api/integrated_reports${libraryId ? `?library_id=${libraryId}` : ""}`),
   getIntegratedReport: (id: string) =>
     getJson<{
       integrated_id: string; library_id: string | null; created_at: number;
