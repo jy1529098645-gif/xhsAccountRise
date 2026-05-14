@@ -51,10 +51,62 @@ def dna_blurb(dna: dict[str, Any]) -> str:
         for b, d in body_buckets.items()
     ]
 
+    # v0.56: humor / meme / 夸张戏谑 signal — let the LLM see the data and
+    # decide whether this voice is worth using for this corpus. Default
+    # taxonomy (教程/痛点/故事...) has no provision for 段子风, so without
+    # this block the generated drafts will systematically skew toward
+    # 学姐型干货.
+    humor = sections.get("humor_signals", {}) or {}
+    humor_lines: list[str] = []
+    if humor and humor.get("n_notes"):
+        prev = humor.get("prevalence", 0)
+        lift = humor.get("lift", 0)
+        humor_lines.append(
+            f"  · 笑点/梗/夸张元素 覆盖率 ：{prev:.1%}（{humor.get('n_humor', 0)}/{humor.get('n_notes')} 篇高赞）"
+        )
+        humor_lines.append(
+            f"  · 笑点笔记均赞 vs 全库均赞 ：{humor.get('humor_avg_likes', 0)} vs"
+            f" {humor.get('overall_avg_likes', 0)}（lift {lift:.2f}x）"
+        )
+        # Top category breakdown
+        by_cat = humor.get("by_category", {}) or {}
+        top_cats = sorted(by_cat.items(), key=lambda kv: -kv[1].get("n", 0))[:4]
+        if top_cats:
+            humor_lines.append("  · 笑点类别分布 ：")
+            for c, d in top_cats:
+                if d.get("n", 0) >= 10:
+                    humor_lines.append(
+                        f"      - {c} ：{d['n']} 篇 ({d['prevalence']:.1%}), 均赞 {d['avg_likes']}"
+                    )
+        # Top concrete examples — these are what LLM should anchor on
+        top_titles = humor.get("top_humor_titles", [])[:5]
+        if top_titles:
+            humor_lines.append("  · 经典笑点标题（学习这些套路）：")
+            for t in top_titles:
+                humor_lines.append(
+                    f"      · [{t['liked_count']}] {trim(t['title'], 60)}"
+                    f"  ← {'/'.join(t['categories'])}"
+                )
+        # 阈值建议：让 LLM 据数据自己决定
+        if prev > 0.25 and lift > 1.05:
+            humor_lines.append(
+                "  · ⚠️ 该库笑点信号强（prevalence>25% 且 lift>1.05），"
+                "建议 30-40% slot 走「段子 / 反讽 / 夸张戏谑」风（合规闸门兜底）"
+            )
+        elif prev > 0.10 and lift > 1.0:
+            humor_lines.append(
+                "  · 该库笑点信号中等，可在 15-25% slot 尝试段子风，混搭主流干货"
+            )
+        else:
+            humor_lines.append(
+                "  · 该库笑点信号弱，主打干货 / 共鸣 / 教程为佳"
+            )
+
     parts = []
     if bo_lines: parts.append("【蓝海关键词】\n" + "\n".join(bo_lines))
     if title_lines: parts.append("【Top 标题示例】\n" + "\n".join(title_lines))
     if hook_lines: parts.append("【hook 分布】\n" + "\n".join(hook_lines))
+    if humor_lines: parts.append("【笑点/梗/夸张信号 ：决定段子风权重】\n" + "\n".join(humor_lines))
     if demand_lines: parts.append("【用户高频询问】\n" + "\n".join(demand_lines))
     if tag_lines: parts.append("【高表现 tag】\n" + "\n".join(tag_lines))
     if body_lines: parts.append("【字数 vs 互动】\n" + "\n".join(body_lines))
@@ -120,8 +172,8 @@ TOPICGEN_SYSTEM = """\
 
 每个选题要包含：
 - title：候选标题（按平台风格写，可顺手给 2 个 variants）
-- angle：教程 / 痛点 / 故事 / 工具评测 / 对比 / 感悟 / 数字 / 种草 / 建议
-- hook_type：数字型 / 工具型 / 种草型 / 建议型 / 痛点型 / 对比型 / 教程型 / 故事型 / 问句型 / 列表型 / 感悟型
+- angle：教程 / 痛点 / 故事 / 工具评测 / 对比 / 感悟 / 数字 / 种草 / 建议 / **段子**
+- hook_type：数字型 / 工具型 / 种草型 / 建议型 / 痛点型 / 对比型 / 教程型 / 故事型 / 问句型 / 列表型 / 感悟型 / **段子型 / 反讽型 / 夸张戏谑型 / 自嘲型 / 玩梗型**
 - outline：3-5 条分点内容大纲（不是写正文，只是骨架）
 - materials_needed：拍这条需要准备什么（截图 / 工具账号 / 真人录屏 / 数据 / 案例）
 - intent：拉新 / 互动 / 转化 / 沉淀
@@ -132,6 +184,11 @@ TOPICGEN_SYSTEM = """\
 - hook 类型要混搭，不要全部数字型
 - 至少 30% 选题来自 DNA 里的「用户高频询问」（直接回应需求）
 - 至少 1 个选题用 DNA 里的「蓝海关键词」
+- ⚠️ 笑点权重 ：看 DNA 里【笑点/梗/夸张信号】section：
+    - prevalence > 25% 且 lift > 1.05 → 30-40% 选题走 段子/反讽/夸张戏谑/自嘲/玩梗 风
+    - prevalence 10-25% 且 lift > 1.0 → 15-25% 走段子风
+    - prevalence < 10% 或 lift < 1.0 → 几乎不出段子，0-5% 即可
+    - 段子稿仍要给真干货，标题段子化 + 正文可执行；不写纯沙雕
 
 输出 JSON：
 {

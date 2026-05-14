@@ -116,6 +116,48 @@ def _build_dna_context(dna: dict[str, Any]) -> str:
             for x in top_perf["top_collect_rate"][:8]
         ))
 
+    # v0.56: humor / 梗 / 夸张戏谑 signal — exposes the data so Compose's
+    # Strategist + Drafter agents can decide whether to use 段子/反讽 voice
+    # for this library. Without this block, the default voice anchors at
+    # 学姐型干货 + 真诚共鸣 and systematically misses the 30%-of-top-performers
+    # who win with 「冒着生命危险拍的快抄啊啊啊」 style.
+    humor = s.get("humor_signals", {}) or {}
+    if humor and humor.get("n_notes"):
+        prev = humor.get("prevalence", 0)
+        lift = humor.get("lift", 0)
+        h_lines = [
+            f"  · 笑点/梗/夸张元素 覆盖率 ：{prev:.1%}（{humor.get('n_humor', 0)}/{humor.get('n_notes')}）",
+            f"  · 笑点笔记均赞 vs 全库 ：{humor.get('humor_avg_likes', 0)} vs"
+            f" {humor.get('overall_avg_likes', 0)}（lift {lift:.2f}x）",
+        ]
+        # Category breakdown — only show categories with ≥ 10 notes
+        by_cat = humor.get("by_category", {}) or {}
+        top_cats = sorted(by_cat.items(), key=lambda kv: -kv[1].get("n", 0))[:4]
+        for c, d in top_cats:
+            if d.get("n", 0) >= 10:
+                h_lines.append(
+                    f"      · {c} ：{d['n']} 篇 ({d['prevalence']:.1%}), 均赞 {d['avg_likes']}"
+                )
+        # Top concrete titles for LLM to pattern-match on
+        for tt in (humor.get("top_humor_titles") or [])[:5]:
+            h_lines.append(
+                f"  · [{tt['liked_count']}] {t(tt['title'], 50)} "
+                f"← {'/'.join(tt.get('categories', []))}"
+            )
+        if prev > 0.25 and lift > 1.05:
+            h_lines.append(
+                "  · ⚠️ 该库笑点信号强，建议 30-40% 候选采用 段子/反讽/夸张戏谑风"
+            )
+        elif prev > 0.10 and lift > 1.0:
+            h_lines.append(
+                "  · 该库笑点信号中等，可在 15-25% 候选尝试段子风"
+            )
+        else:
+            h_lines.append(
+                "  · 该库笑点信号弱，以干货 / 共鸣 / 教程为主"
+            )
+        parts.append("【笑点/梗/夸张信号 (data-driven 权重)】\n" + "\n".join(h_lines))
+
     # ---- Raw-content snapshot ------------------------------------------
     # Show schema + a handful of top-performing samples per table. We used
     # to dump 20+ rows per table with full JSON; that ballooned every prompt

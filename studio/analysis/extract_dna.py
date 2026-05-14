@@ -437,6 +437,170 @@ def analyse_top_performers(n: int = 50) -> dict[str, Any]:
 
 # --- main orchestrator ---------------------------------------------------
 
+# --- 9. Humor / meme / 夸张戏谑 signal -------------------------------------
+#
+# 30% of >100-like notes in the AcademiCats library contain 笑点/梗/夸张
+# elements (76k-like 「冒着生命危险拍的快抄啊啊啊」 etc.). The default prompt
+# stack has zero provision for this voice, so generated drafts skew uniformly
+# toward "学姐型干货 + 真诚共鸣". This analyser builds a data signal the
+# Strategist/Drafter prompts can consult — if prevalence > 25% and lift > 1.05,
+# 30-40% of slots should consider 段子/反讽/夸张 voice. Different libraries
+# (学术 vs 美妆 vs 医美) have very different humor prevalence and risk
+# profile, so the LLM decides per-library based on actual data.
+
+_HUMOR_PATTERN_CATEGORIES: dict[str, list[str]] = {
+    "笑死/绝了类": [
+        "笑死", "绝了", "笑哭", "哈哈哈", "哈哈哈哈",
+        "笑不活", "我直接笑", "笑麻了", "笑喷",
+    ],
+    "破防/裂开类": [
+        "破防", "裂开", "我裂开", "碎了", "崩了", "崩溃了", "心态崩",
+    ],
+    "夸张/戏谑": [
+        "冒着生命危险", "冒死", "冒着风险", "死去活来", "当场",
+        "当场去世", "惨遭", "直接给", "神之一手", "救命", "啊啊啊",
+        "我直接", "杀疯了", "炸裂",
+    ],
+    "自嘲反讽": [
+        "真就", "我酸了", "我服了", "服了", "整不会了",
+        "大无语", "什么鬼", "搞笑", "蚌埠住", "蚌住",
+        "麻了", "我就是个", "废物", "摆烂",
+    ],
+    "崩溃情绪 emoji": ["😭", "🥹", "😱", "🥺", "💔", "🆘"],
+    "戏谑 emoji":     ["😎", "🤡", "🙃", "😅", "🫠", "🤣", "🤪"],
+    "夸张数字":       [
+        "9999", "1000000", "一百万", "巨爽", "超绝", "贼", "贼好",
+    ],
+}
+
+
+def analyse_humor_signals(min_likes: int = 100) -> dict[str, Any]:
+    """Scan high-like notes for humor / meme / exaggeration signals.
+
+    Returns:
+        {
+          "min_likes":  100,
+          "n_notes":    <how many notes met the like threshold>,
+          "n_humor":    <how many had at least one humor signal>,
+          "prevalence": 0.0-1.0,
+          "overall_avg_likes": ...,
+          "humor_avg_likes":   ...,
+          "lift":              <humor_avg / overall_avg>,
+          "by_category": {
+            "夸张/戏谑": {"n": ..., "prevalence": ..., "avg_likes": ...,
+                          "median_likes": ..., "examples": [{...}, ...]},
+            ...
+          },
+          "top_humor_titles": [{title, liked, hits: [matched terms]}, ...]
+        }
+
+    Cheap: pure Python regex over the in-memory rows. Skips bodies > 500
+    chars to bound work. No LLM calls.
+    """
+    compiled: dict[str, re.Pattern] = {
+        cat: re.compile("|".join(re.escape(p) for p in pats))
+        for cat, pats in _HUMOR_PATTERN_CATEGORIES.items()
+    }
+
+    with db.connect(read_only=True) as con:
+        rows = list(con.execute(
+            "SELECT note_id, title, body, liked_count"
+            " FROM notes WHERE liked_count >= ?", (min_likes,),
+        ))
+    n_notes = len(rows)
+    if n_notes == 0:
+        return {
+            "min_likes": min_likes, "n_notes": 0, "n_humor": 0,
+            "prevalence": 0.0, "overall_avg_likes": 0,
+            "humor_avg_likes": 0, "lift": 0.0,
+            "by_category": {}, "top_humor_titles": [],
+            "_warning": "no notes met the like threshold",
+        }
+
+    overall_total_likes = sum((r["liked_count"] or 0) for r in rows)
+    overall_avg = overall_total_likes / n_notes if n_notes else 0
+
+    # Per-row evaluation: which categories hit? Used both for per-category
+    # stats and for deduped "any signal" prevalence.
+    humor_hits_by_row: dict[str, list[str]] = {}   # note_id → [category names]
+    matched_terms_by_row: dict[str, list[str]] = {}
+    category_examples: dict[str, list[dict[str, Any]]] = {c: [] for c in compiled}
+
+    for r in rows:
+        text = (r["title"] or "") + " " + ((r["body"] or "")[:500])
+        hit_cats: list[str] = []
+        hit_terms: list[str] = []
+        for cat, pat in compiled.items():
+            m = pat.search(text)
+            if m:
+                hit_cats.append(cat)
+                hit_terms.append(m.group(0))
+        if hit_cats:
+            humor_hits_by_row[r["note_id"]] = hit_cats
+            matched_terms_by_row[r["note_id"]] = hit_terms
+
+    # Per-category aggregate.
+    by_category: dict[str, dict[str, Any]] = {}
+    for cat in compiled:
+        cat_rows = [r for r in rows
+                    if cat in humor_hits_by_row.get(r["note_id"], [])]
+        if not cat_rows:
+            by_category[cat] = {
+                "n": 0, "prevalence": 0.0,
+                "avg_likes": 0, "median_likes": 0, "examples": [],
+            }
+            continue
+        likes = sorted([(r["liked_count"] or 0) for r in cat_rows])
+        avg = sum(likes) / len(likes)
+        median = likes[len(likes) // 2]
+        # Examples: top 5 by likes within this category.
+        ex_sorted = sorted(cat_rows, key=lambda r: -(r["liked_count"] or 0))[:5]
+        by_category[cat] = {
+            "n": len(cat_rows),
+            "prevalence": round(len(cat_rows) / n_notes, 4),
+            "avg_likes": int(avg),
+            "median_likes": int(median),
+            "examples": [
+                {"note_id": r["note_id"], "title": (r["title"] or "")[:80],
+                 "liked_count": r["liked_count"] or 0}
+                for r in ex_sorted
+            ],
+        }
+
+    # Top humor titles overall — across all categories, ranked by likes,
+    # to give the LLM concrete pattern examples to anchor on.
+    humor_rows = [r for r in rows if r["note_id"] in humor_hits_by_row]
+    top_titles = sorted(humor_rows, key=lambda r: -(r["liked_count"] or 0))[:10]
+    top_humor_titles = [
+        {
+            "title": (r["title"] or "")[:80],
+            "liked_count": r["liked_count"] or 0,
+            "categories": humor_hits_by_row[r["note_id"]],
+            "hits": matched_terms_by_row[r["note_id"]],
+        }
+        for r in top_titles
+    ]
+
+    n_humor = len(humor_hits_by_row)
+    humor_avg = (
+        sum((r["liked_count"] or 0) for r in humor_rows) / n_humor
+        if n_humor else 0
+    )
+    lift = (humor_avg / overall_avg) if overall_avg else 0.0
+
+    return {
+        "min_likes": min_likes,
+        "n_notes": n_notes,
+        "n_humor": n_humor,
+        "prevalence": round(n_humor / n_notes, 4) if n_notes else 0.0,
+        "overall_avg_likes": int(overall_avg),
+        "humor_avg_likes": int(humor_avg),
+        "lift": round(lift, 3),
+        "by_category": by_category,
+        "top_humor_titles": top_humor_titles,
+    }
+
+
 def build_dna(version: str | None = None) -> dict[str, Any]:
     """Run all sections, return the assembled artifact dict.
 
@@ -467,6 +631,7 @@ def build_dna(version: str | None = None) -> dict[str, Any]:
         ("keyword_blueocean", analyse_keyword_blueocean),
         ("comment_demand",    analyse_comment_demand),
         ("top_performers",    analyse_top_performers),
+        ("humor_signals",     analyse_humor_signals),
     ]
     for name, fn in sections:
         try:

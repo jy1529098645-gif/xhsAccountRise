@@ -20,9 +20,13 @@ from dataclasses import dataclass, field, asdict
 from typing import Literal
 
 
-Angle = Literal["教程", "痛点", "故事", "工具评测", "对比", "感悟", "数字", "种草", "建议"]
+Angle = Literal[
+    "教程", "痛点", "故事", "工具评测", "对比", "感悟", "数字", "种草", "建议",
+    "段子",  # v0.56: 反讽 / 自嘲 / 夸张戏谑 / 玩梗 voice。DNA 笑点信号强的库会均匀分配几篇。
+]
 ALL_ANGLES: tuple[str, ...] = (
     "教程", "痛点", "故事", "工具评测", "对比", "感悟", "数字", "种草", "建议",
+    "段子",
 )
 CtaStrength = Literal["none", "soft", "strong"]
 

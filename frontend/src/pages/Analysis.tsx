@@ -111,6 +111,7 @@ export default function Analysis() {
   const timing = sections.timing ?? {};
   const shape = sections.body_and_shape ?? {};
   const comments = sections.comment_demand ?? {};
+  const humor = sections.humor_signals ?? null;
 
   return (
     <div>
@@ -256,6 +257,149 @@ export default function Analysis() {
         <h3>按点赞数排序</h3>
         <PerfTable rows={topPerf.top_likes ?? []} />
       </Section>
+
+      {humor && humor.n_notes > 0 && (
+        <Section title="8 · 笑点 / 梗 / 夸张戏谑 信号">
+          <HumorSignals data={humor} />
+        </Section>
+      )}
+    </div>
+  );
+}
+
+function HumorSignals({data}: {data: any}) {
+  const prev = data.prevalence ?? 0;
+  const lift = data.lift ?? 0;
+  const recommendation = (() => {
+    if (prev > 0.25 && lift > 1.05) {
+      return {
+        text: "笑点信号强 — 排期建议 30-40% 走「段子 / 反讽 / 夸张戏谑」风",
+        color: "#a67700", bg: "#fff8e6",
+      };
+    }
+    if (prev > 0.10 && lift > 1.0) {
+      return {
+        text: "笑点信号中等 — 15-25% 候选可走段子风，主线仍干货",
+        color: "#5a6c00", bg: "#f6fbe8",
+      };
+    }
+    return {
+      text: "笑点信号弱 — 干货 / 共鸣 / 教程为主，段子 0-5% 即可",
+      color: "#555", bg: "#f5f5f5",
+    };
+  })();
+
+  const cats: [string, any][] = Object.entries(data.by_category ?? {}) as any;
+  cats.sort((a, b) => (b[1]?.n ?? 0) - (a[1]?.n ?? 0));
+  const maxN = cats[0]?.[1]?.n ?? 1;
+
+  return (
+    <div>
+      <p className="muted" style={{fontSize: 13, lineHeight: 1.7}}>
+        扫描全部 <b>{data.n_notes?.toLocaleString?.()}</b> 篇高赞笔记（≥{data.min_likes} 赞），
+        看「笑死 / 绝了 / 冒着生命危险 / 我裂开 / 真就 / 摆烂 / 😭 / 🤣 / xxx 啊啊啊」等夸张戏谑信号是否常见。
+        信号强的库说明读者吃这套，AI 排期会自动多分配段子风的稿件。
+      </p>
+
+      <div className="cards-grid" style={{gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))"}}>
+        <div className="stat-card">
+          <div className="label">覆盖率</div>
+          <div className="value">{(prev * 100).toFixed(1)}%</div>
+          <div className="muted" style={{fontSize: 11, marginTop: 4}}>
+            {data.n_humor?.toLocaleString?.()} / {data.n_notes?.toLocaleString?.()} 篇有笑点
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="label">笑点笔记均赞</div>
+          <div className="value">{fmtLikes(data.humor_avg_likes ?? 0)}</div>
+          <div className="muted" style={{fontSize: 11, marginTop: 4}}>
+            全库均赞 {fmtLikes(data.overall_avg_likes ?? 0)}
+          </div>
+        </div>
+        <div className="stat-card" style={{background: lift > 1.05 ? "#fff8e6" : undefined}}>
+          <div className="label">点赞 lift</div>
+          <div className="value" style={{color: lift > 1.05 ? "#a67700" : "#333"}}>
+            {lift.toFixed(2)}×
+          </div>
+          <div className="muted" style={{fontSize: 11, marginTop: 4}}>
+            {lift > 1.05 ? "笑点笔记显著高于全库" : lift > 1.0 ? "微弱正向" : "无明显增益"}
+          </div>
+        </div>
+      </div>
+
+      <div style={{
+        marginTop: 12, padding: 10, borderRadius: 8,
+        background: recommendation.bg, borderLeft: `4px solid ${recommendation.color}`,
+        fontSize: 13, fontWeight: 600, color: recommendation.color,
+      }}>
+        🤖 AI 排期策略 ：{recommendation.text}
+      </div>
+
+      <h3 style={{marginTop: 18}}>按类别拆解</h3>
+      <table className="table">
+        <thead>
+          <tr>
+            <th>笑点类别</th>
+            <th className="num">笔记数</th>
+            <th className="num">占比</th>
+            <th>分布</th>
+            <th className="num">均赞</th>
+            <th className="num">中位赞</th>
+            <th>代表标题</th>
+          </tr>
+        </thead>
+        <tbody>
+          {cats.map(([cat, d]) => (
+            <tr key={cat}>
+              <td><b>{cat}</b></td>
+              <td className="num">{d.n}</td>
+              <td className="num">{((d.prevalence ?? 0) * 100).toFixed(1)}%</td>
+              <td><MiniBar value={d.n} max={maxN} /></td>
+              <td className="num">{fmtLikes(d.avg_likes ?? 0)}</td>
+              <td className="num">{fmtLikes(d.median_likes ?? 0)}</td>
+              <td className="muted" style={{fontSize: 12}}>
+                {(d.examples ?? []).slice(0, 2).map((e: any) => `[${fmtLikes(e.liked_count)}] ${(e.title || "").slice(0, 24)}`).join(" / ") || "—"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {data.top_humor_titles?.length > 0 && (
+        <>
+          <h3 style={{marginTop: 18}}>Top 10 笑点爆款标题（AI 排期就在学这些套路）</h3>
+          <table className="table">
+            <thead>
+              <tr>
+                <th className="num">排名</th>
+                <th>标题</th>
+                <th className="num">点赞</th>
+                <th>命中类别</th>
+                <th>命中词</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.top_humor_titles.map((t: any, i: number) => (
+                <tr key={i}>
+                  <td className="num">{i + 1}</td>
+                  <td>{t.title}</td>
+                  <td className="num">{fmtLikes(t.liked_count)}</td>
+                  <td>
+                    {(t.categories ?? []).map((c: string) =>
+                      <span key={c} className="tag-pill" style={{
+                        background: "#fff0c0", color: "#a67700", fontSize: 11,
+                      }}>{c}</span>
+                    )}
+                  </td>
+                  <td className="muted" style={{fontSize: 12}}>
+                    {(t.hits ?? []).join(" / ")}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
     </div>
   );
 }

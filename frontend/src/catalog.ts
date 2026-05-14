@@ -242,4 +242,5 @@ export const GITHUB_REPO = "https://github.com/jy1529098645-gif/xhsAccountRise";
 // validate against this same list.
 export const CONTENT_ANGLES: string[] = [
   "教程", "痛点", "故事", "工具评测", "对比", "感悟", "数字", "种草", "建议",
+  "段子",  // v0.56: 反讽 / 自嘲 / 夸张戏谑 / 玩梗。DNA 笑点信号强的库会自动分配。
 ];
