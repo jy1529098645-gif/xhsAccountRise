@@ -1442,7 +1442,12 @@ function PackView({pack, onReset, onBack, hasDirections}: {
             )}
           </div>
         </div>
-        <div style={{display: "grid", gap: 12}}>
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(460px, 1fr))",
+          gap: 12,
+          alignItems: "start",
+        }}>
           {schedule.map((s, i) => (
             <SlotCard key={i} slot={s} idx={i} onCompose={goCompose}
               cycleStartDate={pack.input.cycle_start_date}
@@ -1733,9 +1738,17 @@ function SlotCard({slot, idx, onCompose, cycleStartDate, chosenDirections}: {
           )}
         </div>
       )}
-      {slot.publish_rationale && (
+      {slot.flexible_window && (
         <div className="muted" style={{
           marginTop: 8, fontSize: 11.5, padding: "4px 8px",
+          background: "#eefaf0", borderRadius: 4, borderLeft: "2px solid #2ea043",
+        }}>
+          🗓️ <b>推荐发布窗口（不限单日）：</b>{slot.flexible_window}
+        </div>
+      )}
+      {slot.publish_rationale && (
+        <div className="muted" style={{
+          marginTop: 6, fontSize: 11.5, padding: "4px 8px",
           background: "#f5f7fa", borderRadius: 4, borderLeft: "2px solid var(--primary)",
         }}>
           ⏰ <b>选这个时段的理由：</b>{slot.publish_rationale}

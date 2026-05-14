@@ -84,6 +84,10 @@ class TopicSlot:
     # 「为什么排这一周 + 为什么这个角度」。≤40 字。让用户看得到 AI 的判断逻辑，
     # 也方便事后回看校准。Empty = 老 pack 没有该字段（向后兼容）。
     decision_rationale: str = ""
+    # v0.61: publish_slot 不再是死锁的「就周三 21:00」。AI 根据 DNA 热力图给一个
+    # 推荐窗口（"周三-周五任一晚 / 21:00-23:00"），告诉用户可以在这个范围内自由选发。
+    # 只锁极端早晨/深夜这种明显不合适的时段。空 = 老 pack 或 AI 没给（向后兼容）。
+    flexible_window: str = ""
 
 
 @dataclass

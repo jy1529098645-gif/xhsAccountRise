@@ -474,6 +474,7 @@ _SCHEDULE_SCHEMA = {
                     "content_format": {"type": "string"},
                     "direction_idx": {"type": "integer"},
                     "decision_rationale": {"type": "string"},
+                    "flexible_window": {"type": "string"},
                 },
             },
         },
@@ -497,10 +498,16 @@ async def expand(
     # for diversity. Scheduler (planning reasoning) → gpt-4o. Resourcer +
     # body drafter (volume / mechanical) → deepseek. Net cost ≈ 1/5 vs
     # Sonnet, latency similar or faster.
+    # v0.61: drafter 切回 claude:sonnet。原因 ：deepseek/gpt-4o 写出来的初稿
+    # 像「AI 教程口吻」，没有活人感（"本文将介绍 5 款工具..." / "首先..."）。
+    # Claude 在 voice / 情绪 / emoji / 自暴弱点 / 真人测评感 上明显更自然，
+    # 而 voice 是起号最关键的差异化。其它 agent（topicgen / scheduler /
+    # resourcer）仍走便宜模型，因为它们只产结构不产文字。Net cost 约 +30%，
+    # 但起号成本里 voice 质量比 token 钱重要得多。
     topicgen_spec: str = "openai:gpt-4o,deepseek",
     scheduler_spec: str = "openai:gpt-4o",
     resourcer_spec: str = "deepseek",
-    drafter_spec: str = "deepseek",
+    drafter_spec: str = "claude:sonnet",
     # If True, cancel any in-flight expand for the same pack_id and start
     # fresh. Without this, the idempotency guard would 409 the duplicate
     # POST. Useful when user clicked the direction again because the
@@ -1000,6 +1007,7 @@ async def _expand_inner(
             publish_rationale=str(s.get("publish_rationale", "")),
             direction_idx=int(s.get("direction_idx", -1)) if s.get("direction_idx") is not None else -1,
             decision_rationale=str(s.get("decision_rationale", "")),
+            flexible_window=str(s.get("flexible_window", "")),
         )
         for _raw in schedule_raw
         for s in [_to_slot_dict(_raw)]
