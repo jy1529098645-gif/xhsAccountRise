@@ -420,7 +420,7 @@ export default function Composer() {
               <div style={{fontSize: 36, marginBottom: 10}}>👈</div>
               填好左边的主题，点「🚀 启动 AI 团队」。
               <br />
-              <span style={{fontSize: 12}}>结果会在这里展示：6 步 agent 时间线 + N 份候选 + 评审分数 + 改稿 + 融合最终稿 + 发布执行计划</span>
+              <span style={{fontSize: 12}}>结果会在这里展示 ：agent 时间线 + N 份候选 + 评审分数 + 自动选最高分作 final（你可以一键改选）+ 发布执行计划</span>
             </div>
           )}
           {bundle && <ComposeResult bundle={bundle} />}
@@ -431,6 +431,31 @@ export default function Composer() {
 }
 
 function ComposeResult({bundle}: {bundle: ComposeBundle}) {
+  // v0.61.19 ：本地 chosen 镜像 ，initial = backend 已挑的（_pick_best 给的
+  // top-critic 那条）。点 ★ 选这条 → optimistic 更新 + PATCH 后端。
+  const [chosenId, setChosenId] = useState<string | null>(
+    (bundle.final as any)?.candidate_id ?? (bundle.refined as any)?.candidate_id ?? null
+  );
+  const [savingChoice, setSavingChoice] = useState(false);
+  async function chooseDraft(cid: string) {
+    if (cid === chosenId) return;
+    const prev = chosenId;
+    setChosenId(cid);  // optimistic
+    setSavingChoice(true);
+    try {
+      await api.chooseCandidate(bundle.draft_id, cid);
+    } catch (e: any) {
+      // eslint-disable-next-line no-console
+      console.error("[chooseCandidate] failed", e);
+      setChosenId(prev);  // rollback
+      alert("保存失败 ：" + (e?.message || String(e)));
+    } finally {
+      setSavingChoice(false);
+    }
+  }
+  // 当前 final 候选对象 ：找 chosenId 对应的那条 draft
+  const chosenDraft = bundle.drafts.find((d: any) => d.candidate_id === chosenId)
+    ?? bundle.final ?? bundle.refined ?? null;
   return (
     <>
       <div className="card">
@@ -439,6 +464,7 @@ function ComposeResult({bundle}: {bundle: ComposeBundle}) {
             <strong>本次出稿 #{bundle.draft_id.slice(0, 8)}</strong>
             <p className="muted">
               耗时 {bundle.totals.elapsed_s}s · 成本 ≈ ${bundle.totals.cost_usd.toFixed(4)} · {bundle.drafts.length} 份候选
+              {savingChoice && " · 保存选择中…"}
             </p>
           </div>
           <Link to={`/drafts/${bundle.draft_id}`}><button className="secondary">详情</button></Link>
@@ -502,28 +528,40 @@ function ComposeResult({bundle}: {bundle: ComposeBundle}) {
       {Array.isArray(bundle.drafts) && bundle.drafts.length > 0 && (
         <div className="card" id="composer-step-3">
           <h2>📝 {bundle.drafts.length} 份候选 (起草团 + 审稿团)</h2>
+          <p className="muted" style={{fontSize: 12, marginTop: -4, marginBottom: 8}}>
+            默认 AI 自动选 critic 分最高的那条作为 final（★）— 不满意点 「★ 选这条」直接覆盖。
+          </p>
           <div className="candidate-grid">
-            {bundle.drafts.map(c => <Candidate key={c.candidate_id} c={c} />)}
+            {bundle.drafts.map(c => (
+              <Candidate key={c.candidate_id} c={c}
+                chosen={c.candidate_id === chosenId}
+                onChoose={() => chooseDraft(c.candidate_id)} />
+            ))}
           </div>
         </div>
       )}
 
-      {/* step-4 锚点放在 refined / final 中先出现的那个上 — 用户点「最终稿」
-          就能滚到「定稿区域」，不论是 Refiner 出的还是 Synthesizer 出的。 */}
       {bundle.refined && (
-        <div className="card" id={bundle.final ? undefined : "composer-step-4"}>
-          <h2>✏️ 改稿 (Refiner)</h2>
+        <div className="card">
+          <h2>✏️ Refiner 润色版（基于候选的进一步打磨）</h2>
           <div className="candidate-grid">
-            <Candidate c={bundle.refined} />
+            <Candidate c={bundle.refined}
+              chosen={(bundle.refined as any).candidate_id === chosenId}
+              onChoose={() => chooseDraft((bundle.refined as any).candidate_id)} />
           </div>
         </div>
       )}
 
-      {bundle.final && (
-        <div className="card" id="composer-step-4">
-          <h2>★ 最终稿 (Synthesizer 融合)</h2>
+      {/* v0.61.19 ：「★ 最终稿」section 现在显示用户选的那一条（默认 = critic
+          最高分）。点上面任一候选的 「★ 选这条」可换。 */}
+      {chosenDraft && (
+        <div className="card" id="composer-step-4" style={{borderTop: "3px solid var(--primary)"}}>
+          <h2>★ 当前 final 稿 · 这条会进 Drafts 历史</h2>
+          <p className="muted" style={{fontSize: 12, marginTop: -4, marginBottom: 8}}>
+            想换 final ？回到 「📑 候选」section 点别条的 「★ 选这条」。
+          </p>
           <div className="candidate-grid">
-            <Candidate c={bundle.final} highlighted />
+            <Candidate c={chosenDraft as any} highlighted />
           </div>
         </div>
       )}
@@ -602,7 +640,14 @@ function PlanCard({plan}: {plan: any}) {
   );
 }
 
-function Candidate({c, highlighted}: {c: DraftCandidate; highlighted?: boolean}) {
+function Candidate({c, highlighted, chosen, onChoose}: {
+  c: DraftCandidate;
+  highlighted?: boolean;
+  /** v0.61.19 ：是否当前 final（替代之前的「Synthesizer 融合」）。chosen=true
+   *  的卡用 primary 边框 + 「★ 已选为 final」徽章；其它卡显示「★ 选这条」按钮。 */
+  chosen?: boolean;
+  onChoose?: () => void;
+}) {
   if (c.error) {
     return (
       <div className="cand failed">
@@ -617,15 +662,35 @@ function Candidate({c, highlighted}: {c: DraftCandidate; highlighted?: boolean})
   const scores = c.critiques?.[0]?.scores ?? {};
   const cAngle = (p as any).angle as string | undefined;
   return (
-    <div className={`cand ${highlighted ? "final" : ""}`}>
-      <div className="llm">
-        {c.llm}
-        {cAngle && (
-          <span style={{
-            marginLeft: 8, padding: "1px 8px", fontSize: 11, fontWeight: 600,
-            background: "var(--primary-soft)", color: "var(--primary)",
-            borderRadius: 8,
-          }}>{cAngle}</span>
+    <div className={`cand ${highlighted || chosen ? "final" : ""}`}>
+      <div className="row" style={{justifyContent: "space-between", alignItems: "flex-start", gap: 8}}>
+        <div className="llm" style={{flex: 1, minWidth: 0}}>
+          {c.llm}
+          {cAngle && (
+            <span style={{
+              marginLeft: 8, padding: "1px 8px", fontSize: 11, fontWeight: 600,
+              background: "var(--primary-soft)", color: "var(--primary)",
+              borderRadius: 8,
+            }}>{cAngle}</span>
+          )}
+          {chosen && (
+            <span style={{
+              marginLeft: 8, padding: "1px 8px", fontSize: 11, fontWeight: 700,
+              background: "var(--primary)", color: "#fff", borderRadius: 8,
+            }}>★ 已选为 final</span>
+          )}
+        </div>
+        {onChoose && !chosen && (
+          <button onClick={onChoose}
+            title="把这条标为 final — 后续 Refiner 在这条上做最终润色，Drafts 历史也记这条"
+            style={{
+              padding: "4px 10px", fontSize: 12, fontWeight: 600,
+              background: "#fff", color: "var(--primary)",
+              border: "1px solid var(--primary)", borderRadius: 6,
+              cursor: "pointer", flexShrink: 0,
+            }}>
+            ★ 选这条
+          </button>
         )}
       </div>
       <div className="muted" style={{fontSize: 11}}>

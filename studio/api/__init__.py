@@ -681,6 +681,8 @@ class ComposeRequest(BaseModel):
     skip_refiner: bool = False
     skip_synthesizer: bool = False
     skip_planner: bool = False
+    # v0.61.19 ：默认 false = pick-best；true = LLM 重写融合（旧行为）
+    fuse_synthesizer: bool = False
     fast_mode: bool = True  # default 2-stage pipeline (drafter → synth ∥ planner)
 
 
@@ -715,6 +717,7 @@ async def compose(req: ComposeRequest) -> dict[str, Any]:
         skip_refiner=req.skip_refiner,
         skip_synthesizer=req.skip_synthesizer,
         skip_planner=req.skip_planner,
+        fuse_synthesizer=req.fuse_synthesizer,
         fast_mode=req.fast_mode,
     )
     bundle = await agent_pipeline.run_pipeline(brief, cfg)

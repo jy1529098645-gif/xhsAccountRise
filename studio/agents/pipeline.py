@@ -63,6 +63,11 @@ class PipelineConfig:
     skip_refiner: bool = False
     skip_synthesizer: bool = False
     skip_planner: bool = False
+    # v0.61.19 ：默认 Synthesizer 不调 LLM 融合 — 跑 _pick_best 直接挑 critic
+    # 最高分的候选作为 final。这样保留单家原 voice（融合常常把 Claude 的活人感
+    # + 4o 结构 + DeepSeek 下沉摊平成中庸版）。用户在 UI 上还能一键选其它候选
+    # 覆盖。设 fuse_synthesizer=True 恢复旧的 LLM 融合行为。
+    fuse_synthesizer: bool = False
     # v0.50 fast_mode: collapse to 2 LLM calls.
     #   Stage 1 = drafter (does its own strategy decisions inline)
     #   Stage 2 = synthesizer ∥ planner (no separate critic, no refiner)
@@ -115,9 +120,11 @@ async def run_pipeline(
         RefinerAgent(_first(registry.build(cfg.refiner_spec)))
         if not cfg.skip_refiner else None
     )
+    # v0.61.19 ：只有 fuse_synthesizer=True 才传 generator 给 SynthesizerAgent，
+    # 否则 generator=None → 走 _pick_best 自动挑 critic 最高分（保 voice）。
     synth_gen = (
         _first(registry.build(cfg.synthesizer_spec))
-        if not cfg.skip_synthesizer else None
+        if (not cfg.skip_synthesizer and cfg.fuse_synthesizer) else None
     )
     synthesizer = SynthesizerAgent(generator=synth_gen)
     planner = (
