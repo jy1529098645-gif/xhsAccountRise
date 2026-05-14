@@ -1,15 +1,27 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <!-- 复刻侧边栏 .sidebar .brand .logo 的样式：
-       28×28 / border-radius 6 → 按 64 viewbox 放大约 2.3 倍
-       background: var(--primary) = #ff2442（小红书主题色）
-       color: #fff 粗体 EZ -->
-  <rect width="64" height="64" rx="14" fill="#ff2442"/>
+  <!-- EZAccountRise brand favicon
+       红色 rounded square (#ff2442 小红书主题色) + 白色 EZ + 右上角金黄上升小箭头
+       上升箭头 = Rise，跟产品名「起号」呼应 -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ff4d6a"/>
+      <stop offset="100%" stop-color="#ff2442"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#g)"/>
   <text
     x="32" y="44"
     text-anchor="middle"
     font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
-    font-size="30"
-    font-weight="700"
+    font-size="28"
+    font-weight="800"
     fill="#ffffff"
+    letter-spacing="-1"
   >EZ</text>
+  <!-- 右上角上升箭头 ↗ — 一个金黄圆点 + 短粗的上升直线 -->
+  <g transform="translate(48, 12)">
+    <circle r="7" fill="#ffd84d"/>
+    <path d="M -3 3 L 3 -3 M 0 -3 L 3 -3 L 3 0"
+      stroke="#7a3d00" stroke-width="2" stroke-linecap="round" fill="none"/>
+  </g>
 </svg>

@@ -4,7 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="referrer" content="no-referrer" />
-    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+    <!-- v0.61.18 ：多 link 标签覆盖兼容性 ；?v=2 强制浏览器拉新版（旧版被
+         浏览器 / 操作系统缓存得很死，尤其是 pinned tab 的 favicon）-->
+    <link rel="icon" type="image/svg+xml" href="favicon.svg?v=2" />
+    <link rel="apple-touch-icon" href="favicon.svg?v=2" />
+    <link rel="shortcut icon" href="favicon.svg?v=2" />
     <title>EZAccountRise · AI 起号工作台</title>
   </head>
   <body>

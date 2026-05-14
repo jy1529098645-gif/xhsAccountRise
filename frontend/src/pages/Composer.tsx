@@ -209,11 +209,67 @@ export default function Composer() {
 
   const noBackend = !api.isConnected();
 
+  // v0.61.18 ：4 步 stepper（仿 Strategy）。Composer 跟 Strategy 不一样的是 ：
+  // 跑完后所有结果都在同一页 — 所以这里的「跳步」实际是滚动到对应锚点 section。
+  // 每步是否可点 = 该 section 是否已有数据。
+  const hasStrategy = !!(bundle?.strategy && Object.keys(bundle.strategy).length > 0);
+  const hasDrafts = Array.isArray(bundle?.drafts) && (bundle?.drafts?.length ?? 0) > 0;
+  const hasFinal = !!(bundle?.final || bundle?.refined);
+  // 当前活跃步骤 ：未跑 → 1（表单）；running → 2（起草中）；done → 4（最终稿）/3（候选）
+  const composerStep = !bundle ? (running ? 2 : 1) : (hasFinal ? 4 : hasDrafts ? 3 : 2);
+  function scrollTo(id: string) {
+    const el = document.getElementById(id);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  function ComposerStepBtn({n, label, canGo, anchorId}: {
+    n: number; label: string; canGo: boolean; anchorId: string;
+  }) {
+    const isCurrent = composerStep === n;
+    const isDone = composerStep > n;
+    const clickable = canGo || isDone || n === 1;
+    return (
+      <button type="button" onClick={() => { if (clickable) scrollTo(anchorId); }}
+        disabled={!clickable}
+        title={clickable ? `跳到第 ${n} 步` : `先完成前面 / 等当前跑完`}
+        style={{
+          flex: 1, padding: "8px 12px", fontSize: 13, fontWeight: 600,
+          border: "1px solid " + (isCurrent ? "var(--primary)" : "var(--border)"),
+          background: isCurrent ? "var(--primary)" : (isDone ? "var(--ok-soft)" : "#fff"),
+          color: isCurrent ? "#fff" : (isDone ? "var(--ok)" : (clickable ? "var(--fg)" : "var(--muted)")),
+          borderRadius: 6, cursor: clickable ? "pointer" : "not-allowed",
+          opacity: clickable ? 1 : 0.55,
+          transition: "background 0.15s, color 0.15s",
+        }}>
+        <span style={{
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+          width: 20, height: 20, borderRadius: "50%", marginRight: 6,
+          background: isCurrent ? "rgba(255,255,255,0.25)" : (isDone ? "var(--ok)" : "#eee"),
+          color: isCurrent ? "#fff" : (isDone ? "#fff" : "var(--muted)"),
+          fontSize: 11,
+        }}>{isDone ? "✓" : n}</span>
+        {label}
+      </button>
+    );
+  }
+
   return (
     <div>
       <div className="page-header">
         <h1>✍️ Composer · AI 起号助手</h1>
         <p>填主题 → 点开始 → 多个 AI 协作出最佳稿件 + 发布计划</p>
+      </div>
+
+      {/* v0.61.18 ：4 步跳转条 — 点击滚动到对应 section */}
+      <div className="card" style={{padding: "10px 12px"}}>
+        <div className="row" style={{gap: 6, alignItems: "stretch"}}>
+          <ComposerStepBtn n={1} label="📝 主题" canGo={true} anchorId="composer-step-1" />
+          <ComposerStepBtn n={2} label="📋 策略" canGo={hasStrategy} anchorId="composer-step-2" />
+          <ComposerStepBtn n={3} label="📑 候选" canGo={hasDrafts} anchorId="composer-step-3" />
+          <ComposerStepBtn n={4} label="★ 最终稿" canGo={hasFinal} anchorId="composer-step-4" />
+        </div>
+        <div className="muted" style={{fontSize: 11, marginTop: 6, textAlign: "center"}}>
+          点上面任一步滚动到对应区域 · 跑完一次每个区域都会有内容
+        </div>
       </div>
 
       {noBackend && (
@@ -235,7 +291,7 @@ export default function Composer() {
       )}
 
       <div className="compose-grid">
-        <div className="compose-form card">
+        <div className="compose-form card" id="composer-step-1">
           <h2>1. 主题</h2>
 
           <div style={{marginBottom: 8}}>
@@ -390,7 +446,7 @@ function ComposeResult({bundle}: {bundle: ComposeBundle}) {
       </div>
 
       {bundle.strategy && Object.keys(bundle.strategy).length > 0 && (
-        <div className="card">
+        <div className="card" id="composer-step-2">
           <h2>📋 策略 (Strategist)</h2>
           <div className="cards-grid">
             <SBox label="hook 类型" value={bundle.strategy.recommended_hook} />
@@ -444,7 +500,7 @@ function ComposeResult({bundle}: {bundle: ComposeBundle}) {
       )}
 
       {Array.isArray(bundle.drafts) && bundle.drafts.length > 0 && (
-        <div className="card">
+        <div className="card" id="composer-step-3">
           <h2>📝 {bundle.drafts.length} 份候选 (起草团 + 审稿团)</h2>
           <div className="candidate-grid">
             {bundle.drafts.map(c => <Candidate key={c.candidate_id} c={c} />)}
@@ -452,8 +508,10 @@ function ComposeResult({bundle}: {bundle: ComposeBundle}) {
         </div>
       )}
 
+      {/* step-4 锚点放在 refined / final 中先出现的那个上 — 用户点「最终稿」
+          就能滚到「定稿区域」，不论是 Refiner 出的还是 Synthesizer 出的。 */}
       {bundle.refined && (
-        <div className="card">
+        <div className="card" id={bundle.final ? undefined : "composer-step-4"}>
           <h2>✏️ 改稿 (Refiner)</h2>
           <div className="candidate-grid">
             <Candidate c={bundle.refined} />
@@ -462,7 +520,7 @@ function ComposeResult({bundle}: {bundle: ComposeBundle}) {
       )}
 
       {bundle.final && (
-        <div className="card">
+        <div className="card" id="composer-step-4">
           <h2>★ 最终稿 (Synthesizer 融合)</h2>
           <div className="candidate-grid">
             <Candidate c={bundle.final} highlighted />
