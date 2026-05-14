@@ -195,7 +195,7 @@ textarea { resize: vertical; min-height: 100px; font-size: 14px; }
 .cand .title { font-size: 15px; font-weight: 600; margin: 8px 0 4px; }
 .cand .body {
   white-space: pre-wrap; font-size: 12.5px; background: #fafafa;
-  padding: 8px; border-radius: 6px; max-height: 240px; overflow: auto;
+  padding: 8px; border-radius: 6px;
   border: 1px solid #f0f0f0;
 }
 .cand .scores { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; margin-top: 8px; }
