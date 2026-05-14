@@ -409,7 +409,26 @@ export const api = {
     getJson<{
       integrated_id: string; library_id: string | null; created_at: number;
       status: string; source_ids: string[]; elapsed_s: number; consensus: any;
+      /** v0.61.11: 用户勾选采纳的 single_side_views 索引。 */
+      included_single_side_view_indices?: number[];
     }>(`/api/integrated_reports/${id}`),
+  /** v0.61.11: 保存用户对 single_side_views 的「采纳」勾选。Down-stream
+   *  Strategy / Composer 会把这些观点作为强参考注入 prompt。 */
+  setIntegratedSingleSideInclusion: (integratedId: string, indices: number[]) => {
+    const backend = backendUrl();
+    if (!backend) throw new HttpError(0, "需要本地后端");
+    return fetch(
+      `${backend}/api/integrated_reports/${integratedId}/single_side_inclusion`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ indices }),
+      },
+    ).then(async r => {
+      if (!r.ok) throw new HttpError(r.status, await r.text().catch(() => ""));
+      return r.json() as Promise<{ updated: boolean; indices: number[] }>;
+    });
+  },
 
   // Strategy -----------------
   autofillStrategy: (opts?: { personal_hint?: string; constraints_hint?: string;

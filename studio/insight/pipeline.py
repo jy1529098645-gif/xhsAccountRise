@@ -710,6 +710,30 @@ def consensus_summary_for_prompt(consensus: dict[str, Any] | None) -> str:
     cr = consensus.get("consensus_risks") or []
     if cr:
         parts.append("风险：" + "；".join(r for r in cr[:4]))
+    # v0.61.11 ：把用户在 IntegratedReport 页勾选的「单方观点」也作为认可
+    # 采纳的额外观点拼进来 — 默认 single_side_views 是被丢弃的（GPT-4o 觉得
+    # 没共识），但用户看完明确说「我要这条」，下游就必须采纳。
+    elected_idx = consensus.get("_user_included_single_side_views") or []
+    if elected_idx:
+        ssv = consensus.get("single_side_views") or []
+        chosen: list[str] = []
+        for i in elected_idx:
+            try:
+                v = ssv[int(i)]
+            except (ValueError, IndexError, TypeError):
+                continue
+            if not isinstance(v, dict):
+                continue
+            line = f"  · [{v.get('side', '?')}] {v.get('point', '')}"
+            if v.get("note"):
+                line += f"（{v.get('note')}）"
+            chosen.append(line)
+        if chosen:
+            parts.append(
+                "⭐ 用户已明确认可采纳的额外观点（虽是单方但用户判断有用，"
+                "下游策略 / 文案必须把这些观点作为强参考使用）：\n"
+                + "\n".join(chosen)
+            )
     return "\n".join(parts)
 
 

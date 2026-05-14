@@ -13,6 +13,7 @@ interface IntegratedDTO {
   source_ids: string[];
   elapsed_s: number;
   consensus: any;
+  included_single_side_view_indices?: number[];
 }
 
 export default function IntegratedReport() {
@@ -20,16 +21,39 @@ export default function IntegratedReport() {
   const [data, setData] = useState<IntegratedDTO | null>(null);
   const [sourceNames, setSourceNames] = useState<Record<string, string>>({});
   const [err, setErr] = useState<string | null>(null);
+  // v0.61.11 ：本地镜像勾选状态，toggle 时立即更新 UI + 异步 PATCH 后端。
+  const [includedIdx, setIncludedIdx] = useState<Set<number>>(new Set());
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!id) return;
-    api.getIntegratedReport(id).then(setData).catch(e => setErr(e.message));
+    api.getIntegratedReport(id).then(d => {
+      setData(d);
+      setIncludedIdx(new Set(d.included_single_side_view_indices ?? []));
+    }).catch(e => setErr(e.message));
     api.listExternalReports().then(rows => {
       const m: Record<string, string> = {};
       for (const r of rows as any[]) m[r.report_id] = r.name;
       setSourceNames(m);
     }).catch(() => {});
   }, [id]);
+
+  async function toggleInclude(idx: number) {
+    if (!id) return;
+    const next = new Set(includedIdx);
+    if (next.has(idx)) next.delete(idx); else next.add(idx);
+    setIncludedIdx(next);  // optimistic
+    setSaving(true);
+    try {
+      await api.setIntegratedSingleSideInclusion(id, Array.from(next));
+    } catch (e: any) {
+      // rollback
+      setIncludedIdx(includedIdx);
+      setErr("保存失败 ：" + e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
 
   if (err) return <div className="banner danger">{err}</div>;
   if (!data) return <div className="card muted">加载中…</div>;
@@ -149,26 +173,48 @@ export default function IntegratedReport() {
       )}
 
       {c.single_side_views?.length > 0 && (
-        <details className="card">
+        <details className="card" open>
           <summary style={{cursor: "pointer", fontWeight: 600}}>
-            ▾ 没合并 / 单方观点（{c.single_side_views.length}）
+            ▾ 没合并 / 单方观点（{c.single_side_views.length}） ·
+            <span className="muted" style={{fontWeight: 400, marginLeft: 6}}>
+              勾选的会作为「用户已认可的额外观点」注入下游 Strategy / Composer prompt
+            </span>
+            {saving && <span className="muted" style={{marginLeft: 8, fontSize: 11}}>保存中…</span>}
           </summary>
           <div style={{marginTop: 8}}>
-            {c.single_side_views.map((v: any, i: number) => (
-              <div key={i} style={{padding: "8px 12px", marginBottom: 6,
-                                    background: "#fafafa", borderRadius: 6,
-                                    borderLeft: "3px solid #a855f7"}}>
-                <div className="muted" style={{fontSize: 11.5, marginBottom: 4}}>
-                  来源 ：{v.side}
-                </div>
-                <div style={{fontSize: 13}}>{v.point}</div>
-                {v.note && (
-                  <div style={{fontSize: 11.5, marginTop: 4, color: "var(--muted)", fontStyle: "italic"}}>
-                    {v.note}
+            <div className="muted" style={{fontSize: 11.5, marginBottom: 8}}>
+              已勾选 {includedIdx.size} / {c.single_side_views.length}
+              {includedIdx.size > 0 && " ✓ 会被下游强参考"}
+            </div>
+            {c.single_side_views.map((v: any, i: number) => {
+              const checked = includedIdx.has(i);
+              return (
+                <label key={i} style={{
+                  display: "flex", gap: 10, alignItems: "flex-start",
+                  padding: "10px 12px", marginBottom: 6,
+                  background: checked ? "#fdf4ff" : "#fafafa",
+                  borderRadius: 6,
+                  borderLeft: `3px solid ${checked ? "var(--primary)" : "#a855f7"}`,
+                  cursor: "pointer",
+                  transition: "background 0.15s",
+                }}>
+                  <input type="checkbox" checked={checked}
+                    onChange={() => toggleInclude(i)}
+                    style={{marginTop: 3, flexShrink: 0}} />
+                  <div style={{flex: 1, minWidth: 0}}>
+                    <div className="muted" style={{fontSize: 11.5, marginBottom: 4}}>
+                      来源 ：{v.side}{checked && " · ✓ 已采纳"}
+                    </div>
+                    <div style={{fontSize: 13}}>{v.point}</div>
+                    {v.note && (
+                      <div style={{fontSize: 11.5, marginTop: 4, color: "var(--muted)", fontStyle: "italic"}}>
+                        {v.note}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            ))}
+                </label>
+              );
+            })}
           </div>
         </details>
       )}

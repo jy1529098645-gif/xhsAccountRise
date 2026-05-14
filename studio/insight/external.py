@@ -499,12 +499,87 @@ def get_integrated_report(integrated_id: str) -> dict[str, Any] | None:
                     d["source_ids"] = json.loads(d.get("source_ids") or "[]")
                     d["consensus"] = json.loads(d.get("consensus_json") or "null")
                     d.pop("consensus_json", None)
+                    # v0.61.11 ：把用户已勾选的 single_side_view 索引也返回出来，
+                    # 前端用这个 hydrate checkbox 状态。
+                    raw_idx = d.get("included_single_side_view_indices")
+                    try:
+                        d["included_single_side_view_indices"] = (
+                            json.loads(raw_idx) if raw_idx else []
+                        )
+                    except Exception:
+                        d["included_single_side_view_indices"] = []
                     return d
             finally:
                 con.close()
         except Exception:
             continue
     return None
+
+
+def set_included_single_side_views(
+    integrated_id: str, indices: list[int]
+) -> bool:
+    """v0.61.11 ：保存用户对单方观点的「采纳」选择。indices 是 0-based 数组，
+    指向 consensus.single_side_views[]。扫所有 per-lib .db 找到对应行更新。"""
+    import sqlite3
+    from .. import config
+
+    db.apply_migrations(verbose=False)
+    payload = json.dumps([int(i) for i in indices], ensure_ascii=False)
+    libs_dir = config.DATA_DIR / "libraries"
+    updated = False
+    if libs_dir.exists():
+        for lib_dir in libs_dir.iterdir():
+            if not lib_dir.is_dir():
+                continue
+            per_lib_db = lib_dir / "xhs.db"
+            if not per_lib_db.exists():
+                continue
+            try:
+                con = sqlite3.connect(per_lib_db)
+                try:
+                    has_table = con.execute(
+                        "SELECT name FROM sqlite_master"
+                        " WHERE type='table' AND name='studio_integrated_reports'"
+                    ).fetchone()
+                    if not has_table:
+                        continue
+                    # 也确保该列存在（老库可能没跑 013 migration）
+                    col_exists = any(
+                        r[1] == "included_single_side_view_indices"
+                        for r in con.execute(
+                            "PRAGMA table_info(studio_integrated_reports)"
+                        )
+                    )
+                    if not col_exists:
+                        try:
+                            con.execute(
+                                "ALTER TABLE studio_integrated_reports"
+                                " ADD COLUMN included_single_side_view_indices TEXT"
+                            )
+                        except Exception:
+                            pass
+                    cur = con.execute(
+                        "UPDATE studio_integrated_reports"
+                        " SET included_single_side_view_indices = ?"
+                        " WHERE integrated_id = ?",
+                        (payload, integrated_id),
+                    )
+                    if cur.rowcount > 0:
+                        updated = True
+                    con.commit()
+                finally:
+                    con.close()
+            except Exception:
+                continue
+    if updated:
+        # 让下游 Strategy / Composer 立刻看到新的采纳。
+        try:
+            from . import pipeline as _ip
+            _ip.invalidate_ref_block_cache()
+        except Exception:
+            pass
+    return updated
 
 
 def list_integrated_reports(library_id: str | None = None) -> list[dict[str, Any]]:
@@ -559,7 +634,10 @@ def list_integrated_reports(library_id: str | None = None) -> list[dict[str, Any
 
 
 def latest_integrated_for_current_library() -> dict[str, Any] | None:
-    """v0.61.6 ：跨所有 per-lib .db 找当前 project + lib 下最新完成的整合稿。"""
+    """v0.61.6/11 ：跨所有 per-lib .db 找当前 project + lib 下最新完成的整合稿。
+    顺便把用户勾选的 single_side_view indices 注入到 consensus dict 里
+    （key=_user_included_single_side_views），让 consensus_summary_for_prompt
+    可以把它们当「用户认可的额外观点」拼进 prompt。"""
     import sqlite3
     from .. import config, library as _library
 
@@ -588,17 +666,46 @@ def latest_integrated_for_current_library() -> dict[str, Any] | None:
                 ).fetchone()
                 if not has:
                     continue
-                row = con.execute(
-                    "SELECT consensus_json, created_at FROM studio_integrated_reports"
-                    " WHERE (project_id = ? OR project_id IS NULL)"
-                    " AND (library_id = ? OR library_id IS NULL)"
-                    " AND status = 'completed'"
-                    " ORDER BY created_at DESC LIMIT 1",
-                    (pid, lib),
-                ).fetchone()
+                # 列可能不存在（老库未跑 013 migration）— 用 PRAGMA 探测
+                col_exists = any(
+                    r[1] == "included_single_side_view_indices"
+                    for r in con.execute(
+                        "PRAGMA table_info(studio_integrated_reports)"
+                    )
+                )
+                if col_exists:
+                    row = con.execute(
+                        "SELECT consensus_json, created_at,"
+                        " included_single_side_view_indices"
+                        " FROM studio_integrated_reports"
+                        " WHERE (project_id = ? OR project_id IS NULL)"
+                        " AND (library_id = ? OR library_id IS NULL)"
+                        " AND status = 'completed'"
+                        " ORDER BY created_at DESC LIMIT 1",
+                        (pid, lib),
+                    ).fetchone()
+                else:
+                    row = con.execute(
+                        "SELECT consensus_json, created_at,"
+                        " NULL AS included_single_side_view_indices"
+                        " FROM studio_integrated_reports"
+                        " WHERE (project_id = ? OR project_id IS NULL)"
+                        " AND (library_id = ? OR library_id IS NULL)"
+                        " AND status = 'completed'"
+                        " ORDER BY created_at DESC LIMIT 1",
+                        (pid, lib),
+                    ).fetchone()
                 if row and row["consensus_json"]:
                     try:
                         c = json.loads(row["consensus_json"])
+                        # 注入用户选择的 single_side_view 索引到 consensus
+                        raw_idx = row["included_single_side_view_indices"]
+                        try:
+                            idx_list = json.loads(raw_idx) if raw_idx else []
+                        except Exception:
+                            idx_list = []
+                        if idx_list:
+                            c["_user_included_single_side_views"] = list(idx_list)
                         ts = int(row["created_at"] or 0)
                         if best is None or ts > best[0]:
                             best = (ts, c)

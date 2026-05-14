@@ -873,6 +873,23 @@ def get_integrated_api(integrated_id: str) -> dict[str, Any]:
     return r
 
 
+class SingleSideInclusionRequest(BaseModel):
+    indices: list[int] = []
+
+
+@app.patch("/api/integrated_reports/{integrated_id}/single_side_inclusion")
+def patch_single_side_inclusion(
+    integrated_id: str, req: SingleSideInclusionRequest
+) -> dict[str, Any]:
+    """v0.61.11 ：保存用户对单方观点的「采纳」勾选。被选中的索引会通过
+    consensus_summary_for_prompt 注入到 Strategy / Composer prompt，作为
+    用户已认可的额外观点（强参考）。"""
+    ok = external_reports.set_included_single_side_views(integrated_id, req.indices)
+    if not ok:
+        raise HTTPException(404, "integrated report not found")
+    return {"updated": True, "indices": req.indices}
+
+
 # ---------------- drafts -------------------------
 
 @app.get("/api/drafts")
