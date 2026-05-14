@@ -11,7 +11,7 @@ import { startJob, getJob, cancelJob as cancelLocalJob, clearJob as clearLocalJo
 import { LLM_CATALOG, CONTENT_ANGLES as STRATEGY_ANGLES } from "../catalog";
 import type {
   AccountInputDTO, Library, Platform, StrategicDirectionDTO, StrategyPackDTO,
-  StrategyListItem,
+  StrategyListItem, ProductContextDTO,
 } from "../types";
 
 const AUTOFILL_STAGES: TimelineStage[] = [
@@ -160,6 +160,11 @@ export default function Strategy() {
   const [activeLib, setActiveLib] = useState<Library | null>(null);
   const [platforms, setPlatforms] = useState<Platform[]>([]);
   const [hasExternalReports, setHasExternalReports] = useState<boolean>(false);
+  // v0.58: project-level product contexts (the brand bible the LLM reads)
+  const [productContexts, setProductContexts] = useState<ProductContextDTO[]>([]);
+  function reloadProductContexts() {
+    api.listProductContexts().then(setProductContexts).catch(() => {});
+  }
   const [packId, setPackId] = useState<string | null>(null);
   const [directions, setDirections] = useState<StrategicDirectionDTO[]>([]);
   const [chosenIdx, setChosenIdx] = useState<number | null>(null);
@@ -230,6 +235,7 @@ export default function Strategy() {
     Promise.all([api.listExternalReports(), api.listIntegratedReports()])
       .then(([ext, integ]) => setHasExternalReports(ext.length > 0 || integ.length > 0))
       .catch(() => {});
+    reloadProductContexts();
 
     // Read prefill from sessionStorage if user clicked a 'use this →' opp
     // on the Reports page. Wipe immediately so refresh doesn't re-prefill.
@@ -646,6 +652,15 @@ export default function Strategy() {
 
       {phase === "input" && (
         <>
+          <MaterialsBar
+            activeLib={activeLib}
+            hasExternalReports={hasExternalReports}
+            productContexts={productContexts}
+          />
+          <ProductContextCard
+            contexts={productContexts}
+            onChanged={reloadProductContexts}
+          />
           {autofill && (
             <div className="banner info" style={{display: "block"}}>
               <div className="row" style={{justifyContent: "space-between", alignItems: "flex-start"}}>
@@ -1592,6 +1607,226 @@ function TopPublishingSlotsCard() {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// v0.58 · 「已接入资料」状态条 — 在 Strategy 第一页顶部明确显示 AI 现在
+// 能读到哪些材料：激活库 + 外部分析报告 + 产品上下文。缺哪个直接给跳转。
+function MaterialsBar({activeLib, hasExternalReports, productContexts}: {
+  activeLib: Library | null;
+  hasExternalReports: boolean;
+  productContexts: ProductContextDTO[];
+}) {
+  const activeContexts = productContexts.filter(c => c.active === 1);
+  const items = [
+    {
+      label: "📚 数据库（爆款 DNA）",
+      ok: !!activeLib,
+      detail: activeLib ? `${activeLib.display_name} · ${activeLib.notes_count.toLocaleString()} 条笔记` : "未激活",
+      cta: activeLib ? null : { text: "去上传 →", to: "/settings#libraries" },
+    },
+    {
+      label: "📊 外部分析报告",
+      ok: hasExternalReports,
+      detail: hasExternalReports ? "已上传" : "未上传（可选）",
+      cta: hasExternalReports ? null : { text: "去上传 →", to: "/reports" },
+    },
+    {
+      label: "📦 产品上下文",
+      ok: activeContexts.length > 0,
+      detail: activeContexts.length > 0
+        ? `${activeContexts.length} 份激活 · 共 ${activeContexts.reduce((a, c) => a + c.chars, 0).toLocaleString()} 字`
+        : "未上传 — ⚠️ 强烈推荐（避免 AI 编造功能名）",
+      cta: null, // 表单下面就有上传区，不用跳转
+    },
+  ];
+  return (
+    <div className="card" style={{background: "#fafafa", padding: 12}}>
+      <div className="muted" style={{fontSize: 12, marginBottom: 8}}>
+        📊 <b>AI 现在能读到这些材料</b>（材料越完整，策略越贴合你的产品）
+      </div>
+      <div style={{display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8}}>
+        {items.map((it, i) => (
+          <div key={i} style={{
+            padding: 10, borderRadius: 6,
+            background: "#fff",
+            borderLeft: `3px solid ${it.ok ? "var(--ok)" : "#fde2a3"}`,
+            fontSize: 12.5,
+          }}>
+            <div className="row" style={{justifyContent: "space-between", alignItems: "baseline"}}>
+              <b style={{fontSize: 13}}>{it.label}</b>
+              <span style={{fontSize: 11, color: it.ok ? "var(--ok)" : "#a67700"}}>
+                {it.ok ? "✓" : "○"}
+              </span>
+            </div>
+            <div className="muted" style={{marginTop: 2, fontSize: 11.5}}>{it.detail}</div>
+            {it.cta && (
+              <Link to={it.cta.to} style={{fontSize: 11, marginTop: 4, display: "inline-block"}}>
+                {it.cta.text}
+              </Link>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// v0.58 · 产品上下文卡（A）— 让用户在 Strategy 第一页直接上传/管理产品资料。
+// 项目级永久：保存后所有后续 Strategy / Compose / Insight 都会自动注入到 prompt。
+function ProductContextCard({contexts, onChanged}: {
+  contexts: ProductContextDTO[];
+  onChanged: () => void;
+}) {
+  const [expanded, setExpanded] = useState(contexts.length === 0);
+  const [name, setName] = useState("");
+  const [body, setBody] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  async function handleSave() {
+    if (!body.trim()) { setErr("正文不能为空"); return; }
+    setBusy(true); setErr(null);
+    try {
+      await api.createProductContext(name.trim() || "产品介绍", body.trim());
+      setInfo("✓ 已保存。下次 Strategy / Compose 都会自动读这个上下文。");
+      setName(""); setBody("");
+      onChanged();
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleFile(f: File | null) {
+    if (!f) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await api.uploadProductContextFile(f);
+      setInfo(`✓ 上传成功 · ${r.chars.toLocaleString()} 字 · 自动激活`
+        + (r.extract_warning ? `（注意 ：${r.extract_warning}）` : ""));
+      onChanged();
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleActive(c: ProductContextDTO) {
+    try { await api.setProductContextActive(c.context_id, c.active !== 1); onChanged(); }
+    catch (e: any) { alert("失败: " + e.message); }
+  }
+
+  async function del(c: ProductContextDTO) {
+    if (!confirm(`删除「${c.name}」？删了之后 AI 就不再读这条上下文了。`)) return;
+    try { await api.deleteProductContext(c.context_id); onChanged(); }
+    catch (e: any) { alert("失败: " + e.message); }
+  }
+
+  return (
+    <div className="card" style={{borderLeft: "4px solid var(--primary)"}}>
+      <div className="spread" style={{alignItems: "flex-start"}}>
+        <div style={{flex: 1}}>
+          <h2 style={{margin: 0}}>📦 产品上下文 ─ 告诉 AI 你的产品到底是啥</h2>
+          <p className="muted" style={{fontSize: 12, margin: "4px 0 0"}}>
+            上传/粘贴你的产品介绍 / 账号定位 / 经典叙事 / 核心功能清单 / 雷区。
+            <b style={{color: "var(--primary)"}}>项目级永久存储</b> — 一次设置，所有 Strategy / Compose / Insight 都自动注入。
+            不上传的话 AI 容易编造功能名 / 走通用 AI 工具腔。
+          </p>
+        </div>
+        <button className="ghost" onClick={() => setExpanded(!expanded)}>
+          {expanded ? "收起" : `${contexts.length > 0 ? `${contexts.length} 个 · ` : ""}展开管理 →`}
+        </button>
+      </div>
+
+      {/* Existing contexts list — always show even when collapsed if any */}
+      {contexts.length > 0 && (
+        <div style={{marginTop: 10, display: "grid", gap: 6}}>
+          {contexts.map(c => (
+            <div key={c.context_id} style={{
+              padding: 10, background: c.active === 1 ? "#f6fff0" : "#fafafa",
+              borderRadius: 6, borderLeft: `3px solid ${c.active === 1 ? "var(--ok)" : "#ddd"}`,
+            }}>
+              <div className="row" style={{justifyContent: "space-between"}}>
+                <div style={{flex: 1, minWidth: 0}}>
+                  <div style={{fontWeight: 600, fontSize: 13}}>
+                    {c.active === 1 ? "✓ " : "○ "}{c.name}
+                    <span className="muted" style={{fontWeight: 400, fontSize: 11, marginLeft: 8}}>
+                      {c.source_format}{c.source_filename ? ` · ${c.source_filename}` : ""} · {c.chars.toLocaleString()} 字
+                    </span>
+                  </div>
+                </div>
+                <div className="row" style={{gap: 4}}>
+                  <button className="ghost" style={{fontSize: 11, padding: "2px 8px"}}
+                    onClick={() => toggleActive(c)}>
+                    {c.active === 1 ? "停用" : "启用"}
+                  </button>
+                  <button className="ghost" style={{fontSize: 11, padding: "2px 8px", color: "var(--danger)"}}
+                    onClick={() => del(c)}>删除</button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {expanded && (
+        <div style={{marginTop: 12, padding: 12, background: "#f7faff", borderRadius: 8}}>
+          {err && <div className="banner danger" onClick={() => setErr(null)}>{err}</div>}
+          {info && !err && <div className="banner info" onClick={() => setInfo(null)}>{info}</div>}
+
+          <div className="cards-grid" style={{gridTemplateColumns: "1fr 1fr", gap: 12}}>
+            <div style={{padding: 14, background: "#fff", borderRadius: 8,
+                         border: "2px dashed var(--primary)", textAlign: "center",
+                         cursor: busy ? "wait" : "pointer", opacity: busy ? 0.6 : 1}}
+                 onClick={() => !busy && fileRef.current?.click()}>
+              <div style={{fontSize: 28}}>📎</div>
+              <div style={{fontWeight: 600, marginTop: 4, fontSize: 13}}>
+                {busy ? "处理中…" : "上传产品文档"}
+              </div>
+              <div className="muted" style={{fontSize: 11, marginTop: 4}}>
+                PDF / DOCX / MD / TXT · 自动提取文字
+              </div>
+              <input ref={fileRef} type="file" style={{display: "none"}}
+                accept=".pdf,.docx,.md,.txt"
+                onChange={e => handleFile(e.target.files?.[0] ?? null)} />
+            </div>
+
+            <div style={{padding: 14, background: "#fff", borderRadius: 8, border: "1px solid #eee"}}>
+              <div style={{fontWeight: 600, marginBottom: 6, fontSize: 13}}>✍️ 或直接粘贴文本</div>
+              <input value={name} onChange={e => setName(e.target.value)}
+                placeholder="名称（如：AcademiCats 产品说明）"
+                style={{width: "100%", marginBottom: 6, fontSize: 12.5}} />
+              <textarea value={body} onChange={e => setBody(e.target.value)}
+                placeholder="粘贴产品介绍 / 经典叙事三句话 / 核心功能 / 目标受众 / 雷区... 越详细 AI 越准"
+                style={{width: "100%", minHeight: 100, fontSize: 12.5, fontFamily: "inherit"}} />
+              <button onClick={handleSave} disabled={busy || !body.trim()}
+                style={{marginTop: 6, fontSize: 12, padding: "6px 12px"}}>
+                {busy ? "保存中…" : "💾 保存为产品上下文"}
+              </button>
+            </div>
+          </div>
+
+          <details style={{marginTop: 10}}>
+            <summary style={{cursor: "pointer", fontSize: 11, color: "var(--muted)"}}>
+              💡 应该粘什么？看这里
+            </summary>
+            <ul style={{marginLeft: 18, fontSize: 12, lineHeight: 1.7, marginTop: 6}}>
+              <li><b>核心叙事三句话</b>（"姐妹们我以前要开 8 个网页 / 现在只开 1 个 / AcademiCats 把搜→引→写→降→审 全干了"）</li>
+              <li><b>真实功能清单</b>（"14 学术源并发检索 / Synthesis Lab 综述实验室 / Citation list 自动引用 / 多格式导出"）— 避免 AI 编出 "Citation Wizard" 这种不存在的工具名</li>
+              <li><b>目标受众分群</b>（"国内毕业论文党 / 留学 essay 党 / 硕士开题党 — 每群语言不一样"）</li>
+              <li><b>账号人设</b>（"AC 学姐 · 留英 5 年 · 帮 3000+ 同学搞定论文"）</li>
+              <li><b>禁忌词 / 雷区</b>（"代写 / 包过 / 降 0 一律不许说"）</li>
+              <li><b>场景金句</b>（"姐妹们 / 家人们 / 宝子" — 用学生圈黑话）</li>
+            </ul>
+          </details>
+        </div>
+      )}
     </div>
   );
 }

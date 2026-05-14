@@ -1582,6 +1582,77 @@ def feedback_reject(proposal_id: str, req: DecideProposalRequest) -> dict[str, A
 
 
 # ============================================================================
+# v0.58 — Product Context: project-level brand bible the LLM reads every time
+# ============================================================================
+
+from .. import product_context as _pc  # noqa: E402
+
+
+@app.get("/api/product-context")
+def product_context_list(active_only: bool = False) -> list[dict[str, Any]]:
+    return _pc.list_contexts(active_only=active_only)
+
+
+@app.get("/api/product-context/{context_id}")
+def product_context_get(context_id: str) -> dict[str, Any]:
+    r = _pc.get_context(context_id)
+    if not r:
+        raise HTTPException(404, "product context not found")
+    return r
+
+
+class ProductContextCreate(BaseModel):
+    name: str
+    body_text: str
+
+
+@app.post("/api/product-context")
+def product_context_create(req: ProductContextCreate) -> dict[str, Any]:
+    try:
+        return _pc.create_context(name=req.name, body_text=req.body_text)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/product-context/upload")
+async def product_context_upload(
+    file: UploadFile = File(...),
+    name: str = Form(""),
+) -> dict[str, Any]:
+    data = await file.read()
+    try:
+        return _pc.upload_file_bytes(
+            filename=file.filename or "uploaded",
+            data=data,
+            name=name or None,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/product-context/{context_id}")
+def product_context_delete(context_id: str) -> dict[str, Any]:
+    try:
+        return _pc.delete_context(context_id)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+
+
+class ProductContextActiveRequest(BaseModel):
+    active: bool
+
+
+@app.post("/api/product-context/{context_id}/active")
+def product_context_set_active(
+    context_id: str, req: ProductContextActiveRequest,
+) -> dict[str, Any]:
+    try:
+        return _pc.set_active(context_id, req.active)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+
+
+# ============================================================================
 # v0.54 — Static frontend serving for one-image cloud deploys.
 #
 # When the container is built via the repo's Dockerfile, the React app's

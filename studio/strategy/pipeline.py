@@ -55,6 +55,75 @@ def _latest_dna_payload() -> dict[str, Any]:
 from ..llm_call import call_for_json as _call_json  # noqa: E402
 
 
+# v0.58 phase hard rules — 之前 SCHEDULER_SYSTEM 只在 system prompt 里软建议
+# 「第 1 周拉新 / 第 2 周专业感 / 第 3 周沉淀 / 第 4 周转化」，结果 LLM 经常忽略
+# 导致 4 周内容混在一起。把规则塞到 user msg 里作为硬约束，且按 cycle_weeks
+# 自动适配（1 周 / 2 周 / 4 周 / 8 周 / 12 周）。
+def _build_phase_rules(cycle_weeks: int) -> str:
+    """Per-phase HARD constraints injected as user message. The LLM is much
+    more likely to honor user-msg rules than system-msg suggestions."""
+    if cycle_weeks <= 1:
+        return (
+            "【🚦 阶段硬约束 · 单周冲刺】\n"
+            "  · 全周都按「拉新 + 转化」混合走：每篇都要有强 hook + 明确产品/账号关联\n"
+            "  · 不需要分阶段，每篇都既要拉新也要预埋转化路径"
+        )
+    if cycle_weeks == 2:
+        return (
+            "【🚦 阶段硬约束 · 2 周冲短期】\n"
+            "  · 第 1 周（拉新 + 建立专业感）：\n"
+            "      - intent 必须是「拉新」或「沉淀」\n"
+            "      - 禁止直接挂产品链接或卖货语言\n"
+            "      - 必须 ≥ 50% 选题对应「用户高频询问」（来自 DNA 评论需求）\n"
+            "      - hook_type 偏向 数字型 / 痛点型 / 教程型\n"
+            "  · 第 2 周（转化）：\n"
+            "      - intent 必须是「转化」或「互动」\n"
+            "      - 必须有 ≥ 1 篇产品功能详解 / 用户证言体 / 对比横评\n"
+            "      - CTA 要明显（评论引导 / 求私信 / 求收藏）"
+        )
+    if cycle_weeks == 4:
+        return (
+            "【🚦 阶段硬约束 · 4 周推荐起步（每周硬性区分，不是软建议）】\n"
+            "  · 第 1 周（intent=「拉新」严格）：\n"
+            "      - hook_type 只能选 数字型 / 痛点型 / 故事型 / 段子型\n"
+            "      - 禁止挂产品链接、禁止「我推荐 XX」直接卖货语言\n"
+            "      - 必须 ≥ 50% slot 直接对应 DNA「用户高频询问」原话\n"
+            "      - 目的 ：建立「我懂你」信任，不卖产品\n"
+            "  · 第 2 周（intent=「建立专业感」严格）：\n"
+            "      - hook_type 偏向 教程型 / 工具型 / 科普型 / 对比型\n"
+            "      - 必须 ≥ 1 篇深度文献综述/方法论拆解\n"
+            "      - 可以露出产品但作为「我用的工具」而非「推荐你买」\n"
+            "      - 目的 ：建立专业人设，让粉丝相信你懂行\n"
+            "  · 第 3 周（intent=「沉淀」严格）：\n"
+            "      - 必须有 ≥ 2 篇「系列」（如 7 步法的第 N 步）\n"
+            "      - hook_type 偏向 列表型 / 教程型 / 测评型\n"
+            "      - 强调「合集 / 全套 / 完整流程」类内容\n"
+            "      - 目的 ：让点过赞的人记住你 = 完整解决方案，不是一篇就走\n"
+            "  · 第 4 周（intent=「转化」严格）：\n"
+            "      - 必须 ≥ 1 篇产品深度演示 + ≥ 1 篇用户案例 / 证言 + ≥ 1 篇 CTA 评论体\n"
+            "      - hook_type 可以 种草型 / 故事型 / 对比型\n"
+            "      - 评论引导明显 ：「评论你的 X，我帮你看」/「私信发 Y 给你」\n"
+            "      - 目的 ：把 1-3 周积累的粉丝转化成私信线索 / 试用 / 付费"
+        )
+    if cycle_weeks <= 8:
+        return (
+            f"【🚦 阶段硬约束 · {cycle_weeks} 周中长期】\n"
+            f"  · 第 1-{max(2, cycle_weeks // 4)} 周（拉新）：DNA 评论原话 hook，禁挂链接\n"
+            f"  · 第 {max(2, cycle_weeks // 4) + 1}-{max(cycle_weeks // 2, 4)} 周（建立专业感 + 互动）：深度教程 + 工具流\n"
+            f"  · 第 {max(cycle_weeks // 2, 4) + 1}-{cycle_weeks - 1} 周（沉淀）：系列 + 合集 + 全流程\n"
+            f"  · 第 {cycle_weeks} 周（转化）：产品 + 用户证言 + 强 CTA"
+        )
+    # 12+ 周
+    q = cycle_weeks // 4
+    return (
+        f"【🚦 阶段硬约束 · {cycle_weeks} 周深耕（4 段）】\n"
+        f"  · 第 1-{q} 周（拉新）：DNA 评论原话 hook\n"
+        f"  · 第 {q+1}-{2*q} 周（建立专业感）：深度教程 + 工具流\n"
+        f"  · 第 {2*q+1}-{3*q} 周（沉淀）：系列 + 合集 + 全流程\n"
+        f"  · 第 {3*q+1}-{cycle_weeks} 周（转化）：产品深度 + 用户证言 + 强 CTA"
+    )
+
+
 _DIRECTIONS_SCHEMA = {
     "type": "object",
     "required": ["directions"],
@@ -89,14 +158,25 @@ async def propose(inp: AccountInput, positioner_spec: str = "openai:gpt-4o") -> 
     dna = _latest_dna_payload()
 
     from ..insight.pipeline import full_reference_block_for_prompt
+    from .. import product_context as _pc
     report_ctx = full_reference_block_for_prompt()
     report_block = f"\n\n{report_ctx}\n" if report_ctx else ""
+    pctx = _pc.context_block()
+    pctx_block = (
+        f"\n\n【⭐ 你的产品/账号定位（强约束 — 反复引用其中的真实功能 / 用户原话 / 经典叙事）】\n{pctx}\n"
+        if pctx else ""
+    )
 
     user_text = (
         f"【用户初步定位】\n{prompts.input_blurb(inp)}"
+        f"{pctx_block}"
         f"{report_block}\n"
         f"【该平台爆款 DNA】\n{prompts.dna_blurb(dna)}\n\n"
         f"输出 8-12 个差异化的账号定位方向（宁多勿少 ；用户需要足够的选项来挑）。"
+        + ("\n\n⭐ **产品上下文强约束** ：每个方向必须能映射到产品上下文里的至少 1 个真实功能 / 1 句经典叙事 / "
+           "1 类目标用户。**绝对不要发明产品上下文里没提的功能名 / 工具名**。"
+           "如果产品上下文里写了具体的「核心叙事三句话」/「场景金句」/「禁忌词」，方向的 why_works 必须照搬这些原话。"
+           if pctx else "")
         + ("\n\n⭐⭐⭐ **核心约束** ⭐⭐⭐\n"
            "用户上传的外部报告是这个任务的**最强参考**，不是参考之一。请仔细阅读上面每一份报告的「关键论点 / 数据 / 案例 / 建议方向」，每一个独到观点都要在你的方向候选里找到落地点。\n"
            "  - 报告里推荐的具体方向 → 你必须有对应的候选，不要泛化\n"
@@ -204,11 +284,22 @@ async def propose_stream(
     dna = _latest_dna_payload()
 
     from ..insight.pipeline import full_reference_block_for_prompt
+    from .. import product_context as _pc
     report_ctx = full_reference_block_for_prompt()
     report_block = f"\n\n{report_ctx}\n" if report_ctx else ""
+    # v0.58: product context — the operator's own description of "what this
+    # product actually is". Project-level, persisted across all strategy /
+    # compose / insight runs. Heavily prompted so the LLM doesn't fall back
+    # to generic AI-tool marketing copy or hallucinate feature names.
+    pctx = _pc.context_block()
+    pctx_block = (
+        f"\n\n【⭐ 你的产品/账号定位（强约束 — 反复引用其中的真实功能 / 用户原话 / 经典叙事）】\n{pctx}\n"
+        if pctx else ""
+    )
 
     user_text = (
         f"【用户初步定位】\n{prompts.input_blurb(inp)}"
+        f"{pctx_block}"
         f"{report_block}\n"
         f"【该平台爆款 DNA】\n{prompts.dna_blurb(dna)}\n\n"
         f"输出 8-12 个差异化的账号定位方向（宁多勿少）。\n"
@@ -217,6 +308,9 @@ async def propose_stream(
         + ("\n\n⭐ 报告强约束（同 propose 非流式版）：每个独到观点都要在方向里找到落地点 ；"
            "矛盾观点保留两种 ；70% 候选可溯源到报告。"
            if report_ctx else "")
+        + ("\n\n⭐ 产品上下文强约束 ：每个方向必须能映射到产品上下文里的至少 1 个真实功能 / 1 句经典叙事 / "
+           "1 类目标用户。**不要发明产品上下文里没提的功能名**（绝对禁止 hallucinate 工具名）。"
+           if pctx else "")
     )
 
     gen = registry.build(positioner_spec)[0]
@@ -632,6 +726,20 @@ async def _expand_inner(
             f"  - 大致每个角度 ≈ {per_angle} 篇（最后剩余 slot 可在角度间灵活分配）\n"
             f"  - 同一周内尽量混合不同角度，避免一周全是同一个角度\n"
         )
+    # v0.58: pull product context into scheduler too — the most important
+    # injection point since this generates the actual 30 篇排期 content.
+    from .. import product_context as _pc
+    pctx = _pc.context_block()
+    pctx_block = (
+        f"\n\n【⭐⭐⭐ 你的产品/账号定位（每篇必须真正引用其中的功能/叙事/受众）】\n{pctx}\n"
+        if pctx else ""
+    )
+
+    # v0.58 phase rules — 4 阶段硬性约束（之前只是软建议，导致 4 周内容看不出差异化）。
+    # 按 cycle_weeks 切分阶段并把规则塞进 prompt。
+    cw = inp.cycle_weeks
+    phase_rules = _build_phase_rules(cw)
+
     sched_user = (
         f"【已选定的账号方向】\n"
         f"name: {chosen.name}\n"
@@ -639,13 +747,20 @@ async def _expand_inner(
         f"target_audience: {chosen.target_audience}\n"
         f"hook_angles: {chosen.hook_angles}\n"
         f"differentiator: {chosen.differentiator}"
+        f"{pctx_block}"
         f"{report_block}\n"
         f"【运营约束】cycle_weeks={inp.cycle_weeks}, posts_per_week={inp.posts_per_week}"
         f" ⇒ 需要排出 {topic_count} 篇\n"
         f"【用户其它约束】\n{prompts.input_blurb(inp)}\n\n"
         f"【该平台 DNA】\n{prompts.dna_blurb(dna)}\n\n"
         f"【该平台发布时段热力图】\n{_format_timing(timing_heatmap)}\n\n"
+        f"{phase_rules}\n\n"
         f"请基于以上信息**直接出 {topic_count} 篇排期**（不需要先列候选池再筛 — 直接出 final）。"
+        + ("\n\n⭐ **产品上下文强约束** ：每篇 slot 的 title / outline / body_draft 必须能直接对应到"
+           "产品上下文里的某个真实功能 / 某句经典叙事 / 某个目标受众。绝对不要发明产品上下文里没出现的"
+           "功能名 / 工具名 / 数字（这是 hallucination，会直接打回）。"
+           "如果产品上下文里给了「核心叙事三句话」/「场景金句」，**至少 30% 的 slot 必须用这些原话作为正文片段或评论引导**。"
+           if pctx else "")
         + ("\n\n⭐ **强约束** ：上面用户上传的原始报告里写的选题方向 / 案例 / 数字 / hook，"
            "每一个都必须能在你的 schedule 里找到对应位置。报告里点名的方向 → 必须有 slot。"
            "不要因为「这条不像亮点」就丢。schedule 里至少 60% 要能直接溯源到上传报告的具体内容。"

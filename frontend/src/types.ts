@@ -242,6 +242,20 @@ export interface TrackingFetchResult {
   perf_id?: string | null;
 }
 
+// ---- Product Context (v0.58) ------------------------------------------
+export interface ProductContextDTO {
+  context_id: string;
+  project_id: string;
+  name: string;
+  source_format: "paste" | "pdf" | "docx" | "md" | "txt";
+  source_filename?: string | null;
+  chars: number;
+  created_at: number;
+  updated_at: number;
+  active: 0 | 1;
+  body_text?: string;    // only on getContext()
+}
+
 // ---- Feedback proposals (item 8) ---------------------------------------
 export interface PromptProposal {
   proposal_id: string;

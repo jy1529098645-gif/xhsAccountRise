@@ -211,6 +211,17 @@ def _build_dna_context(dna: dict[str, Any]) -> str:
         parts.append("【原始数据快照（真实数据，请直接看这里下结论）】\n"
                      + "\n".join(sch_lines))
 
+    # v0.58: Compose pipeline reads this same _build_dna_context via
+    # full_reference_block_for_prompt. Surface the project's product
+    # context so Drafter / Strategist anchors on real product features.
+    try:
+        from .. import product_context as _pc
+        pctx = _pc.context_block()
+        if pctx:
+            parts.append("【⭐ 你的产品/账号定位（写稿时必须真用其中的功能/叙事/受众）】\n" + pctx)
+    except Exception:
+        pass
+
     result = "\n\n".join(parts) or "（库里几乎没有可分析的内容，请基于 schema 推测）"
     if cache_key:
         _DNA_CONTEXT_CACHE[cache_key] = result

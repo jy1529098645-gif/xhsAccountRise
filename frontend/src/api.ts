@@ -4,6 +4,7 @@ import type {
   AccountInputDTO, StrategicDirectionDTO, StrategyDetail, StrategyListItem, StrategyPackDTO,
   ProjectDTO, InsightReportDTO,
   ComplianceCheck, ComplianceHit, TrackingFetchResult, PromptProposal,
+  ProductContextDTO,
 } from "./types";
 
 const STATIC_PLATFORMS: Platform[] = [
@@ -581,6 +582,37 @@ export const api = {
   feedbackRollup: (projectId?: string) =>
     getJson<{ project_id: string; drafts: any[] }>(
       `/api/feedback/rollup${projectId ? `?project_id=${projectId}` : ""}`).catch(() => ({ project_id: "", drafts: [] })),
+
+  // v0.58 — Product Context (project-level brand bible) -----------------
+  listProductContexts: (activeOnly = false) =>
+    getJson<ProductContextDTO[]>(`/api/product-context${activeOnly ? "?active_only=true" : ""}`).catch(() => []),
+  getProductContext: (contextId: string) =>
+    getJson<ProductContextDTO>(`/api/product-context/${contextId}`),
+  createProductContext: (name: string, bodyText: string) =>
+    postJson<ProductContextDTO>("/api/product-context", { name, body_text: bodyText }),
+  uploadProductContextFile: async (file: File, name: string = ""): Promise<ProductContextDTO & { extract_warning?: string }> => {
+    const backend = backendUrl();
+    if (!backend) throw new HttpError(0, "上传需要本地后端");
+    const fd = new FormData();
+    fd.append("file", file);
+    if (name) fd.append("name", name);
+    const res = await fetch(`${backend}/api/product-context/upload`, { method: "POST", body: fd });
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      throw new HttpError(res.status, `upload → ${res.status}: ${t.slice(0, 400)}`);
+    }
+    return res.json();
+  },
+  deleteProductContext: async (contextId: string) => {
+    const backend = backendUrl();
+    if (!backend) throw new HttpError(0, "需要本地后端");
+    const res = await fetch(`${backend}/api/product-context/${contextId}`, { method: "DELETE" });
+    if (!res.ok) throw new HttpError(res.status, await res.text());
+    return res.json();
+  },
+  setProductContextActive: (contextId: string, active: boolean) =>
+    postJson<{ context_id: string; active: boolean }>(
+      `/api/product-context/${contextId}/active`, { active }),
 
   // Compose -----------------
   compose: (req: Brief & {
