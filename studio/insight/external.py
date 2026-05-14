@@ -72,10 +72,38 @@ def extract_text_from_bytes(filename: str, data: bytes) -> tuple[str, str, str |
             from docx import Document
             import io
             doc = Document(io.BytesIO(data))
-            paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-            text = "\n\n".join(paragraphs).strip()
+            # v0.59.5: python-docx 的 doc.paragraphs 只读 body-level 段落，
+            # 完全跳过表格内容。产品说明 / 人设卡 / 功能清单这类文档大量
+            # 用表格组织信息 → 之前提取出来空字符串，上传报 400。
+            # 现在递归扫表格（含嵌套表格 + 表格里的段落）。
+            chunks: list[str] = []
+            for p in doc.paragraphs:
+                if p.text.strip():
+                    chunks.append(p.text.strip())
+
+            def _walk_tables(tables) -> None:
+                for tbl in tables:
+                    for row in tbl.rows:
+                        cells_text: list[str] = []
+                        for cell in row.cells:
+                            cell_parts: list[str] = []
+                            for p in cell.paragraphs:
+                                if p.text.strip():
+                                    cell_parts.append(p.text.strip())
+                            # Nested tables inside this cell — rare but happens
+                            if cell.tables:
+                                _walk_tables(cell.tables)
+                            if cell_parts:
+                                cells_text.append(" ".join(cell_parts))
+                        if cells_text:
+                            chunks.append(" | ".join(cells_text))
+
+            _walk_tables(doc.tables)
+            text = "\n\n".join(chunks).strip()
             if not text:
-                return ("", "docx", "Word 文档里没读到段落文本。")
+                return ("", "docx",
+                        "Word 文档里没读到任何文本（段落 + 表格都为空 — "
+                        "可能是纯图片 / 纯嵌入对象，建议导出为文字版后再上传）。")
             return (text, "docx", None)
         except ImportError:
             return ("", "docx", "服务器没装 python-docx。")
