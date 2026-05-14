@@ -596,12 +596,12 @@ class ComposeRequest(BaseModel):
     niche: str = ""
     extra_constraints: str = ""
     platform: str | None = None  # auto-inherit from active library if None
-    # v0.53: Claude kept for writing roles (drafter/refiner/synthesizer);
-    # everything else gpt-4o or deepseek for cost. Override via advanced UI.
+    # v0.54: Claude reserved for synthesizer only (the one final user-facing
+    # draft). Drafter / refiner / everything else → gpt-4o or deepseek.
     strategist_spec: str = "openai:gpt-4o"
-    drafter_spec: str = "claude:sonnet"
+    drafter_spec: str = "openai:gpt-4o"
     critic_spec: str = "deepseek"
-    refiner_spec: str = "claude:sonnet"
+    refiner_spec: str = "openai:gpt-4o"
     synthesizer_spec: str = "claude:sonnet"
     planner_spec: str = "deepseek"
     skip_strategist: bool = False
@@ -935,14 +935,15 @@ class StrategyInput(BaseModel):
 
 class StrategyExpandRequest(BaseModel):
     chosen_direction_idx: int = Field(ge=0)
-    # v0.53: topic creativity gets gpt-4o + deepseek diversity; scheduling
-    # (reasoning) → gpt-4o; resource compilation → deepseek. Body draft
-    # (per-slot 出稿) reverted to claude:haiku — Haiku gives Sonnet-tier
-    # Chinese writing for ~1/3 the cost; deepseek's 出稿 quality lagged.
+    # v0.54: body draft (per-slot 出稿) → gpt-4o. Strategy expand writes
+    # N slots × ~600 chars = large-volume text; per-slot drafts are
+    # intermediate (user usually re-runs them in Composer for the final
+    # post anyway). Composer's synthesizer is the one place we still
+    # spend Claude. Topic creativity / scheduler / resourcer unchanged.
     topicgen_spec: str = "openai:gpt-4o,deepseek"
     scheduler_spec: str = "openai:gpt-4o"
     resourcer_spec: str = "deepseek"
-    drafter_spec: str = "claude:haiku"
+    drafter_spec: str = "openai:gpt-4o"
     restart: bool = False  # cancel any in-flight expand for this pack + restart fresh
 
 

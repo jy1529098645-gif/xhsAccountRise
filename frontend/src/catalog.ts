@@ -47,9 +47,9 @@ export const AGENT_ROLES: AgentRoleSpec[] = [
     id: "drafter", label: "起草团",
     multi: true,
     description: "多家 AI 并发起草，每家产一份候选",
-    rationale: "跨模型多样性。Claude 中文最稳 / GPT 想法跳 / DeepSeek 下沉感",
+    rationale: "跨模型多样性。GPT 想法跳 / DeepSeek 下沉感 / Claude 中文稳但贵",
     whatItProduces: "N 份候选稿件",
-    defaultIds: ["claude:sonnet"],
+    defaultIds: ["openai"],
     canSkip: false,
   },
   {
@@ -67,14 +67,14 @@ export const AGENT_ROLES: AgentRoleSpec[] = [
     description: "拿评分最高的候选 + 审稿团反馈 → 重写",
     rationale: "针对性修缺陷，但保持原 hook 类型不偏题",
     whatItProduces: "改稿后的候选",
-    defaultIds: ["claude:sonnet"],
+    defaultIds: ["openai"],
     canSkip: true,
   },
   {
     id: "synthesizer", label: "融合师",
     multi: false,
     description: "看完所有候选 + 评分 + 改稿 → 综合各家优点写最终稿",
-    rationale: "★ 核心步骤 ★ 取 A 的标题、B 的金句、C 的结构融合成一篇",
+    rationale: "★ 核心步骤 ★ 这是用户最终发布的那一篇 — 全管线唯一保留 Claude 的位置",
     whatItProduces: "最终融合稿 (含 rationale：从哪家取的什么)",
     defaultIds: ["claude:sonnet"],
     canSkip: true,
@@ -90,15 +90,14 @@ export const AGENT_ROLES: AgentRoleSpec[] = [
   },
 ];
 
-// "省钱预设" — v0.53: default keeps Claude only for the writer roles
-// (drafter/refiner/synthesizer) where Chinese 出稿 quality matters; all
-// other roles run on gpt-4o or deepseek for cost.
+// "省钱预设" — v0.54: only the synthesizer (最终融合稿) runs on Claude
+// by default. Everything else is gpt-4o or deepseek.
 export const COST_PRESETS: Record<string, Record<AgentRoleId, string[]>> = {
-  "默认 (Claude 出稿 + 4o/DS 辅助 ★ 推荐)": {
+  "默认 (4o 起草 + Claude 融合最终稿 ★ 推荐)": {
     strategist: ["openai"],
-    drafter: ["claude:sonnet"],
+    drafter: ["openai"],
     critic: ["deepseek"],
-    refiner: ["claude:sonnet"],
+    refiner: ["openai"],
     synthesizer: ["claude:sonnet"],
     planner: ["deepseek"],
   },
@@ -118,11 +117,11 @@ export const COST_PRESETS: Record<string, Record<AgentRoleId, string[]>> = {
     synthesizer: ["deepseek"],
     planner: ["deepseek"],
   },
-  "多样性起草 (Claude + 4o + DeepSeek)": {
+  "多样性起草 (4o + DeepSeek + Claude 融合)": {
     strategist: ["openai"],
-    drafter: ["claude:sonnet", "openai", "deepseek"],
+    drafter: ["openai", "deepseek"],
     critic: ["deepseek"],
-    refiner: ["claude:sonnet"],
+    refiner: ["openai"],
     synthesizer: ["claude:sonnet"],
     planner: ["deepseek"],
   },

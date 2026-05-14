@@ -42,16 +42,17 @@ from .synthesizer import SynthesizerAgent
 
 @dataclass
 class PipelineConfig:
-    # v0.53: Claude kept ONLY for the actual writing roles where Chinese
-    # creative quality matters (drafter / refiner / synthesizer). Everything
-    # else — strategist, critic, planner — went to gpt-4o or deepseek for
-    # cost. Sonnet (not Opus) for the writers — comparable Chinese quality
-    # at ~5× lower cost.
+    # v0.54: Claude reserved ONLY for the synthesizer — the single
+    # user-facing final draft. Drafter (N candidates × multi-angle) and
+    # refiner are large-volume text generation now on gpt-4o for cost.
+    # Synthesizer reads all candidates and writes one fused final, which is
+    # what the user actually publishes — so Claude's Chinese quality earns
+    # its keep there.
     strategist_spec: str = "openai:gpt-4o"               # strategic planning
-    drafter_spec: str = "claude:sonnet"                  # 出稿核心 — Claude 中文好
-    critic_spec: str = "deepseek"                        # cheap judgment is enough
-    refiner_spec: str = "claude:sonnet"                  # rewrite content — Claude
-    synthesizer_spec: str = "claude:sonnet"              # final fusion (user-facing)
+    drafter_spec: str = "openai:gpt-4o"                  # N 份候选 (volume → 4o)
+    critic_spec: str = "deepseek"                        # cheap judgment
+    refiner_spec: str = "openai:gpt-4o"                  # 改稿 (volume → 4o)
+    synthesizer_spec: str = "claude:sonnet"              # ★ 最终融合稿 — 唯一保留 Claude 的位置
     planner_spec: str = "deepseek"                       # publish schedule, mechanical
     # Refiner is auto-skipped when drafter pool produced ≤1 candidate (the
     # default Sonnet-only setup). Set force_refiner=True to always run it
