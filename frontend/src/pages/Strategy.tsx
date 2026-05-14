@@ -626,6 +626,7 @@ export default function Strategy() {
         <DirectionsList
           directions={directions} chosenIdx={chosenIdx}
           onPick={pickDirection} onReset={reset}
+          slotCount={input.cycle_weeks * input.posts_per_week}
         />
       )}
 
@@ -793,8 +794,8 @@ function InputForm(props: {
       )}
 
       <button onClick={props.onSubmit}
-        style={{width: "100%", fontSize: 15, padding: "10px 0"}}>
-        🚀 让 AI 推荐 8-12 个方向（你上面的字段全部可选 ；空着也行）
+        style={{width: "100%", fontSize: 15, padding: "12px 0", fontWeight: 600}}>
+        🚀 让 AI 推荐 8-12 个方向 → 选一个后会出 <b style={{fontSize: 17}}>{i.cycle_weeks * i.posts_per_week}</b> 篇带初稿正文
       </button>
 
       {(props.consensusNotes.length > 0 || props.singleSideViews.length > 0) && (
@@ -902,11 +903,12 @@ function SpecField({label, hint, value, onChange, options}: {
   );
 }
 
-function DirectionsList({directions, chosenIdx, onPick, onReset}: {
+function DirectionsList({directions, chosenIdx, onPick, onReset, slotCount}: {
   directions: StrategicDirectionDTO[];
   chosenIdx: number | null;
   onPick: (i: number) => void;
   onReset: () => void;
+  slotCount: number;
 }) {
   return (
     <div>
@@ -968,7 +970,9 @@ function DirectionsList({directions, chosenIdx, onPick, onReset}: {
               </div>
             )}
 
-            <button style={{width: "100%", marginTop: 12}}>选这个方向 →</button>
+            <button style={{width: "100%", marginTop: 12, fontSize: 14, padding: "10px 0"}}>
+              选这个方向 → 出 <b>{slotCount}</b> 篇带初稿正文
+            </button>
           </div>
         ))}
       </div>

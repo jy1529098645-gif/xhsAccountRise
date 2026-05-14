@@ -400,8 +400,11 @@ async def expand(
     scheduler_spec: str = "claude:sonnet",
     # Resourcer aggregates lists; Sonnet handles it.
     resourcer_spec: str = "claude:sonnet",
-    # Per-slot body drafts (300-600 chars) — Sonnet plenty.
-    drafter_spec: str = "claude:sonnet",
+    # Per-slot body drafts (300-600 chars). v0.50: switched Sonnet → Haiku.
+    # Haiku is ~3-5× faster and on a focused 600-char xhs draft with a clear
+    # outline + reference report, the quality gap is small. Drops body
+    # drafter pool wall time from ~25-35s to ~8-15s.
+    drafter_spec: str = "claude:haiku",
     # If True, cancel any in-flight expand for the same pack_id and start
     # fresh. Without this, the idempotency guard would 409 the duplicate
     # POST. Useful when user clicked the direction again because the

@@ -71,6 +71,13 @@ class PipelineConfig:
     skip_refiner: bool = False
     skip_synthesizer: bool = False
     skip_planner: bool = False
+    # v0.50 fast_mode: collapse to 2 LLM calls.
+    #   Stage 1 = drafter (does its own strategy decisions inline)
+    #   Stage 2 = synthesizer ∥ planner (no separate critic, no refiner)
+    # Saves 30-50s vs the full 6-stage pipeline. Quality risk is low for
+    # default single-Sonnet drafter; multi-drafter or high-stakes runs
+    # should set fast_mode=False to restore the full pipeline.
+    fast_mode: bool = True
 
 
 def _first(gens: list[Generator]) -> Generator:
@@ -120,27 +127,26 @@ async def run_pipeline(brief: Brief, cfg: PipelineConfig | None = None) -> dict[
         if not cfg.skip_planner else None
     )
 
-    # Run sequence:
-    #   researcher (no LLM) → strategist → drafter pool → critic pool →
-    #   refiner → synthesizer in parallel with planner (planner only needs
-    #   strategy + drafts, not the synthesized final).
-    # Saves ~15-25s by overlapping the last two LLM calls.
     await researcher.run(ctx)
-    if strategist:
-        await strategist.run(ctx)
-    await drafter_pool.run(ctx)
-    if critic_pool:
-        await critic_pool.run(ctx)
-    # Auto-skip refiner when drafter pool produced ≤1 draft. With a single
-    # candidate, refiner just rewrites it based on its own critique —
-    # essentially the same work synthesizer does (synth reads draft +
-    # critique and produces final). Saves ~15-25s on the default
-    # single-Sonnet drafter setup.
-    skip_refiner_dynamic = (refiner is not None
-                            and len(ctx.drafts or []) <= 1
-                            and not getattr(cfg, "force_refiner", False))
-    if refiner and not skip_refiner_dynamic:
-        await refiner.run(ctx)
+
+    if cfg.fast_mode:
+        # v0.50 FAST mode: skip strategist (drafter does it inline), skip
+        # critic, skip refiner. Stages collapse to:
+        #   researcher → drafter (with strategy-aware prompt) → synth ∥ planner
+        # Saves ~30-50s vs the full pipeline.
+        await drafter_pool.run(ctx)
+    else:
+        # Full pipeline: researcher → strategist → drafter → critic → refiner
+        if strategist:
+            await strategist.run(ctx)
+        await drafter_pool.run(ctx)
+        if critic_pool:
+            await critic_pool.run(ctx)
+        skip_refiner_dynamic = (refiner is not None
+                                and len(ctx.drafts or []) <= 1
+                                and not getattr(cfg, "force_refiner", False))
+        if refiner and not skip_refiner_dynamic:
+            await refiner.run(ctx)
 
     # Synthesizer + Planner can run in parallel — neither reads the other's
     # output. Planner uses strategy + drafts (already in ctx); synthesizer

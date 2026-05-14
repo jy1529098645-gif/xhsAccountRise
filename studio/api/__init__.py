@@ -603,6 +603,7 @@ class ComposeRequest(BaseModel):
     skip_refiner: bool = False
     skip_synthesizer: bool = False
     skip_planner: bool = False
+    fast_mode: bool = True  # default 2-stage pipeline (drafter → synth ∥ planner)
 
 
 @app.post("/api/compose")
@@ -627,6 +628,7 @@ async def compose(req: ComposeRequest) -> dict[str, Any]:
         skip_refiner=req.skip_refiner,
         skip_synthesizer=req.skip_synthesizer,
         skip_planner=req.skip_planner,
+        fast_mode=req.fast_mode,
     )
     bundle = await agent_pipeline.run_pipeline(brief, cfg)
     return bundle
@@ -757,7 +759,7 @@ class IntegrationRequest(BaseModel):
     source_ids: list[str]
     library_id: str | None = None
     include_consensus_report_id: str | None = None
-    model_spec: str = "openai:gpt-4o"
+    model_spec: str = "claude:sonnet"
 
 
 @app.post("/api/external_reports/integrate")
@@ -918,7 +920,7 @@ class StrategyExpandRequest(BaseModel):
     topicgen_spec: str = "claude:sonnet,openai"
     scheduler_spec: str = "claude:sonnet"
     resourcer_spec: str = "claude:sonnet"
-    drafter_spec: str = "claude:sonnet"
+    drafter_spec: str = "claude:haiku"  # was sonnet — Haiku is 3-5× faster on short drafts
     restart: bool = False  # cancel any in-flight expand for this pack + restart fresh
 
 

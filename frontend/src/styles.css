@@ -72,16 +72,22 @@ button.ghost { background: transparent; color: var(--muted); border: 1px solid t
 button.ghost:hover { background: #f0f0f0; color: var(--text); }
 
 input, textarea, select {
-  font-family: inherit; font-size: 14px;
-  padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px;
-  background: #fff;
+  font-family: inherit; font-size: 15px;
+  padding: 10px 14px; border: 1px solid var(--border); border-radius: 6px;
+  background: #fff; line-height: 1.5;
+  width: 100%; box-sizing: border-box;
+}
+/* Don't force width:100% on tiny inputs (number / checkbox / specifically
+   sized). Selectors below opt those out. */
+input[type="checkbox"], input[type="radio"], input[type="number"][style*="width"] {
+  width: auto;
 }
 input:focus, textarea:focus, select:focus {
   outline: 2px solid var(--primary-soft); outline-offset: 0;
   border-color: var(--primary);
 }
-label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 2px; }
-textarea { resize: vertical; min-height: 80px; }
+label { font-size: 13px; color: var(--muted); display: block; margin-bottom: 4px; font-weight: 500; }
+textarea { resize: vertical; min-height: 100px; font-size: 14px; }
 
 .app { display: flex; min-height: 100vh; }
 
