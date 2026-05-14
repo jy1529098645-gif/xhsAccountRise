@@ -190,6 +190,24 @@ export default function Strategy() {
         if (pf.note) setInfo(`✨ ${pf.note}`);
       }
     } catch { /* ignore malformed storage */ }
+
+    // Restore previously-completed autofill / propose results from the
+    // jobs store. If user navigated away and back, the AI rationale chips
+    // and direction cards reappear without re-running.
+    const af = getJob<any>("autofill:current");
+    if (af?.status === "done" && af.result) {
+      setAutofill(af.result);
+      // Don't auto-write into input fields here — localStorage DRAFT_KEY
+      // is the user's source of truth for what they were editing.
+    }
+    const pr = getJob<any>("propose:current");
+    if (pr?.status === "done" && pr.result && !urlPackId) {
+      // Only restore propose if URL doesn't already point at a specific
+      // pack (in which case the [urlPackId] effect handles loading).
+      setPackId(pr.result.pack_id);
+      setDirections(pr.result.directions || []);
+      if (pr.result.directions?.length) setPhase("directions");
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

@@ -35,7 +35,83 @@ export interface JobState<T = any> {
 
 const _jobs = new Map<string, JobState>();
 const _listeners = new Set<() => void>();
-function notify() { _listeners.forEach(l => l()); }
+
+// ---- localStorage persistence -------------------------------------------
+// Done jobs (i.e. their results) are persisted so a page reload / browser
+// quit doesn't drop the last compose / autofill / insight output. We only
+// persist the result + meta, not the live Promise/AbortController.
+
+const _LS_KEY = "studio.jobs.done.v1";
+const _LS_MAX_ENTRIES = 16;
+const _LS_MAX_RESULT_KB = 256;  // cap each result blob
+
+interface PersistedJob {
+  id: string;
+  kind: JobKind;
+  startedAt: number;
+  finishedAt?: number;
+  status: "done" | "failed" | "aborted";
+  result?: unknown;
+  error?: string;
+  meta: Record<string, any>;
+}
+
+function _persistDone() {
+  try {
+    const out: PersistedJob[] = [];
+    for (const j of _jobs.values()) {
+      if (j.status === "running") continue;
+      // Skip very large results so we don't blow the 5 MB localStorage quota.
+      let serialized: string | null = null;
+      try {
+        serialized = JSON.stringify(j.result ?? null);
+      } catch { serialized = null; }
+      if (serialized && serialized.length > _LS_MAX_RESULT_KB * 1024) continue;
+      out.push({
+        id: j.id, kind: j.kind,
+        startedAt: j.startedAt, finishedAt: j.finishedAt,
+        status: j.status as PersistedJob["status"],
+        result: j.result, error: j.error, meta: j.meta,
+      });
+    }
+    // Keep the newest N
+    out.sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0));
+    localStorage.setItem(_LS_KEY, JSON.stringify(out.slice(0, _LS_MAX_ENTRIES)));
+  } catch { /* quota / serialize failure — accept it */ }
+}
+
+function _hydrate() {
+  try {
+    const raw = localStorage.getItem(_LS_KEY);
+    if (!raw) return;
+    const items: PersistedJob[] = JSON.parse(raw) || [];
+    for (const p of items) {
+      if (_jobs.has(p.id)) continue;
+      // Synthesize a "complete" JobState. Promise resolves immediately to
+      // the cached result; controller is a stub.
+      const stub: JobState = {
+        id: p.id, kind: p.kind,
+        startedAt: p.startedAt, finishedAt: p.finishedAt,
+        status: p.status,
+        controller: new AbortController(),
+        promise: p.status === "done"
+          ? Promise.resolve(p.result)
+          : Promise.reject(new Error(p.error || "rehydrated failed job")),
+        result: p.result, error: p.error,
+        meta: p.meta || {},
+      };
+      // Swallow the rejection so it doesn't crash the page.
+      stub.promise.catch(() => {});
+      _jobs.set(p.id, stub);
+    }
+  } catch { /* malformed — ignore */ }
+}
+_hydrate();
+
+function notify() {
+  _persistDone();
+  _listeners.forEach(l => l());
+}
 
 export function startJob<T>(
   id: string,

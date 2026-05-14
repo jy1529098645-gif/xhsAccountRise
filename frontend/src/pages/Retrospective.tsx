@@ -6,6 +6,7 @@ import NextStepCard from "../components/NextStepCard";
 import ErrorBoundary from "../components/ErrorBoundary";
 import { humaniseError } from "../errors";
 import { isAborted } from "../api";
+import { startJob, getJob, cancelJob as cancelLocalJob, clearJob } from "../lib/jobs";
 
 interface PublishedDraft {
   draft_id: string;
@@ -50,8 +51,8 @@ export default function Retrospective() {
   const [latestReviewId, setLatestReviewId] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-  function pauseAnalyze() { abortRef.current?.abort(); }
+  const RETRO_JOB_ID = "retro:current";
+  function pauseAnalyze() { cancelLocalJob(RETRO_JOB_ID); }
 
   async function load() {
     try {
@@ -64,7 +65,16 @@ export default function Retrospective() {
       setErr(humaniseError(e));
     }
   }
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    // Restore the last analysis result from the jobs store (survives
+    // navigation away/back and even page reload via localStorage).
+    const j = getJob<any>(RETRO_JOB_ID);
+    if (j?.status === "done" && j.result?.analysis) {
+      setAnalysis(j.result.analysis);
+      setLatestReviewId(j.result.review_id);
+    }
+  }, []);
 
   function toggleSel(id: string) {
     setSelectedIds(prev => {
@@ -84,12 +94,15 @@ export default function Retrospective() {
       return;
     }
     setErr(null); setInfo(null); setAnalyzing(true);
-    abortRef.current = new AbortController();
-    try {
-      const r = await api.runRetrospective({
+    const job = startJob<any>(
+      RETRO_JOB_ID, "retrospective",
+      (signal) => api.runRetrospective({
         draft_ids: Array.from(selectedIds),
         model_spec: "claude:sonnet",
-      }, abortRef.current.signal);
+      }, signal),
+    );
+    try {
+      const r = await job.promise;
       setAnalysis(r.analysis);
       setLatestReviewId(r.review_id);
       setInfo(`✓ 复盘报告生成完成（${r.elapsed_s}s · 覆盖 ${r.draft_ids.length} 篇）`);
@@ -102,7 +115,6 @@ export default function Retrospective() {
       }
     } finally {
       setAnalyzing(false);
-      abortRef.current = null;
     }
   }
 
@@ -157,7 +169,10 @@ export default function Retrospective() {
       {analysis && (
         <ErrorBoundary>
           <AnalysisView analysis={analysis} reviewId={latestReviewId} drafts={drafts}
-            onClose={() => { setAnalysis(null); setLatestReviewId(null); }} />
+            onClose={() => {
+              setAnalysis(null); setLatestReviewId(null);
+              clearJob(RETRO_JOB_ID);
+            }} />
         </ErrorBoundary>
       )}
 
