@@ -441,8 +441,11 @@ async def run(library_id: str, *,
     # v0.51: fast mode swapped Sonnet → gpt-4o (cost). Deep mode keeps Opus
     # because deep is the explicit "high-stakes investment" path where Opus
     # quality is the whole point.
+    # v0.61.17 ：fast mode 原本 claude_spec=openai:gpt-4o + openai_spec=gpt-4o
+    # = 同一个模型自己跟自己「共识」，根本不算 dual-AI。改成 Sonnet × gpt-4o
+    # 真双家，moderator 还是 gpt-4o（融合不需要那么强）。
     if claude_spec is None:
-        claude_spec = "claude:opus" if deep else "openai:gpt-4o"
+        claude_spec = "claude:opus" if deep else "claude:sonnet"
     if moderator_spec is None:
         moderator_spec = "claude:opus" if deep else "openai:gpt-4o"
     db.apply_migrations(verbose=False)

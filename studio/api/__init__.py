@@ -665,7 +665,13 @@ class ComposeRequest(BaseModel):
     # v0.51: Claude defaults dropped — too expensive. Reasoning roles → gpt-4o,
     # mechanical roles → deepseek. Users can override via the advanced UI.
     strategist_spec: str = "openai:gpt-4o"
-    drafter_spec: str = "openai:gpt-4o"
+    # v0.61.17 ：Composer drafter 默认改成 3 家并行（claude:sonnet + gpt-4o +
+    # deepseek）。用户反馈「候选稿几乎一模一样失去多样性」 — 根因是同一个
+    # gpt-4o 跑 N 次自然会收敛。多家轮转每个 candidate 用不同模型 + 不同
+    # default temperature（claude 1.0 / gpt-4o ~0.7 / deepseek 0.85），voice
+    # 差异立刻拉开。每家成本不同（claude 最贵）但 Composer 是最终出稿，
+    # 这钱必须花。用户可在 advanced UI 改回单家或换组合。
+    drafter_spec: str = "claude:sonnet,openai:gpt-4o,deepseek"
     critic_spec: str = "deepseek"
     refiner_spec: str = "openai:gpt-4o"
     synthesizer_spec: str = "openai:gpt-4o"

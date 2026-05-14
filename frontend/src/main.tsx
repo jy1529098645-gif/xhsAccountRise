@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { HashRouter } from "react-router-dom";
 import App from "./App";
+import ErrorBoundary from "./components/ErrorBoundary";
 import "./styles.css";
 
 // v0.61.12 ：last-resort 全局 error 兜底。React 的 ErrorBoundary 抓不到
@@ -51,10 +52,16 @@ ensureGlobalErrorBanner();
 // HashRouter (URLs like /#/dashboard) — avoids the BrowserRouter problem
 // where deep links 404 on static hosts (GitHub Pages, S3, Netlify rewrites,
 // etc.). Every browser handles this identically; no server rewrite needed.
+// v0.61.17 ：最外层再套一个 ErrorBoundary。RouteErrorBoundary 只罩在
+// <Routes> 外面，如果 App 自身 / 顶部导航 / Theme 同步逻辑崩了，那个
+// 内层 boundary 不一定能接住。最外层兜底 = 用户至少看到一张错误卡片，
+// 不会是纯白屏。
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <HashRouter>
-      <App />
-    </HashRouter>
+    <ErrorBoundary fallbackLabel="应用启动失败">
+      <HashRouter>
+        <App />
+      </HashRouter>
+    </ErrorBoundary>
   </React.StrictMode>
 );

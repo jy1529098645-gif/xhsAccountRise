@@ -165,11 +165,12 @@ async def autofill(
     spec: str = "openai:gpt-4o",
     deep: bool = False,
     # back-compat kwargs (deprecated; callers can still pass them but only
-    # the deep=True path uses them). v0.51: dual-side is gpt-4o + deepseek
-    # (kwarg names retained for API back-compat — they no longer reflect the
-    # underlying provider).
-    claude_spec: str = "openai:gpt-4o",
-    openai_spec: str = "deepseek",
+    # the deep=True path uses them).
+    # v0.61.17 ：原 default 是 gpt-4o + deepseek + gpt-4o moderator —— 没有
+    # Claude 参与，自称「双 AI 共识」其实是 4o vs deepseek。改成真正的
+    # 双家 (claude:sonnet + openai:gpt-4o) + moderator (gpt-4o)。
+    claude_spec: str = "claude:sonnet",
+    openai_spec: str = "openai:gpt-4o",
     moderator_spec: str = "openai:gpt-4o",
 ) -> dict[str, Any]:
     """Quickly draft a starter AccountInput.

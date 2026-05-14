@@ -25,6 +25,29 @@ export default function DraftDetail() {
   if (err) return <div className="banner danger">{err}</div>;
   if (!data) return <div className="card muted">加载中…</div>;
 
+  // v0.61.17 ：API 偶尔返回不完整 payload（比如 backend 报错但仍返回 200）。
+  // 没有 draft 字段 → 整页崩成白屏。这里 fail-soft：给用户「数据有问题」
+  // 卡片 + 重试按钮，而不是静默白屏。
+  if (!data.draft) {
+    return (
+      <div className="card" style={{borderLeft: "4px solid var(--warn)"}}>
+        <h2 style={{margin: 0}}>⚠️ 这份出稿数据看着不完整</h2>
+        <p className="muted" style={{fontSize: 12.5, marginTop: 6}}>
+          后端没返回 draft 字段。可能是 ID 失效 / DB 切换 / 后端版本不匹配。
+        </p>
+        <Link to="/drafts">← 回到全部历史出稿</Link>
+        <details style={{marginTop: 8}}>
+          <summary style={{fontSize: 11.5, color: "var(--muted)", cursor: "pointer"}}>
+            ▾ 原始返回
+          </summary>
+          <pre style={{fontSize: 10.5, background: "#fafafa", padding: 8, maxHeight: 200, overflow: "auto"}}>
+            {JSON.stringify(data, null, 2).slice(0, 1500)}
+          </pre>
+        </details>
+      </div>
+    );
+  }
+
   const d = data.draft;
   const cands = data.candidates ?? [];
   const trace = data.trace ?? [];

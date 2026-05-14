@@ -325,7 +325,7 @@ def _build_user_message(source_info: dict[str, Any]) -> str:
 
 
 async def propose_with_llm(source_info: dict[str, Any],
-                            llm_spec: str = "claude:opus") -> dict[str, Any]:
+                            llm_spec: str = "claude:sonnet") -> dict[str, Any]:
     """Ask an LLM to propose a schema mapping. Returns the mapping dict."""
     from .generators import registry
 
@@ -529,7 +529,7 @@ def apply_views(con: sqlite3.Connection, mapping: dict[str, Any]) -> None:
 
 # ---- Orchestrator ------------------------------------------------------
 
-async def adapt_library(lib_id: str, *, llm_spec: str = "claude:opus") -> dict[str, Any]:
+async def adapt_library(lib_id: str, *, llm_spec: str = "claude:sonnet") -> dict[str, Any]:
     """End-to-end: inspect → AI-propose map → save map. Even on total failure
     we save an empty mapping so placeholder views exist."""
     from . import library

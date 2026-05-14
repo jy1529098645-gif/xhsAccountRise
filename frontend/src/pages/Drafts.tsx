@@ -9,7 +9,13 @@ export default function Drafts() {
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    api.drafts().then(setDrafts).catch(e => setErr(e.message));
+    api.drafts()
+      .then(d => setDrafts(Array.isArray(d) ? d : []))
+      .catch(e => {
+        // eslint-disable-next-line no-console
+        console.error("[Drafts] load failed:", e);
+        setErr(e?.message || String(e));
+      });
   }, []);
 
   return (
