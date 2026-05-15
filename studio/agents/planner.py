@@ -144,6 +144,42 @@ async def _call_for_plan(gen: Generator, system: str, user: str) -> dict[str, An
     )
 
 
+def _coerce_str_list(value: Any) -> list[str]:
+    """Normalise an LLM-returned "list of plain items" into list[str].
+
+    Handles all the shapes non-Claude models tend to produce when given a
+    `array<string>` schema in JSON-mode (which is advisory, not enforced):
+
+    - None / missing      → []
+    - string              → [string]
+    - list of strings     → unchanged
+    - list of dicts       → extract a known key from each (tactic/text/item/...)
+    - dict with list val  → recurse into the first list-valued property
+    - anything else       → [str(value)]
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, list):
+        out: list[str] = []
+        for item in value:
+            out.extend(_coerce_str_list(item))
+        return out
+    if isinstance(value, dict):
+        for k in ("tactic", "text", "content", "item", "value"):
+            if isinstance(value.get(k), str) and value[k].strip():
+                return [value[k]]
+        for v in value.values():
+            if isinstance(v, list):
+                return _coerce_str_list(v)
+        try:
+            return [json.dumps(value, ensure_ascii=False)]
+        except Exception:
+            return []
+    return [str(value)]
+
+
 class PlannerAgent(Agent):
     name = "planner"
 
@@ -193,6 +229,12 @@ class PlannerAgent(Agent):
             return
 
         step.latency_ms = self._ms() - t0
+        # Non-Claude models (DeepSeek, GPT in json-mode) don't honor the
+        # schema as strictly as Claude's tool_use does — they sometimes
+        # return engagement_tactics as `[{tactic: "..."}]`, `{tactics: [...]}`,
+        # or even a single string. Coerce defensively so downstream code
+        # (the frontend in particular) can rely on string[].
+        plan["engagement_tactics"] = _coerce_str_list(plan.get("engagement_tactics"))
         # Stash on ctx for the pipeline to surface in the bundle.
         setattr(ctx, "plan", plan)
         step.input_summary = (

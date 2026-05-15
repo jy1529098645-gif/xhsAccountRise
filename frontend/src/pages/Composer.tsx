@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
-import { fmtLikes } from "../format";
+import { fmtLikes, coerceStringList } from "../format";
 import AgentConfigPanel, {
   AgentSelection, defaultSelection, selectionToSpecs,
 } from "../components/AgentConfigPanel";
@@ -120,6 +120,11 @@ export default function Composer() {
   // sessionStorage is dead simple, survives one cross-page hop, and we
   // delete it immediately on read so refreshes don't re-prefill.
   const [prefillNote, setPrefillNote] = useState<string | null>(null);
+  // Structured prefill from Strategy "出这一篇 →". Rendered as a visible
+  // "本篇大纲" card above the form so the user can see the outline directly
+  // instead of having to scan the extra_constraints textarea.
+  const [prefillOutline, setPrefillOutline] = useState<string[]>([]);
+  const [prefillMaterials, setPrefillMaterials] = useState<string[]>([]);
   const prefilled = useRef(false);
 
   useEffect(() => {
@@ -150,6 +155,9 @@ export default function Composer() {
       if (bf.niche) setNiche(String(bf.niche));
       if (bf.extra_constraints) setExtra(String(bf.extra_constraints));
       if (bf.platform) setPlatform(String(bf.platform));
+      // Coerce any LLM-shape into string[] before rendering as a list.
+      setPrefillOutline(coerceStringList(bf.outline_points));
+      setPrefillMaterials(coerceStringList(bf.materials_list));
       setPrefillNote(`已从「起号策略」一键带入：「${String(bf.topic || "").slice(0, 40) || "无标题"}」`);
     } catch (e) {
       console.error("prefill failed", e);
@@ -207,6 +215,34 @@ export default function Composer() {
       {prefillNote && (
         <div className="banner info" style={{background: "var(--primary-soft)", borderColor: "var(--primary)"}}>
           ✨ {prefillNote} · 你可以再微调一下下面字段，或者直接 ▶️ 开始
+        </div>
+      )}
+
+      {(prefillOutline.length > 0 || prefillMaterials.length > 0) && (
+        <div className="card" style={{borderLeft: "3px solid var(--primary)"}}>
+          <h2 style={{margin: "0 0 8px", fontSize: 16}}>📋 本篇大纲（从「起号策略」带入）</h2>
+          <div style={{display: "grid", gap: 10,
+                       gridTemplateColumns: prefillMaterials.length > 0 ? "1fr 1fr" : "1fr"}}>
+            {prefillOutline.length > 0 && (
+              <div>
+                <div className="muted" style={{fontSize: 11.5, fontWeight: 600, marginBottom: 4}}>内容大纲</div>
+                <ol style={{margin: "0 0 0 18px", lineHeight: 1.7, fontSize: 13.5}}>
+                  {prefillOutline.map((p, i) => <li key={i}>{p}</li>)}
+                </ol>
+              </div>
+            )}
+            {prefillMaterials.length > 0 && (
+              <div>
+                <div className="muted" style={{fontSize: 11.5, fontWeight: 600, marginBottom: 4}}>需要的素材</div>
+                <ul style={{margin: "0 0 0 18px", lineHeight: 1.7, fontSize: 13.5}}>
+                  {prefillMaterials.map((m, i) => <li key={i}>{m}</li>)}
+                </ul>
+              </div>
+            )}
+          </div>
+          <div className="muted" style={{fontSize: 11, marginTop: 8}}>
+            起草团会看到这些点 — 上面字段已自动填好「额外要求」，可直接 ▶️ 启动。
+          </div>
         </div>
       )}
 
@@ -521,16 +557,22 @@ function PlanCard({plan}: {plan: any}) {
           ))}
         </>
       )}
-      {plan.engagement_tactics?.length > 0 && (
-        <>
-          <h3 style={{marginTop: 14}}>💬 互动运营建议</h3>
-          <ol style={{marginLeft: 20, lineHeight: 1.7}}>
-            {plan.engagement_tactics.map((t: any, i: number) =>
-              <li key={i}>{typeof t === "string" ? t : (t?.tactic ?? JSON.stringify(t))}</li>
-            )}
-          </ol>
-        </>
-      )}
+      {(() => {
+        // Non-Claude models (DeepSeek, GPT in json-mode) sometimes return
+        // engagement_tactics as `[{tactic: "..."}]`, `{tactics: [...]}`, or
+        // even a single string — they don't honor the JSON schema like
+        // Claude's tool_use does. Coerce defensively or .map() crashes.
+        const tactics = coerceStringList(plan.engagement_tactics);
+        if (tactics.length === 0) return null;
+        return (
+          <>
+            <h3 style={{marginTop: 14}}>💬 互动运营建议</h3>
+            <ol style={{marginLeft: 20, lineHeight: 1.7}}>
+              {tactics.map((t, i) => <li key={i}>{t}</li>)}
+            </ol>
+          </>
+        );
+      })()}
     </div>
   );
 }

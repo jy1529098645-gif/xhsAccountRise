@@ -1089,6 +1089,15 @@ function PackView({pack, onReset}: {pack: StrategyPackDTO; onReset: () => void})
     // a navigate(replace) inside Composer's mount effect was wedging the
     // app such that subsequent navigations to /libraries / /dashboard
     // also rendered blank.
+    // Defensively coerce outline / materials — non-Claude models occasionally
+    // return strings or {item: "..."} instead of string[].
+    const outline = Array.isArray(slot.outline)
+      ? slot.outline.map((x: any) => (typeof x === "string" ? x : (x?.text ?? x?.item ?? JSON.stringify(x)))).filter(Boolean)
+      : [];
+    const materials = Array.isArray(slot.materials_needed)
+      ? slot.materials_needed.map((x: any) => (typeof x === "string" ? x : (x?.text ?? x?.item ?? JSON.stringify(x)))).filter(Boolean)
+      : [];
+
     const briefPrefill = {
       topic: slot.title || "",
       // Composer's <select> only accepts these 9 angles — anything else gets
@@ -1100,16 +1109,24 @@ function PackView({pack, onReset}: {pack: StrategyPackDTO; onReset: () => void})
       // anyway, so the LLM still sees it.
       cta_strength: "soft" as const,
       niche: pack.chosen_direction?.positioning_statement || "",
+      // extra_constraints: keep the LLM-facing structured prompt (the
+      // backend uses this verbatim). Outline + materials still embedded so
+      // the drafter sees them even if the user clears the visible card.
       extra_constraints: [
         slot.content_format ? `内容形式 ：${slot.content_format}（按此格式写！图文/短视频脚本/长视频章节差别很大）` : "",
         slot.intent ? `意图 ：${slot.intent}` : "",
         slot.hook_type ? `hook_type: ${slot.hook_type}` : "",
-        slot.outline?.length ? "大纲：" + slot.outline.join(" / ") : "",
-        slot.materials_needed?.length ? "需要材料：" + slot.materials_needed.join("、") : "",
+        outline.length ? "大纲：" + outline.join(" / ") : "",
+        materials.length ? "需要材料：" + materials.join("、") : "",
         slot.body_draft ? `已有初稿：\n${slot.body_draft}` : "",
         pack.chosen_direction?.target_audience ? `目标受众：${pack.chosen_direction.target_audience}` : "",
       ].filter(Boolean).join("\n\n"),
       platform: pack.platform,
+      // Structured fields so the Composer can render a visible "本篇大纲"
+      // card instead of burying it inside the extra_constraints textarea.
+      outline_points: outline,
+      materials_list: materials,
+      body_draft: slot.body_draft || "",
     };
     try {
       sessionStorage.setItem("composer.briefPrefill", JSON.stringify(briefPrefill));

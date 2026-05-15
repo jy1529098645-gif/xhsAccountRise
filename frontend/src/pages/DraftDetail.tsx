@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
-import { fmtTime } from "../format";
+import { fmtTime, coerceStringList } from "../format";
 import PlatformPill from "../components/PlatformPill";
 
 export default function DraftDetail() {
@@ -109,14 +109,20 @@ export default function DraftDetail() {
               ))}
             </>
           )}
-          {plan.engagement_tactics?.length > 0 && (
-            <>
-              <h3 style={{marginTop: 14}}>💬 互动运营建议</h3>
-              <ol style={{marginLeft: 20, lineHeight: 1.7}}>
-                {plan.engagement_tactics.map((t: string, i: number) => <li key={i}>{t}</li>)}
-              </ol>
-            </>
-          )}
+          {(() => {
+            // See Composer.tsx — non-Claude models can return tactics in
+            // shapes other than string[]. Coerce or .map() crashes.
+            const tactics = coerceStringList(plan.engagement_tactics);
+            if (tactics.length === 0) return null;
+            return (
+              <>
+                <h3 style={{marginTop: 14}}>💬 互动运营建议</h3>
+                <ol style={{marginLeft: 20, lineHeight: 1.7}}>
+                  {tactics.map((t, i) => <li key={i}>{t}</li>)}
+                </ol>
+              </>
+            );
+          })()}
         </div>
       )}
 
