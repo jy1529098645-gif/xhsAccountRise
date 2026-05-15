@@ -16,18 +16,22 @@ from .base import (
 # Rough per-1M-token (input, output) USD prices for estimation only.
 # Keep this conservative — the dashboard uses these for sanity-check display.
 _PRICE: dict[str, tuple[float, float]] = {
-    "gpt-5":       (2.50, 10.00),
-    "gpt-4o":      (2.50, 10.00),
-    "gpt-4o-mini": (0.15, 0.60),
-    "gpt-4-turbo": (10.0, 30.00),
-    "o1":          (15.0, 60.00),
-    "o1-mini":     (3.00, 12.00),
+    # GPT-5 series (2025-08 release). Mini ≈ 10× cheaper than full, nano ≈ 50×.
+    "gpt-5":         (1.25, 10.00),
+    "gpt-5-mini":    (0.25,  2.00),
+    "gpt-5-nano":    (0.05,  0.40),
+    "gpt-4o":        (2.50, 10.00),
+    "gpt-4o-mini":   (0.15,  0.60),
+    "gpt-4-turbo":   (10.0, 30.00),
+    "o1":            (15.0, 60.00),
+    "o1-mini":       (3.00, 12.00),
 }
 
 
 # Order of preferred OpenAI models if a 404 (org-not-verified for gpt-5)
-# kicks in. gpt-4o is universally available without organization verification.
-_OPENAI_FALLBACK_CHAIN = ("gpt-4o",)
+# kicks in. gpt-5-mini doesn't require org verification on most accounts; gpt-4o
+# is the universal last-resort fallback.
+_OPENAI_FALLBACK_CHAIN = ("gpt-5-mini", "gpt-4o")
 
 
 class OpenAIGenerator(Generator):

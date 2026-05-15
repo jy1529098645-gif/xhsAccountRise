@@ -39,7 +39,14 @@ ALLOWED_MODEL_SPECS = (
     "claude:haiku",
     "deepseek",
     "deepseek:reasoner",
+    # OpenAI lineup. Bare "openai" → env-configured default (gpt-5 in this
+    # repo's .env.example). The :gpt-5* explicit variants pin a specific
+    # model regardless of env.
     "openai",
+    "openai:gpt-5",
+    "openai:gpt-5-mini",
+    "openai:gpt-5-nano",
+    "openai:gpt-4o",
 )
 
 

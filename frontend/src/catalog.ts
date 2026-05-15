@@ -16,7 +16,13 @@ export const LLM_CATALOG: LlmOption[] = [
   { id: "claude:haiku",  label: "Claude Haiku 4.5",      family: "anthropic", hint: "最快最便宜，做粗稿/快速迭代很合适",            cost: "low"  },
   { id: "deepseek",      label: "DeepSeek V3 (chat)",    family: "deepseek",  hint: "中文下沉感最强 · 价格亲民",                    cost: "low"  },
   { id: "deepseek:reasoner", label: "DeepSeek R1 (reasoner)", family: "deepseek", hint: "强推理但偏慢，适合 Strategist / Critic",  cost: "mid"  },
-  { id: "openai",        label: "OpenAI GPT-4o",         family: "openai",    hint: "多样性视角 · 想法跳脱",                        cost: "mid"  },
+  // OpenAI lineup ：bare "openai" 默认走 env 的 OPENAI_MODEL（仓库默认 gpt-5）。
+  // 想显式钉死哪个就用下面的 :gpt-5 / :gpt-5-mini / :gpt-5-nano / :gpt-4o。
+  { id: "openai",          label: "OpenAI GPT-5 (默认)",   family: "openai", hint: "最新旗舰 · 综合能力最强 · 通用首选",                cost: "high" },
+  { id: "openai:gpt-5",    label: "OpenAI GPT-5",          family: "openai", hint: "显式钉 GPT-5（与上面同款，env 不会改）",              cost: "high" },
+  { id: "openai:gpt-5-mini", label: "OpenAI GPT-5 mini",   family: "openai", hint: "GPT-5 系列 · 快 ~3× / 便宜 ~10×，质量近似",          cost: "low"  },
+  { id: "openai:gpt-5-nano", label: "OpenAI GPT-5 nano",   family: "openai", hint: "GPT-5 系列 · 最快最便宜，适合粗稿 / 大规模并发",      cost: "low"  },
+  { id: "openai:gpt-4o",   label: "OpenAI GPT-4o (老版本)", family: "openai", hint: "兼容老链路 · 多样性视角 · 想法跳脱",                cost: "mid"  },
 ];
 
 export type AgentRoleId =
