@@ -656,7 +656,13 @@ export default function StrategyWizard({ onPackReady }: StrategyWizardProps) {
     : phase === "pack" ? 4
     : 1;
   const canStep3 = directions.length > 0;
-  const canStep4 = !!pack;
+  // v0.62.15 ：第 4 步「时间线大纲」如果当前 wizard session 没 pack 但 history
+  // 里有 expanded 的 pack，也能点 — 让用户从 wizard 模式直接切回查看历史 pack。
+  // 不再「已经有产出过了但按钮被锁住」。
+  const latestExpandedPackId = pack?.pack_id
+    || history.find(h => h.status === "expanded")?.pack_id
+    || null;
+  const canStep4 = !!latestExpandedPackId;
   function StepBtn({n, label, canGo, onGo}: {n: number; label: string; canGo: boolean; onGo: () => void}) {
     const isCurrent = stepperStep === n;
     const isDone = stepperStep > n;
@@ -702,7 +708,7 @@ export default function StrategyWizard({ onPackReady }: StrategyWizardProps) {
           <StepBtn n={3} label="🚀 方向" canGo={canStep3}
             onGo={() => setPhase("directions")} />
           <StepBtn n={4} label="📅 时间线大纲" canGo={canStep4}
-            onGo={() => pack && onPackReady(pack.pack_id)} />
+            onGo={() => latestExpandedPackId && onPackReady(latestExpandedPackId)} />
         </div>
         <div className="muted" style={{fontSize: 11, marginTop: 6, textAlign: "center"}}>
           每步都自动保存 · 随时点上面任一步回看或修改
