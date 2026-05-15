@@ -693,10 +693,9 @@ export default function StrategyWizard({ onPackReady }: StrategyWizardProps) {
 
   return (
     <div>
-      <div className="page-header">
-        <h1>🚀 起号策略 · 第 2 步</h1>
-        <p>定方向 + 排周期 + 出初稿正文</p>
-      </div>
+      {/* v0.62.16 ：wizard 自己的 page-header 删掉 — Strategy.tsx 父组件已经
+          渲染了对应的页眉（创建模式「🚀 起号策略 · 创建新 pack」 / 浏览模式
+          「🚀 起号策略 · 时间线大纲」），wizard 不再重复。 */}
 
       {/* v0.61.14 ：步骤跳转条 ─ 每步状态/可点击都自动算出来 */}
       <div className="card" style={{padding: "10px 12px"}}>
