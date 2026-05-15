@@ -38,6 +38,41 @@ export function platformLabel(id: string | undefined): string {
   return PLATFORM_LABELS[id] ?? id;
 }
 
+/**
+ * Coerce any LLM-returned "list of plain items" into string[].
+ *
+ * Different models (Claude with tool-schema vs. DeepSeek/GPT with bare
+ * JSON-mode) don't honor the schema equally. `engagement_tactics` was typed
+ * as `string[]` but DeepSeek returns things like `[{tactic: "..."}]`,
+ * `{tactics: [...]}`, or even a single string. This normalises any of those
+ * into a clean `string[]` so `.map()` is always safe.
+ *
+ * - null/undefined           → []
+ * - string                   → [string] (or [] if blank)
+ * - array                    → flatMap each item through this same coercer
+ * - object with a known key  → [value-of-that-key]
+ * - object with array prop   → recurse into the first array property
+ * - anything else            → [JSON.stringify(value)]
+ */
+export function coerceStringList(
+  value: any,
+  keys: string[] = ["tactic", "text", "content", "item", "value"],
+): string[] {
+  if (value == null) return [];
+  if (typeof value === "string") return value.trim() ? [value] : [];
+  if (Array.isArray(value)) return value.flatMap(v => coerceStringList(v, keys));
+  if (typeof value === "object") {
+    for (const k of keys) {
+      if (typeof value[k] === "string" && value[k].trim()) return [value[k]];
+    }
+    for (const v of Object.values(value)) {
+      if (Array.isArray(v)) return coerceStringList(v, keys);
+    }
+    try { return [JSON.stringify(value)]; } catch { return []; }
+  }
+  return [String(value)];
+}
+
 // Compose pipeline 里 7 个 Agent 的英文名 → 用户友好的中文名。
 // `agent_name` 在 trace 里通常是 "researcher" / "drafter:gpt-4o[教程]" 等。
 const AGENT_ROLE_LABELS: Record<string, string> = {

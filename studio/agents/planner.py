@@ -144,6 +144,64 @@ async def _call_for_plan(gen: Generator, system: str, user: str) -> dict[str, An
     )
 
 
+def _coerce_str_list(value: Any) -> list[str]:
+    """Normalise an LLM-returned "list of plain items" into list[str].
+
+    Non-Claude models (DeepSeek, GPT in json-mode) don't honor the schema
+    as strictly as Claude's tool_use does. `engagement_tactics` typed as
+    `array<string>` can come back as `[{tactic: "..."}]`, `{tactics: [...]}`,
+    or even a bare string. Coerce defensively so the frontend can rely on
+    `string[]` and `.map()` never crashes.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, list):
+        out: list[str] = []
+        for item in value:
+            out.extend(_coerce_str_list(item))
+        return out
+    if isinstance(value, dict):
+        for k in ("tactic", "text", "content", "item", "value"):
+            if isinstance(value.get(k), str) and value[k].strip():
+                return [value[k]]
+        for v in value.values():
+            if isinstance(v, list):
+                return _coerce_str_list(v)
+        try:
+            return [json.dumps(value, ensure_ascii=False)]
+        except Exception:
+            return []
+    return [str(value)]
+
+
+def _coerce_object_list(value: Any, *, object_keys: tuple[str, ...]) -> list[dict]:
+    """Normalise an LLM-returned "list of objects" into list[dict].
+
+    Same contract as `_coerce_str_list`, but for object-list cases
+    (publish_schedule, follow_up_angles). String items are wrapped as
+    `{first_key: <string>}`; other shapes are silently dropped — better
+    than letting the UI crash on `.map`.
+    """
+    if value is None:
+        return []
+    if isinstance(value, list):
+        out: list[dict] = []
+        for item in value:
+            if isinstance(item, dict):
+                out.append(item)
+            elif isinstance(item, str) and item.strip():
+                out.append({object_keys[0]: item})
+        return out
+    if isinstance(value, dict):
+        for v in value.values():
+            if isinstance(v, list):
+                return _coerce_object_list(v, object_keys=object_keys)
+        return [value]
+    return []
+
+
 class PlannerAgent(Agent):
     name = "planner"
 
@@ -193,6 +251,22 @@ class PlannerAgent(Agent):
             return
 
         step.latency_ms = self._ms() - t0
+        # Normalise every array-typed field before stashing — non-Claude
+        # models don't honor the schema strictly and can return strings /
+        # objects where arrays are expected. Catching it here means the
+        # frontend (Composer/DraftDetail PlanCard) never has to defend
+        # against weird shapes at render time.
+        plan["engagement_tactics"] = _coerce_str_list(plan.get("engagement_tactics"))
+        plan["publish_schedule"] = _coerce_object_list(
+            plan.get("publish_schedule"),
+            object_keys=("slot", "median_likes", "why"),
+        )
+        plan["follow_up_angles"] = _coerce_object_list(
+            plan.get("follow_up_angles"),
+            object_keys=("title", "angle", "hook_type", "why"),
+        )
+        if not isinstance(plan.get("series_thesis"), str):
+            plan["series_thesis"] = str(plan.get("series_thesis") or "")
         # Stash on ctx for the pipeline to surface in the bundle.
         setattr(ctx, "plan", plan)
         step.input_summary = (

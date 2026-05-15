@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api";
-import { fmtLikes, roleName } from "../format";
+import { fmtLikes, roleName, coerceStringList } from "../format";
 import AgentConfigPanel, {
   AgentSelection, defaultSelection, selectionToSpecs,
 } from "../components/AgentConfigPanel";
@@ -891,7 +891,12 @@ function PlanCard({plan}: {plan: any}) {
       {plan.series_thesis && (
         <p style={{fontStyle: "italic", color: "var(--muted)", marginBottom: 14}}>主线：{plan.series_thesis}</p>
       )}
-      {plan.publish_schedule?.length > 0 && (
+      {/* Non-Claude models (DeepSeek, GPT in json-mode) sometimes return
+          these as objects rather than arrays (`{schedule: [...]}` etc.) —
+          they don't honor the JSON schema like Claude's tool_use does.
+          Use Array.isArray, not `?.length` (a string has `.length` too),
+          and tolerate string-shaped items inside the array. */}
+      {Array.isArray(plan.publish_schedule) && plan.publish_schedule.length > 0 && (
         <>
           <h3>📅 推荐发布时段</h3>
           <table className="table">
@@ -899,40 +904,49 @@ function PlanCard({plan}: {plan: any}) {
             <tbody>
               {plan.publish_schedule.map((s: any, i: number) => (
                 <tr key={i}>
-                  <td><b>{s.slot}</b></td>
-                  <td className="num">{s.median_likes?.toLocaleString() ?? "—"}</td>
-                  <td className="muted">{s.why}</td>
+                  <td><b>{typeof s === "string" ? s : s?.slot}</b></td>
+                  <td className="num">{typeof s?.median_likes === "number" ? s.median_likes.toLocaleString() : "—"}</td>
+                  <td className="muted">{typeof s === "string" ? "" : s?.why}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </>
       )}
-      {plan.follow_up_angles?.length > 0 && (
+      {Array.isArray(plan.follow_up_angles) && plan.follow_up_angles.length > 0 && (
         <>
           <h3 style={{marginTop: 14}}>🔁 后续选题 ({plan.follow_up_angles.length})</h3>
           {plan.follow_up_angles.map((a: any, i: number) => (
             <div key={i} style={{padding: "10px 12px", background: "#fafafa", borderRadius: 6, marginBottom: 8}}>
-              <div style={{fontWeight: 600}}>{a.title}</div>
-              <div style={{fontSize: 12, marginTop: 4}}>
-                <span className="tag-pill">{a.angle}</span>
-                <span className="tag-pill">{a.hook_type}</span>
-              </div>
-              <div className="muted" style={{fontSize: 12, marginTop: 6}}>{a.why}</div>
+              <div style={{fontWeight: 600}}>{typeof a === "string" ? a : a?.title}</div>
+              {typeof a === "object" && a && (a.angle || a.hook_type) && (
+                <div style={{fontSize: 12, marginTop: 4}}>
+                  {a.angle && <span className="tag-pill">{a.angle}</span>}
+                  {a.hook_type && <span className="tag-pill">{a.hook_type}</span>}
+                </div>
+              )}
+              {typeof a === "object" && a?.why && (
+                <div className="muted" style={{fontSize: 12, marginTop: 6}}>{a.why}</div>
+              )}
             </div>
           ))}
         </>
       )}
-      {plan.engagement_tactics?.length > 0 && (
-        <>
-          <h3 style={{marginTop: 14}}>💬 互动运营建议</h3>
-          <ol style={{marginLeft: 20, lineHeight: 1.7}}>
-            {plan.engagement_tactics.map((t: any, i: number) =>
-              <li key={i}>{typeof t === "string" ? t : (t?.tactic ?? JSON.stringify(t))}</li>
-            )}
-          </ol>
-        </>
-      )}
+      {(() => {
+        // engagement_tactics in particular has historically come back as
+        // `[{tactic: "..."}]`, `{tactics: [...]}`, or a bare string.
+        // coerceStringList absorbs every shape into string[].
+        const tactics = coerceStringList(plan.engagement_tactics);
+        if (tactics.length === 0) return null;
+        return (
+          <>
+            <h3 style={{marginTop: 14}}>💬 互动运营建议</h3>
+            <ol style={{marginLeft: 20, lineHeight: 1.7}}>
+              {tactics.map((t, i) => <li key={i}>{t}</li>)}
+            </ol>
+          </>
+        );
+      })()}
     </div>
   );
 }

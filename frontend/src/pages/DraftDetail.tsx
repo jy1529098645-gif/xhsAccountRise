@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
-import { fmtTime, roleName } from "../format";
+import { fmtTime, roleName, coerceStringList } from "../format";
 import PlatformPill from "../components/PlatformPill";
 import type { ComplianceHit, RagRef, RagComment, RagHook, VariantChild } from "../types";
 
@@ -117,39 +117,55 @@ export default function DraftDetail() {
           {plan.series_thesis && (
             <p style={{fontStyle: "italic", color: "var(--muted)"}}>主线：{plan.series_thesis}</p>
           )}
-          {plan.publish_schedule?.length > 0 && (
+          {/* Non-Claude models don't honor the planner JSON schema as
+              strictly as Claude's tool_use does — these fields can come
+              back as objects/strings instead of arrays. See Composer.tsx
+              for the same pattern. */}
+          {Array.isArray(plan.publish_schedule) && plan.publish_schedule.length > 0 && (
             <>
               <h3>📅 推荐发布时段</h3>
               <table className="table"><thead><tr><th>时段</th><th className="num">median likes</th><th>为什么</th></tr></thead><tbody>
                 {plan.publish_schedule.map((s: any, i: number) => (
-                  <tr key={i}><td><b>{s.slot}</b></td><td className="num">{s.median_likes?.toLocaleString?.() ?? "—"}</td><td className="muted">{s.why}</td></tr>
+                  <tr key={i}>
+                    <td><b>{typeof s === "string" ? s : s?.slot}</b></td>
+                    <td className="num">{typeof s?.median_likes === "number" ? s.median_likes.toLocaleString() : "—"}</td>
+                    <td className="muted">{typeof s === "string" ? "" : s?.why}</td>
+                  </tr>
                 ))}
               </tbody></table>
             </>
           )}
-          {plan.follow_up_angles?.length > 0 && (
+          {Array.isArray(plan.follow_up_angles) && plan.follow_up_angles.length > 0 && (
             <>
               <h3 style={{marginTop: 14}}>🔁 后续选题</h3>
               {plan.follow_up_angles.map((a: any, i: number) => (
                 <div key={i} style={{padding: "10px 12px", background: "#fafafa", borderRadius: 6, marginBottom: 8}}>
-                  <div style={{fontWeight: 600}}>{a.title}</div>
-                  <div style={{fontSize: 12, marginTop: 4}}>
-                    <span className="tag-pill">{a.angle}</span>
-                    <span className="tag-pill">{a.hook_type}</span>
-                  </div>
-                  <div className="muted" style={{fontSize: 12, marginTop: 6}}>{a.why}</div>
+                  <div style={{fontWeight: 600}}>{typeof a === "string" ? a : a?.title}</div>
+                  {typeof a === "object" && a && (a.angle || a.hook_type) && (
+                    <div style={{fontSize: 12, marginTop: 4}}>
+                      {a.angle && <span className="tag-pill">{a.angle}</span>}
+                      {a.hook_type && <span className="tag-pill">{a.hook_type}</span>}
+                    </div>
+                  )}
+                  {typeof a === "object" && a?.why && (
+                    <div className="muted" style={{fontSize: 12, marginTop: 6}}>{a.why}</div>
+                  )}
                 </div>
               ))}
             </>
           )}
-          {plan.engagement_tactics?.length > 0 && (
-            <>
-              <h3 style={{marginTop: 14}}>💬 互动运营建议</h3>
-              <ol style={{marginLeft: 20, lineHeight: 1.7}}>
-                {plan.engagement_tactics.map((t: string, i: number) => <li key={i}>{t}</li>)}
-              </ol>
-            </>
-          )}
+          {(() => {
+            const tactics = coerceStringList(plan.engagement_tactics);
+            if (tactics.length === 0) return null;
+            return (
+              <>
+                <h3 style={{marginTop: 14}}>💬 互动运营建议</h3>
+                <ol style={{marginLeft: 20, lineHeight: 1.7}}>
+                  {tactics.map((t, i) => <li key={i}>{t}</li>)}
+                </ol>
+              </>
+            );
+          })()}
         </div>
       )}
 
