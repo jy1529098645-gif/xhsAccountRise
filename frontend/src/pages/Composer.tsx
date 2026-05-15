@@ -399,6 +399,40 @@ export default function Composer() {
   }
 
   const noBackend = !api.isConnected();
+
+  // ---- 起号策略「✍️ 写这个」→ 自动启动 compose ------------------------
+  // URL 里带 ?autostart=1 表示这次进入是用户主动点击「✍️ 写这个」(不是
+  // 普通刷新或分享链接)。等 brief 预填完成（prefillBusy → false）+ 表单
+  // 字段已填好（topic 非空）+ 后端在线 + 没在跑 → 直接调 run()。
+  //
+  // 关键 ：消费完立刻从 URL 删掉 `autostart`，避免：
+  //   - 用户刷新页面再次触发（用户的意图是看现有结果，不是再花一次钱）
+  //   - 分享 URL 给别人时对方一打开就被自动 compose 扣他的 LLM 费用
+  // `slot` 参数仍然保留 — 刷新后表单还能预填，但不会自动启动。
+  const autostartConsumedRef = useRef(false);
+  useEffect(() => {
+    if (autostartConsumedRef.current) return;
+    if (searchParams.get("autostart") !== "1") return;
+    if (prefillBusy) return;          // 等 Phase 2 AI prefill 完
+    if (!topic.trim()) return;         // 表单还没填好
+    if (running) return;               // 已经在跑了，别叠加
+    if (noBackend) return;             // 后端没起来，run() 会立刻报错
+    autostartConsumedRef.current = true;
+    // 立刻从 URL 拿掉 autostart 参数 — refresh 后不会再 trigger。
+    const next: Record<string, string> = {};
+    const slot = searchParams.get("slot"); if (slot) next.slot = slot;
+    const alt = searchParams.get("alt");   if (alt) next.alt = alt;
+    const pack = searchParams.get("pack"); if (pack) next.pack = pack;
+    setSearchParams(next, { replace: true });
+    run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefillBusy, topic, running, noBackend, searchParams]);
+
+  // 重置 autostartConsumed 当 slot 变化（用户在 Composer 内点了另一个 slot）。
+  // 否则连点两次 ✍️ 写这个 第二次不会自动启动。
+  useEffect(() => {
+    autostartConsumedRef.current = false;
+  }, [slotIdxFromUrl, altIdxFromUrl]);
   // v0.62.14 ：Composer 的 4 步 stepper 已删除 — 出稿板块流程线性而紧凑，
   // 单页能看完所有 step，不需要再加跳转条。anchor id（composer-step-1 等）
   // 保留给 prefill scroll target 用。
@@ -452,8 +486,11 @@ export default function Composer() {
             // setSearchParams 触发 URL effect 重复 handleSlotChosen。
             slotPrefilledRef.current = `${strategyPack.pack_id}:${slotIdx}:${altIdx}`;
             // Bug C 修复 ：同步 URL ?slot=PACK:IDX[&alt=N]，刷新页面后还能保留选择。
+            // autostart=1 ：表示这次进入是用户主动「✍️ 写这个」点击，
+            // brief 填好后自动启动 compose（见下方 auto-start useEffect）。
             const next: Record<string, string> = {
               slot: `${strategyPack.pack_id}:${slotIdx}`,
+              autostart: "1",
             };
             if (altIdx >= 0) next.alt = String(altIdx);
             setSearchParams(next, { replace: true });
@@ -484,7 +521,11 @@ export default function Composer() {
             padding: "12px 14px",
           }}>
           <div style={{fontSize: 13.5, fontWeight: 600}}>
-            {prefillBusy ? "🤖 AI 正在为这条 slot 定制 brief…" : prefillNote}
+            {prefillBusy
+              ? (searchParams.get("autostart") === "1"
+                  ? "🤖 AI 正在为这条 slot 定制 brief… brief 填好会自动启动出稿"
+                  : "🤖 AI 正在为这条 slot 定制 brief…")
+              : prefillNote}
           </div>
           {prefillRationale && !prefillBusy && (
             <div style={{fontSize: 11.5, marginTop: 4, color: "var(--muted)", fontStyle: "italic"}}>
@@ -493,7 +534,9 @@ export default function Composer() {
           )}
           {!prefillBusy && (
             <div style={{fontSize: 11.5, marginTop: 6, color: "var(--muted)"}}>
-              下面所有字段 AI 都填好了 — 你可以直接 ▶️ 开始，或先改任意字段再开始。
+              {searchParams.get("autostart") === "1"
+                ? "⚡ 即将自动启动出稿 — 想先改任意字段，请在下面表单里点暂停后修改。"
+                : "下面所有字段 AI 都填好了 — 你可以直接 ▶️ 开始，或先改任意字段再开始。"}
             </div>
           )}
         </div>

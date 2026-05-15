@@ -42,10 +42,15 @@ export default function StrategyPackView({pack, onWriteClick, compact = false}: 
       onWriteClick(slotIdx, altIdx);
       return;
     }
-    const q = altIdx >= 0
-      ? `?slot=${encodeURIComponent(pack.pack_id)}:${slotIdx}&alt=${altIdx}`
-      : `?slot=${encodeURIComponent(pack.pack_id)}:${slotIdx}`;
-    navigate(`/composer${q}`);
+    // autostart=1 ：用户从起号策略板块点 ✍️ 写这个 → 跳到出稿 → AI brief
+    // 预填完成后自动启动 compose 流水线，不需要用户再点「🚀 启动 AI 团队」。
+    // Composer 消费完会从 URL 删掉 autostart 参数，避免刷新时重复 trigger。
+    const params: string[] = [
+      `slot=${encodeURIComponent(pack.pack_id)}:${slotIdx}`,
+      "autostart=1",
+    ];
+    if (altIdx >= 0) params.push(`alt=${altIdx}`);
+    navigate(`/composer?${params.join("&")}`);
   }
   if (compact) {
     // Composer 嵌入模式 ：1 条 pack 摘要 + SchedulePanel + 「看完整大纲」链接
