@@ -730,6 +730,32 @@ export const api = {
     /** v0.61.22 ：每角度专属 model spec 覆写。{} = 全部 round-robin。 */
     angle_models?: Record<string, string>;
   }, signal?: AbortSignal) => postJson<ComposeBundle>("/api/compose", req, signal),
+
+  // Quick generate -----------------
+  // Single-LLM one-shot: title + platform + voice + length → one post.
+  // Independent of the agent pipeline; only reads user reports + DNA.
+  quickGenerate: (
+    req: {
+      title: string;
+      platform: string;
+      voice_style: string;
+      voice_custom?: string;
+      target_length: number;
+      extra?: string;
+      model_spec: string;
+    },
+    signal?: AbortSignal,
+  ) => postJson<{
+    title: string;
+    body: string;
+    tags: string[];
+    cover_prompt: string;
+    model_used: string;
+    elapsed_s: number;
+    cost_estimate_usd: number;
+    error: string | null;
+    used_report_context: boolean;
+  }>("/api/quick_generate", req, signal),
 };
 
 export { HttpError, STATIC_PLATFORMS };

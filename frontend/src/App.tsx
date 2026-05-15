@@ -18,6 +18,7 @@ import InsightReport from "./pages/InsightReport";
 import IntegratedReport from "./pages/IntegratedReport";
 import Reports from "./pages/Reports";
 import Retrospective from "./pages/Retrospective";
+import QuickGenerate from "./pages/QuickGenerate";
 
 // Re-keys the ErrorBoundary by pathname so a crashed page auto-resets
 // the boundary when the user navigates somewhere else.
@@ -83,6 +84,9 @@ export default function App() {
             出稿 = 创建 pack（goal/input/directions/expand）+ 多 agent 写每篇。 */}
         <NavLink to="/strategy" className={({isActive}) => isActive ? "active" : ""}>🚀 起号策略 <span style={{fontSize: 10, color: "var(--muted)"}}>第 2 步</span></NavLink>
         <NavLink to="/composer" className={({isActive}) => isActive ? "active" : ""}>✍️ 出稿 <span style={{fontSize: 10, color: "var(--muted)"}}>第 3 步</span></NavLink>
+        {/* 快速生成 = 单 LLM 一键出稿，独立于主流程，仅依赖用户上传的报告 + DNA。
+            放在复盘前面 — 用户写完主流程后还想临时来一篇时最顺手。 */}
+        <NavLink to="/quick" className={({isActive}) => isActive ? "active" : ""}>⚡ 快速生成 <span style={{fontSize: 10, color: "var(--muted)"}}>可选</span></NavLink>
         <NavLink to="/retrospective" className={({isActive}) => isActive ? "active" : ""}>📊 复盘 <span style={{fontSize: 10, color: "var(--muted)"}}>第 4 步</span></NavLink>
         <NavLink to="/dashboard" className={({isActive}) => isActive ? "active" : ""}>🗂️ 数据总览</NavLink>
         <RunningJobsIndicator />
@@ -116,6 +120,7 @@ export default function App() {
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/analysis" element={<Analysis />} />
             <Route path="/composer" element={<Composer />} />
+            <Route path="/quick" element={<QuickGenerate />} />
             <Route path="/retrospective" element={<Retrospective />} />
             <Route path="/drafts" element={<Drafts />} />
             <Route path="/drafts/:id" element={<DraftDetail />} />

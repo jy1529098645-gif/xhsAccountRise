@@ -743,6 +743,39 @@ async def compose(req: ComposeRequest) -> dict[str, Any]:
     return bundle
 
 
+# ---------------- quick generate (one-shot, single LLM) ----------
+# Independent of the agent pipeline. Just title + platform + voice + length
+# → one LLM call → one post. Pulls user-uploaded reports + DNA consensus as
+# strong context, but doesn't touch Strategist / Drafter / Critic agents.
+
+class QuickGenerateRequest(BaseModel):
+    title: str
+    platform: str = "xiaohongshu"
+    voice_style: str = "口语自然"
+    voice_custom: str = ""
+    target_length: int = Field(default=500, ge=80, le=4000)
+    extra: str = ""
+    model_spec: str = "openai"
+
+
+@app.post("/api/quick_generate")
+async def quick_generate_endpoint(req: QuickGenerateRequest) -> dict[str, Any]:
+    from ..quick_generate import QuickGenInput, quick_generate
+    inp = QuickGenInput(
+        title=req.title, platform=req.platform,
+        voice_style=req.voice_style, voice_custom=req.voice_custom,
+        target_length=req.target_length, extra=req.extra,
+        model_spec=req.model_spec,
+    )
+    result = await quick_generate(inp)
+    if result.error and not result.body:
+        # Hard failure: nothing to show the user. Surface as 400 so the
+        # frontend can render the actual error message instead of staring
+        # at an empty success response.
+        raise HTTPException(status_code=400, detail=result.error)
+    return result.to_dict()
+
+
 # ---------------- insight report (Claude × OpenAI) ----------
 
 class InsightRequest(BaseModel):

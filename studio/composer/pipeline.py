@@ -1090,6 +1090,91 @@ async def _expand_inner(
         for s in [_to_slot_dict(_raw)]
     ]
 
+    # ---- v0.62.18 ：enforce exact slot count = inp.cycle_weeks × posts_per_week ----
+    # The scheduler LLM is told to produce exactly `topic_count` slots, but
+    # ignores that constraint occasionally — typical pattern is returning
+    # `cycle_weeks` slots (one per week, ignoring posts_per_week) or stopping
+    # 1-2 short under token pressure. Users expect "I asked for 4 weeks × 3
+    # posts = 12 slots" to mean 12, not "however many the LLM felt like".
+    #
+    # Strategy:
+    #   - len > topic_count: trim to first `topic_count` (LLM over-generated).
+    #   - len < topic_count: pad with synthetic placeholder slots distributed
+    #     across remaining week/day positions. Placeholder title flags AI
+    #     under-generation so the user knows to use ✍️ 写这个 to regenerate.
+    schedule_short_warning: str | None = None
+    if len(schedule) > topic_count:
+        schedule = schedule[:topic_count]
+    elif len(schedule) < topic_count:
+        # Coverage map of (week, day_of_week) positions already used, so the
+        # padding doesn't collide with existing slots — it slots into gaps.
+        used_positions = {(s.week, s.day_of_week) for s in schedule}
+        missing = topic_count - len(schedule)
+        ppw = max(1, inp.posts_per_week)
+        cw = max(1, inp.cycle_weeks)
+        # Even spread across cycle: each missing slot gets its own (week, day)
+        # by walking through every (week, day_of_week) and picking unused ones.
+        candidate_positions: list[tuple[int, int]] = []
+        for w in range(1, cw + 1):
+            for d in range(7):
+                if (w, d) not in used_positions:
+                    candidate_positions.append((w, d))
+                    if len(candidate_positions) >= missing:
+                        break
+            if len(candidate_positions) >= missing:
+                break
+        # If somehow we still don't have enough (shouldn't happen — cw×7 ≥
+        # cw×ppw for ppw ≤ 7), just stack on the last week.
+        while len(candidate_positions) < missing:
+            candidate_positions.append((cw, 0))
+
+        # Borrow angle/intent from the existing slots when possible to keep
+        # the pad slots visually consistent with the rest of the pack.
+        fallback_angle = (
+            schedule[0].angle if schedule and schedule[0].angle else ""
+        )
+        fallback_intent = (
+            schedule[0].intent if schedule and schedule[0].intent else ""
+        )
+        fallback_format = (
+            schedule[0].content_format if schedule and schedule[0].content_format
+            else ("图文" if platform == "xiaohongshu"
+                  else "短视频" if platform in ("douyin", "kuaishou")
+                  else "图文")
+        )
+        for i, (w, d) in enumerate(candidate_positions[:missing], 1):
+            schedule.append(TopicSlot(
+                week=w, day_of_week=d, publish_slot="",
+                title=f"待补 #{len(schedule) + 1}（AI 漏排 — 请用 ✍️ 写这个 重生成）",
+                angle=fallback_angle,
+                intent=fallback_intent,
+                content_format=fallback_format,
+                outline=[],
+                materials_needed=[],
+                publish_rationale="",
+                decision_rationale=(
+                    "AI 实际只排出了 "
+                    f"{len(schedule)} 篇 / 用户要求 {topic_count} 篇，"
+                    "这一篇是占位 — 点 ✍️ 写这个 让 AI 重新出标题 + 大纲。"
+                ),
+            ))
+        # Re-sort by (week, day_of_week) so padded slots merge into the
+        # natural timeline order instead of sticking at the bottom.
+        schedule.sort(key=lambda s: (s.week, s.day_of_week))
+        schedule_short_warning = (
+            f"scheduler returned {len(schedule) - missing}/{topic_count} slots; "
+            f"padded {missing} placeholder slot(s)"
+        )
+
+    if schedule_short_warning:
+        # Surface in the saved checkpoint warning slot so the response can
+        # carry the diagnostic up to the UI without changing the schema.
+        existing_warn = sched_parsed.get("_warning")
+        sched_parsed["_warning"] = (
+            f"{existing_warn} | {schedule_short_warning}" if existing_warn
+            else schedule_short_warning
+        )
+
     # --- Body-draft pool: parallel, one call per slot ---
     # Splitting body-drafting out of the scheduler was forced by the
     # observation that a single 12-slot body-draft call would silently
