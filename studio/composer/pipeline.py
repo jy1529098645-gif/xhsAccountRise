@@ -659,6 +659,7 @@ async def expand(
                 drafter_spec, t0, job_id=job_id,
                 chosen_directions=chosen_directions,
                 chosen_idxs=chosen_idxs,
+                generate_body_drafts=generate_body_drafts,
             )
     except (jobs.CancelRequested, asyncio.CancelledError):
         # User pressed pause. partial_state_json was already checkpointed
@@ -698,6 +699,9 @@ async def _expand_inner(
     drafter_spec: str, t0: float, job_id: str | None = None,
     chosen_directions: list[StrategicDirection] | None = None,
     chosen_idxs: list[int] | None = None,
+    # v0.62 ：v0.62.10 修复 NameError — _drafter_pool 引用了这个标志位，
+    # 但之前没透传进来，导致 expand 跑到 drafter pool 时 NameError 崩。
+    generate_body_drafts: bool = False,
 ) -> dict[str, Any]:
     # v0.59: multi-direction support. If caller passed N directions, slots
     # distribute across them. Otherwise fall back to single-direction (legacy).
