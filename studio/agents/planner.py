@@ -144,6 +144,38 @@ async def _call_for_plan(gen: Generator, system: str, user: str) -> dict[str, An
     )
 
 
+def _coerce_object_list(value: Any, *, object_keys: tuple[str, ...]) -> list[dict]:
+    """Normalise an LLM-returned "list of objects" into list[dict].
+
+    Same defensive contract as `_coerce_str_list`, but for the object-list
+    cases (publish_schedule, follow_up_angles). Accepts:
+
+    - None / missing      → []
+    - list of dicts       → unchanged (kept as-is — frontend handles missing keys)
+    - list of strings     → each wrapped as `{first_key: <string>}`
+    - dict with list val  → recurse into the first list-valued property
+    - anything else       → []
+    """
+    if value is None:
+        return []
+    if isinstance(value, list):
+        out: list[dict] = []
+        for item in value:
+            if isinstance(item, dict):
+                out.append(item)
+            elif isinstance(item, str) and item.strip():
+                out.append({object_keys[0]: item})
+            # silently drop other shapes — better than crashing the UI
+        return out
+    if isinstance(value, dict):
+        for v in value.values():
+            if isinstance(v, list):
+                return _coerce_object_list(v, object_keys=object_keys)
+        # Treat a single dict as a one-element list.
+        return [value]
+    return []
+
+
 def _coerce_str_list(value: Any) -> list[str]:
     """Normalise an LLM-returned "list of plain items" into list[str].
 
@@ -230,11 +262,19 @@ class PlannerAgent(Agent):
 
         step.latency_ms = self._ms() - t0
         # Non-Claude models (DeepSeek, GPT in json-mode) don't honor the
-        # schema as strictly as Claude's tool_use does — they sometimes
-        # return engagement_tactics as `[{tactic: "..."}]`, `{tactics: [...]}`,
-        # or even a single string. Coerce defensively so downstream code
-        # (the frontend in particular) can rely on string[].
+        # schema as strictly as Claude's tool_use does. Normalise every
+        # array-typed field so the frontend can rely on the contract.
         plan["engagement_tactics"] = _coerce_str_list(plan.get("engagement_tactics"))
+        plan["publish_schedule"] = _coerce_object_list(
+            plan.get("publish_schedule"),
+            object_keys=("slot", "median_likes", "why"),
+        )
+        plan["follow_up_angles"] = _coerce_object_list(
+            plan.get("follow_up_angles"),
+            object_keys=("title", "angle", "hook_type", "why"),
+        )
+        if not isinstance(plan.get("series_thesis"), str):
+            plan["series_thesis"] = str(plan.get("series_thesis") or "")
         # Stash on ctx for the pipeline to surface in the bundle.
         setattr(ctx, "plan", plan)
         step.input_summary = (

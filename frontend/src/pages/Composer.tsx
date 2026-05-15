@@ -525,7 +525,11 @@ function PlanCard({plan}: {plan: any}) {
       {plan.series_thesis && (
         <p style={{fontStyle: "italic", color: "var(--muted)", marginBottom: 14}}>主线：{plan.series_thesis}</p>
       )}
-      {plan.publish_schedule?.length > 0 && (
+      {/* Non-Claude models occasionally return these as objects rather than
+          arrays (`{schedule: [...]}` etc.) — guard with Array.isArray, not
+          just optional-chaining `.length`, so a string/object with
+          accidental `length` doesn't slip through to .map. */}
+      {Array.isArray(plan.publish_schedule) && plan.publish_schedule.length > 0 && (
         <>
           <h3>📅 推荐发布时段</h3>
           <table className="table">
@@ -533,26 +537,30 @@ function PlanCard({plan}: {plan: any}) {
             <tbody>
               {plan.publish_schedule.map((s: any, i: number) => (
                 <tr key={i}>
-                  <td><b>{s.slot}</b></td>
-                  <td className="num">{s.median_likes?.toLocaleString() ?? "—"}</td>
-                  <td className="muted">{s.why}</td>
+                  <td><b>{typeof s === "string" ? s : s?.slot}</b></td>
+                  <td className="num">{typeof s?.median_likes === "number" ? s.median_likes.toLocaleString() : "—"}</td>
+                  <td className="muted">{typeof s === "string" ? "" : s?.why}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </>
       )}
-      {plan.follow_up_angles?.length > 0 && (
+      {Array.isArray(plan.follow_up_angles) && plan.follow_up_angles.length > 0 && (
         <>
           <h3 style={{marginTop: 14}}>🔁 后续选题 ({plan.follow_up_angles.length})</h3>
           {plan.follow_up_angles.map((a: any, i: number) => (
             <div key={i} style={{padding: "10px 12px", background: "#fafafa", borderRadius: 6, marginBottom: 8}}>
-              <div style={{fontWeight: 600}}>{a.title}</div>
-              <div style={{fontSize: 12, marginTop: 4}}>
-                <span className="tag-pill">{a.angle}</span>
-                <span className="tag-pill">{a.hook_type}</span>
-              </div>
-              <div className="muted" style={{fontSize: 12, marginTop: 6}}>{a.why}</div>
+              <div style={{fontWeight: 600}}>{typeof a === "string" ? a : a?.title}</div>
+              {typeof a === "object" && a && (a.angle || a.hook_type) && (
+                <div style={{fontSize: 12, marginTop: 4}}>
+                  {a.angle && <span className="tag-pill">{a.angle}</span>}
+                  {a.hook_type && <span className="tag-pill">{a.hook_type}</span>}
+                </div>
+              )}
+              {typeof a === "object" && a?.why && (
+                <div className="muted" style={{fontSize: 12, marginTop: 6}}>{a.why}</div>
+              )}
             </div>
           ))}
         </>
