@@ -339,32 +339,30 @@ export default function Composer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [strategyPack, slotIdxFromUrl, altIdxFromUrl]);
 
-  // v0.62.13 ：autofill 完成后滚到 banner（顶部「✨ AI 已为你定制 brief」）。
-  // double-RAF + 100ms 额外等待确保 ：(a) React 重渲染完 banner + AI 摘要卡 +
-  // 填好的 form ；(b) 浏览器可能的 scroll restoration 已经处理完。
-  // 上面 scrollMarginTop: 16 让 banner 顶部留 16px 气口不顶到边缘。
-  // 只在「真正新 prefill」时滚（同字符串重复不滚），避免 AI Phase 2 完成
-  // 后再次滚走用户已经在看的位置。
-  const lastScrolledKey = useRef<string>("");
+  // v0.62.13 + 修复 ：prefillNote 出现时只做视觉 flash，不强制滚动。
+  //
+  // 历史上这里 `scrollIntoView({block: "start"})` 到 banner — 但 banner 上方
+  // 还有 StrategyPackView（可能很高），block:"start" 把 banner 顶到视口顶部
+  // 意味着 pack 视图被推到视口外、表单被推到视口外下方，用户感觉「页面跳到很底」。
+  // URL 直接带 `?slot=...` 进来时，浏览器自身的 scroll restoration / 默认顶
+  // 端就够好了 — flash 高亮能引导用户注意，不需要强制滚。
+  //
+  // 只在「真正新 prefill」时 flash（同字符串重复不再 flash），避免 AI Phase
+  // 2 完成后又闪一次。
+  const lastFlashedKey = useRef<string>("");
   useEffect(() => {
     if (!prefillNote) return;
-    // 用 slot:alt key 做去重 ：同一 slot 只滚一次（即使 Phase 1 → Phase 2
-    // 两次更新 prefillNote 字符串），用户改了字段不会被再次拖走。
     const key = packIdFromUrl
       ? `${packIdFromUrl}:${slotIdxFromUrl}:${altIdxFromUrl}`
       : prefillNote;
-    if (lastScrolledKey.current === key) return;
-    lastScrolledKey.current = key;
+    if (lastFlashedKey.current === key) return;
+    lastFlashedKey.current = key;
     requestAnimationFrame(() => requestAnimationFrame(() => {
       setTimeout(() => {
-        const target =
-          document.getElementById("composer-prefill-banner")
-          || document.getElementById("composer-step-1");
-        if (target) {
-          target.scrollIntoView({behavior: "smooth", block: "start"});
-          target.classList.add("prefill-flash");
-          setTimeout(() => target.classList.remove("prefill-flash"), 1500);
-        }
+        const target = document.getElementById("composer-prefill-banner");
+        if (!target) return;
+        target.classList.add("prefill-flash");
+        setTimeout(() => target.classList.remove("prefill-flash"), 1500);
       }, 100);
     }));
   }, [prefillNote, packIdFromUrl, slotIdxFromUrl, altIdxFromUrl]);
