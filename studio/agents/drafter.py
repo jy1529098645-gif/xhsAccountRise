@@ -17,10 +17,18 @@ from typing import Any
 from ..brief import Brief
 from ..generators.base import Generator, GeneratedCandidate, PromptBundle
 from ..generators import prompts as g_prompts
+from .angle_styles import angle_playbook_block
 from .base import Agent, AgentContext
 
 
-def _strategy_block(strategy: dict[str, Any]) -> str:
+def _strategy_block(strategy: dict[str, Any], *, as_reference: bool = False) -> str:
+    """Format the Strategist's output for inclusion in a drafter prompt.
+
+    `as_reference=True` softens the language to "参考骨架" — used when an
+    angle playbook is in play, so the angle's hook / structure / tone wins
+    on conflicts (avoiding the convergence problem where every candidate
+    ends up sharing one hook regardless of angle).
+    """
     if not strategy:
         return "（无显式策略，按 brief 自由发挥）"
     parts = [
@@ -31,10 +39,31 @@ def _strategy_block(strategy: dict[str, Any]) -> str:
         f"语气：{strategy.get('tone', '')}",
         f"避坑：" + "；".join(strategy.get("avoid", [])),
     ]
+    if as_reference:
+        return (
+            "（仅作 通用参考，本稿优先按下方「角度专属写法」走 — 冲突时以角度为准。"
+            "Strategist 的「避坑」列表全员适用，但 hook / 结构 / 语气可被角度覆盖）：\n"
+            + "\n".join(parts)
+        )
     return "\n".join(parts)
 
 
-def _augmented_user(brief: Brief, ctx: AgentContext, angle_override: str | None = None) -> str:
+def _augmented_user(
+    brief: Brief,
+    ctx: AgentContext,
+    *,
+    angle_override: str | None = None,
+    sibling_angles: tuple[str, ...] = (),
+) -> str:
+    """Build the user message for ONE drafter call.
+
+    When `angle_override` is set, swap the prompt shape from
+    "Strategist mandate → write" to "angle playbook is law → Strategist is
+    reference → diverge from siblings → write". This is the core fix for
+    the "all candidates look the same" problem: previously every drafter
+    received the same Strategist hook/structure as a hard mandate, which
+    overrode any angle-specific differentiation.
+    """
     base = g_prompts.build_user_message(
         brief, ctx.refs, ctx.comments, ctx.hooks,
         angle_override=angle_override,
@@ -47,6 +76,43 @@ def _augmented_user(brief: Brief, ctx: AgentContext, angle_override: str | None 
         f"\n\n{report_ctx}\n（以上是这个语料库的双 AI 共识 + 用户上传整合的报告，是你创作的强参考。）\n"
         if report_ctx else ""
     )
+
+    # ---- Angle-specific path ------------------------------------------
+    playbook = angle_playbook_block(angle_override) if angle_override else None
+
+    if angle_override and playbook:
+        # Other angles in this run — telling the model what its siblings
+        # will produce so it diverges. Capped to avoid prompt bloat.
+        others = [a for a in sibling_angles if a and a != angle_override]
+        sibling_block = (
+            f"\n【本次起草团并发的其他角度】{' / '.join(others)}\n"
+            f"（每个角度由不同的 draft 写。你必须确保你这一份在 hook 类型、开头第一句、"
+            f"整体结构、句式风格 上和上述角度的稿件 visibly 不同 — 不是只换一个名字而已。"
+            f"读者看到这一组候选时，应该能立刻分清哪份是哪个角度。）\n"
+            if others else ""
+        )
+        diversification = (
+            "\n【差异化命令 — 关键】\n"
+            f"- 你这一份是 「{angle_override}」 角度的稿件。\n"
+            "- 上面 Strategist 的策略块是「通用参考」，不是「必须照抄」。冲突时以「角度专属写法」为准。\n"
+            "- 与其他角度的兄弟稿在 ：标题 hook 类型 / 开头第一句的语气 / 段落结构 / "
+            "句式节奏 上 都要拉开差异。两份稿摆在一起，读者一眼能分清这是「故事 / 教程 / "
+            "段子 / 数字 ...」哪一种。\n"
+            "- 不要为了「服从策略」而把所有候选都写成 listicle 或都用同一个数字 hook。"
+            "如果 Strategist 推荐的 hook 和你的角度不符，按你的角度走。\n"
+        )
+        return (
+            "【上层 Strategist 通用策略 — 参考即可，不是硬约束】\n"
+            f"{_strategy_block(ctx.strategy, as_reference=True)}\n\n"
+            f"{playbook}\n"
+            f"{sibling_block}"
+            f"{diversification}"
+            f"{report_block}\n\n"
+            f"{base}"
+        )
+
+    # ---- No angle override (single-angle or unknown angle) -----------
+    # Fall back to the original behaviour : strategy is a hard mandate.
     angle_directive = (
         f"\n【本次起草的角度 — 必须按此写】{angle_override}\n"
         f"（用户选了多个角度，整个起草团会一人一个角度并发出稿；你这一份只写「{angle_override}」角度，"
@@ -110,8 +176,19 @@ class DrafterPoolAgent(Agent):
         target_len = int(getattr(ctx.brief, "target_length", 600) or 600)
         dynamic_max_tokens = max(2048, target_len * 3 + 500)
 
+        # Pass the full angle set to each draft so each one knows what its
+        # siblings are writing — the prompt then explicitly demands
+        # divergence (hook / opening / structure / tone) from those sibling
+        # angles. This is what stops the candidates from collapsing into
+        # near-identical drafts.
+        all_angles_tuple = tuple(angles)
+
         async def _one(angle: str, gen: Generator) -> tuple[str, GeneratedCandidate, str]:
-            user = _augmented_user(ctx.brief, ctx, angle_override=angle)
+            user = _augmented_user(
+                ctx.brief, ctx,
+                angle_override=angle,
+                sibling_angles=all_angles_tuple,
+            )
             bundle = PromptBundle(
                 system=system, user=user,
                 expected_schema=g_prompts.JSON_SCHEMA,
