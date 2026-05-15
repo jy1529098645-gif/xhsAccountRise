@@ -67,7 +67,7 @@ class DeepSeekGenerator(Generator):
                     {"role": "user", "content": user_with_hint},
                 ],
                 response_format={"type": "json_object"},
-                max_tokens=2048,
+                max_tokens=prompt.max_tokens,
                 temperature=0.85,
             )
         except Exception as e:

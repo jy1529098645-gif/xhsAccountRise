@@ -79,6 +79,12 @@ class PromptBundle:
     system: str
     user: str
     expected_schema: dict[str, Any]
+    # v0.62.17 ：让 drafter 按 target_length 动态算 max_tokens。
+    # 默认 2048（向后兼容老代码），调用方按 brief.target_length 算 ：
+    #   max_tokens = max(2048, target_length * 3 + 500)
+    # 给 JSON 包裹（title / tags / cover_prompt 等）留 500 token 空间，
+    # body 中文字符 → token 大约 1:1.5 — 3 倍倍率包含 emoji / 标点。
+    max_tokens: int = 2048
 
 
 class Generator(abc.ABC):

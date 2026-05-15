@@ -82,11 +82,14 @@ def _strategy_lines(strategy: dict[str, Any]) -> str:
     )
 
 
-async def _call(gen: Generator, system: str, user: str) -> dict[str, Any]:
+async def _call(gen: Generator, system: str, user: str,
+                target_length: int = 600) -> dict[str, Any]:
     from ..generators import prompts as g_prompts
     from ..llm_call import call_for_json
+    # v0.62.17 ：refiner max_tokens 也按 target_length 动态 — 之前 2048 截长稿。
+    max_tokens = max(2048, target_length * 3 + 500)
     return await call_for_json(
-        gen, system, user, max_tokens=2048,
+        gen, system, user, max_tokens=max_tokens,
         tool_name="submit_revision", schema=g_prompts.JSON_SCHEMA,
     )
 
@@ -122,7 +125,8 @@ class RefinerAgent(Agent):
 
         t0 = self._ms()
         try:
-            parsed = await _call(self.generator, _SYSTEM, user)
+            parsed = await _call(self.generator, _SYSTEM, user,
+                                  target_length=int(getattr(ctx.brief, "target_length", 600) or 600))
             payload = CandidatePayload.from_dict(parsed)
         except Exception as e:
             step.error = f"refine failed: {e!r}"

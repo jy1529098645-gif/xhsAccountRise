@@ -67,7 +67,7 @@ class ClaudeGenerator(Generator):
         try:
             resp = await client.messages.create(
                 model=self.model,
-                max_tokens=2048,
+                max_tokens=prompt.max_tokens,
                 system=prompt.system,
                 messages=[{"role": "user", "content": prompt.user}],
                 tools=[tool],

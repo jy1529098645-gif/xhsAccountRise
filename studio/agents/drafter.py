@@ -104,11 +104,18 @@ class DrafterPoolAgent(Agent):
             for i in range(len(angles))
         ]
 
+        # v0.62.17 ：max_tokens 按 target_length 动态算 — 之前固定 2048
+        # 经常让长稿（>800 字）被截断，body 实际只有 500-700 字。
+        # 倍率 3x ：中文字符 → token 比 1.5x，再留 500 token 给 JSON 包装。
+        target_len = int(getattr(ctx.brief, "target_length", 600) or 600)
+        dynamic_max_tokens = max(2048, target_len * 3 + 500)
+
         async def _one(angle: str, gen: Generator) -> tuple[str, GeneratedCandidate, str]:
             user = _augmented_user(ctx.brief, ctx, angle_override=angle)
             bundle = PromptBundle(
                 system=system, user=user,
                 expected_schema=g_prompts.JSON_SCHEMA,
+                max_tokens=dynamic_max_tokens,
             )
             try:
                 cand = await asyncio.wait_for(gen.generate(bundle), timeout=180)

@@ -70,7 +70,7 @@ class OpenAIGenerator(Generator):
                 or "404" in msg)
 
     async def _create_chat(self, client, model: str, messages: list, *,
-                           json_mode: bool):
+                           json_mode: bool, max_tokens: int = 2048):
         """Try to call OpenAI with optional JSON mode; falls back if model
         doesn't support response_format."""
         try:
@@ -78,12 +78,17 @@ class OpenAIGenerator(Generator):
                 return await client.chat.completions.create(
                     model=model, messages=messages,
                     response_format={"type": "json_object"},
+                    max_tokens=max_tokens,
                 )
-            return await client.chat.completions.create(model=model, messages=messages)
+            return await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens,
+            )
         except Exception as e:
             err = str(e)
             if json_mode and ("response_format" in err or "json_object" in err):
-                return await client.chat.completions.create(model=model, messages=messages)
+                return await client.chat.completions.create(
+                    model=model, messages=messages, max_tokens=max_tokens,
+                )
             raise
 
     async def generate(self, prompt: PromptBundle) -> GeneratedCandidate:
@@ -108,7 +113,8 @@ class OpenAIGenerator(Generator):
         last_err: Exception | None = None
         for model in self._model_chain():
             try:
-                resp = await self._create_chat(client, model, messages, json_mode=True)
+                resp = await self._create_chat(client, model, messages,
+                                                 json_mode=True, max_tokens=prompt.max_tokens)
                 used_model = model
                 if self._effective_model is None and model != self.model:
                     self._effective_model = model

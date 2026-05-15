@@ -40,7 +40,7 @@ SYSTEM_TITLE_BODY = """\
 
 你的稿件必须满足：
 1. 标题：强 hook（数字 / 痛点 / 工具种草 / 故事 / 建议 / 段子 / 反讽 / 夸张戏谑 / 自嘲 / 玩梗 / 沙雕 / 盘点 / 复盘 / 问答 / 打卡 / 教训 等）。字数按平台规范。
-2. 正文：口语化、第一人称、emoji 节奏自然，按平台规范分段或分点。
+2. 正文：口语化、第一人称、emoji 节奏自然，按平台规范分段或分点。**正文字数严格按 brief 里的【目标正文字数】写**，少了要扩写到下限以上才能交稿 — 数字是硬指标不是「约莫」。
 3. 结尾自然引导互动，强度按 brief 指定。
 4. tag：选 6-10 个，含 1-2 个赛道大词 + 3-5 个细分场景词 + 1-2 个工具/产品词。
 5. cover_prompt：英文描述封面图，明确文字版面 + 风格关键词。
@@ -121,7 +121,7 @@ USER_TEMPLATE = """\
 请基于上述材料生成一份候选稿件。务必输出 JSON 对象，键齐全：
 {{
   "title": "<15-22 字>",
-  "body": "<约 {target_length} 字，分点>",
+  "body": "<**严格 {target_length} 字以上（±10% 容差）**，分点分段；不要短于这个数字 — 短了等于稿件没完成>",
   "tags": ["<tag1>", "..."],
   "cover_prompt": "<英文封面图描述>",
   "hook_type": "<数字型|痛点型|故事型|工具型|教程型|种草型|建议型|对比型|问句型|感悟型|段子型|反讽型|夸张戏谑型|自嘲型|玩梗型|沙雕型|科普型|避雷型|测评型|盘点型|复盘型|问答型|打卡型|教训型>",
@@ -161,7 +161,7 @@ def _format_brief(brief: Brief, angle_override: str | None = None) -> str:
         f"平台风格指引：{brief.voice_hint()}",
         f"主题：{brief.topic}",
         angle_line,
-        f"目标正文字数：{brief.target_length}",
+        f"目标正文字数：{brief.target_length} 字（**正文字数必须达到这个数字 ±10%，少了会被打回**）",
         f"CTA 强度：{cta_map.get(brief.cta_strength, brief.cta_strength)}",
     ]
     if brief.niche:

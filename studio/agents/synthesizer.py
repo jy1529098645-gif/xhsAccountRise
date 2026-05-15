@@ -119,11 +119,13 @@ def _build_user(ctx: AgentContext) -> str:
                        + "（候选已按角度分别出稿，融合时保留多角度优点而不是收敛到单一角度）")
     return (
         f"【brief】\n主题: {ctx.brief.topic}\n{angle_line}\n"
-        f"字数: {ctx.brief.target_length}\n\n"
+        f"**字数硬指标: {ctx.brief.target_length} 字以上（±10% 容差）**"
+        f" — 融合版正文必须达到这个字数，少了等于稿件没完成。\n\n"
         f"【上层 Strategist 已定的策略】\n{strategy_lines}\n\n"
         f"【{len([c for c in ctx.drafts if not c.error])} 份候选 + critic 评审】\n\n"
         + "\n\n".join(blocks)
-        + "\n\n现在请综合所有优点写出最终融合版。务必输出完整 JSON。"
+        + "\n\n现在请综合所有优点写出最终融合版。"
+        + "**重要 ：写完核对字数，少于目标必须扩写到目标以上**。务必输出完整 JSON。"
     )
 
 
@@ -155,10 +157,14 @@ _SYNTH_SCHEMA = {
 }
 
 
-async def _call_synth(gen: Generator, system: str, user: str) -> dict[str, Any]:
+async def _call_synth(gen: Generator, system: str, user: str,
+                       target_length: int = 600) -> dict[str, Any]:
     from ..llm_call import call_for_json
+    # v0.62.17 ：synthesizer 把多份候选融合，需要的 token 比单候选多 ：
+    # base 3000 + target_length × 3，保证最终稿不被截。
+    max_tokens = max(3000, target_length * 3 + 1000)
     return await call_for_json(
-        gen, system, user, max_tokens=3000,
+        gen, system, user, max_tokens=max_tokens,
         tool_name="submit_synthesis", schema=_SYNTH_SCHEMA,
     )
 
@@ -195,7 +201,8 @@ class SynthesizerAgent(Agent):
         user = _build_user(ctx)
         t0 = self._ms()
         try:
-            parsed = await _call_synth(self.generator, _SYSTEM, user)
+            parsed = await _call_synth(self.generator, _SYSTEM, user,
+                                        target_length=int(getattr(ctx.brief, "target_length", 600) or 600))
         except Exception as e:
             step.error = f"synthesis failed: {e!r}"
             step.latency_ms = self._ms() - t0
