@@ -1149,7 +1149,12 @@ async def strategy_autofill(req: StrategyAutofillRequest) -> dict[str, Any]:
             moderator_spec=req.moderator_spec,
         )
     except RuntimeError as e:
-        raise HTTPException(409, str(e))
+        # v0.62.10 ：LLM 失败 / DB 错应是 502，不是 409（conflict）。
+        raise HTTPException(502, f"autofill failed: {str(e)[:400]}")
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"autofill failed ({type(e).__name__}): {str(e)[:400]}")
 
 
 @app.post("/api/composer/strategy/propose")
@@ -1237,7 +1242,17 @@ async def strategy_expand(pack_id: str, req: StrategyExpandRequest) -> dict[str,
         # interpret this as "go poll, don't retry POST".
         if "expand 已经在跑" in str(e):
             raise HTTPException(409, str(e))
-        raise
+        # v0.62.10 ：之前其它 RuntimeError 都裸 raise → FastAPI 转「500 Internal
+        # Server Error」用户看不到根因。改为带 detail，前端 humaniser 能
+        # 识别（LLM 失败 / 限速 / 数据库错等）。
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"expand failed: {str(e)[:500]}")
+    except Exception as e:
+        # 兜底 ：SQL 错 / 网络错 / 任何意外。把类型 + 信息回前端，方便排查。
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"expand failed ({type(e).__name__}): {str(e)[:400]}")
 
 
 @app.get("/api/composer/strategy")
@@ -1502,6 +1517,13 @@ async def iterate_strategy_api(pack_id: str, req: StrategyIterateRequest) -> dic
         raise HTTPException(404, str(e))
     except ValueError as e:
         raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        # v0.62.10 ：LLM 失败 / SQL 错都裸过 → 500 无 detail。改为 502 + detail。
+        raise HTTPException(502, f"iterate failed: {str(e)[:400]}")
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"iterate failed ({type(e).__name__}): {str(e)[:400]}")
 
 
 # v0.61.27 ：变现套装（商单评估 + 引流话术）

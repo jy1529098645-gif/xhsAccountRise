@@ -73,15 +73,42 @@ def _applied_migrations(con: sqlite3.Connection) -> set[str]:
 
 
 def apply_migrations(verbose: bool = True) -> list[str]:
+    """Apply pending migrations from studio/migrations/*.{sql,py}.
+
+    v0.62.10 ：支持 .py 迁移 — 为了写出 idempotent 的复杂迁移（e.g. 014
+    需要根据当前 schema 状态决定 ALTER / COPY / DROP，纯 SQL 表达不了）。
+    .py 文件必须有 `def up(con):` 函数。
+    """
     applied_now: list[str] = []
-    files = sorted(p for p in config.MIGRATIONS_DIR.glob("*.sql"))
+    files = sorted(
+        list(config.MIGRATIONS_DIR.glob("*.sql"))
+        + list(config.MIGRATIONS_DIR.glob("*.py")),
+        key=lambda p: p.name,
+    )
     with connect() as con:
         done = _applied_migrations(con)
         for f in files:
             if f.name in done:
                 continue
-            sql = f.read_text(encoding="utf-8")
-            con.executescript(sql)
+            if f.suffix == ".sql":
+                sql = f.read_text(encoding="utf-8")
+                con.executescript(sql)
+            elif f.suffix == ".py":
+                import importlib.util
+                spec = importlib.util.spec_from_file_location(
+                    f"_migration_{f.stem}", f,
+                )
+                if spec is None or spec.loader is None:
+                    raise RuntimeError(f"can't load migration {f.name}")
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                if not hasattr(mod, "up"):
+                    raise RuntimeError(
+                        f"migration {f.name} must define `def up(con):`"
+                    )
+                mod.up(con)
+            else:
+                continue
             con.execute(
                 "INSERT INTO studio_migrations (name, applied_at) VALUES (?, ?)",
                 (f.name, int(time.time())),
