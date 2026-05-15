@@ -401,49 +401,9 @@ export default function Composer() {
   }
 
   const noBackend = !api.isConnected();
-
-  // v0.61.18 ：4 步 stepper（仿 Strategy）。Composer 跟 Strategy 不一样的是 ：
-  // 跑完后所有结果都在同一页 — 所以这里的「跳步」实际是滚动到对应锚点 section。
-  // 每步是否可点 = 该 section 是否已有数据。
-  const hasStrategy = !!(bundle?.strategy && Object.keys(bundle.strategy).length > 0);
-  const hasDrafts = Array.isArray(bundle?.drafts) && (bundle?.drafts?.length ?? 0) > 0;
-  const hasFinal = !!(bundle?.final || bundle?.refined);
-  // 当前活跃步骤 ：未跑 → 1（表单）；running → 2（起草中）；done → 4（最终稿）/3（候选）
-  const composerStep = !bundle ? (running ? 2 : 1) : (hasFinal ? 4 : hasDrafts ? 3 : 2);
-  function scrollTo(id: string) {
-    const el = document.getElementById(id);
-    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-  function ComposerStepBtn({n, label, canGo, anchorId}: {
-    n: number; label: string; canGo: boolean; anchorId: string;
-  }) {
-    const isCurrent = composerStep === n;
-    const isDone = composerStep > n;
-    const clickable = canGo || isDone || n === 1;
-    return (
-      <button type="button" onClick={() => { if (clickable) scrollTo(anchorId); }}
-        disabled={!clickable}
-        title={clickable ? `跳到第 ${n} 步` : `先完成前面 / 等当前跑完`}
-        style={{
-          flex: 1, padding: "8px 12px", fontSize: 13, fontWeight: 600,
-          border: "1px solid " + (isCurrent ? "var(--primary)" : "var(--border)"),
-          background: isCurrent ? "var(--primary)" : (isDone ? "var(--ok-soft)" : "#fff"),
-          color: isCurrent ? "#fff" : (isDone ? "var(--ok)" : (clickable ? "var(--fg)" : "var(--muted)")),
-          borderRadius: 6, cursor: clickable ? "pointer" : "not-allowed",
-          opacity: clickable ? 1 : 0.55,
-          transition: "background 0.15s, color 0.15s",
-        }}>
-        <span style={{
-          display: "inline-flex", alignItems: "center", justifyContent: "center",
-          width: 20, height: 20, borderRadius: "50%", marginRight: 6,
-          background: isCurrent ? "rgba(255,255,255,0.25)" : (isDone ? "var(--ok)" : "#eee"),
-          color: isCurrent ? "#fff" : (isDone ? "#fff" : "var(--muted)"),
-          fontSize: 11,
-        }}>{isDone ? "✓" : n}</span>
-        {label}
-      </button>
-    );
-  }
+  // v0.62.14 ：Composer 的 4 步 stepper 已删除 — 出稿板块流程线性而紧凑，
+  // 单页能看完所有 step，不需要再加跳转条。anchor id（composer-step-1 等）
+  // 保留给 prefill scroll target 用。
 
   return (
     <div>
@@ -503,19 +463,6 @@ export default function Composer() {
             // 等 setState 真渲染完再滚（double RAF），不会跑空。
           }} />
       )}
-
-      {/* v0.61.18 ：4 步跳转条 — 点击滚动到对应 section */}
-      <div className="card" style={{padding: "10px 12px"}}>
-        <div className="row" style={{gap: 6, alignItems: "stretch"}}>
-          <ComposerStepBtn n={1} label="📝 主题" canGo={true} anchorId="composer-step-1" />
-          <ComposerStepBtn n={2} label="📋 策略" canGo={hasStrategy} anchorId="composer-step-2" />
-          <ComposerStepBtn n={3} label="📑 候选" canGo={hasDrafts} anchorId="composer-step-3" />
-          <ComposerStepBtn n={4} label="★ 最终稿" canGo={hasFinal} anchorId="composer-step-4" />
-        </div>
-        <div className="muted" style={{fontSize: 11, marginTop: 6, textAlign: "center"}}>
-          点上面任一步滚动到对应区域 · 跑完一次每个区域都会有内容
-        </div>
-      </div>
 
       {noBackend && (
         <div className="banner warn">

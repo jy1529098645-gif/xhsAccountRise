@@ -170,6 +170,56 @@ function StrategyPage({ explicitPackId }: { explicitPackId?: string }) {
         <p>详细策略 + 每日多方案 · 选哪条进出稿板块写哪条</p>
       </div>
 
+      {/* v0.62.14 ：浏览模式也保留 4 步 stepper（跟 wizard 完全一致风格）。
+          step 4 = 「时间线大纲」是当前位置 ；点 1/2/3 跳回 wizard 改前面的步。 */}
+      {pack && (
+        <div className="card" style={{padding: "10px 12px", marginBottom: 12}}>
+          <div className="row" style={{gap: 6, alignItems: "stretch"}}>
+            {[
+              { n: 1, label: "🎯 目标" },
+              { n: 2, label: "📝 输入" },
+              { n: 3, label: "🚀 方向" },
+              { n: 4, label: "📅 时间线大纲" },
+            ].map(s => {
+              const isCurrent = s.n === 4;
+              const isDone = s.n < 4;
+              const clickable = !isCurrent;
+              return (
+                <button key={s.n} type="button"
+                  onClick={() => {
+                    if (clickable) {
+                      setCreateMode(true);
+                      navigate("/strategy/new", { replace: true });
+                    }
+                  }}
+                  disabled={!clickable}
+                  title={clickable ? `回到第 ${s.n} 步（会重新进入 wizard）` : "你在这一步"}
+                  style={{
+                    flex: 1, padding: "8px 12px", fontSize: 13, fontWeight: 600,
+                    border: "1px solid " + (isCurrent ? "var(--primary)" : "var(--border)"),
+                    background: isCurrent ? "var(--primary)" : (isDone ? "var(--ok-soft)" : "#fff"),
+                    color: isCurrent ? "#fff" : (isDone ? "var(--ok)" : "var(--fg)"),
+                    borderRadius: 6, cursor: clickable ? "pointer" : "default",
+                    transition: "background 0.15s, color 0.15s",
+                  }}>
+                  <span style={{
+                    display: "inline-flex", alignItems: "center", justifyContent: "center",
+                    width: 20, height: 20, borderRadius: "50%", marginRight: 6,
+                    background: isCurrent ? "rgba(255,255,255,0.25)" : (isDone ? "var(--ok)" : "#eee"),
+                    color: isCurrent ? "#fff" : (isDone ? "#fff" : "var(--muted)"),
+                    fontSize: 11,
+                  }}>{isDone ? "✓" : s.n}</span>
+                  {s.label}
+                </button>
+              );
+            })}
+          </div>
+          <div className="muted" style={{fontSize: 11, marginTop: 6, textAlign: "center"}}>
+            点 1/2/3 回 wizard 修改 · 当前在第 4 步「时间线大纲」
+          </div>
+        </div>
+      )}
+
       {/* pack 切换器 + 新建按钮 */}
       {history.length > 0 && (
         <div className="card" style={{padding: "10px 14px", marginBottom: 12}}>

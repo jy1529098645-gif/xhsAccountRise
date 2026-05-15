@@ -701,7 +701,7 @@ export default function StrategyWizard({ onPackReady }: StrategyWizardProps) {
             onGo={() => setPhase("input")} />
           <StepBtn n={3} label="🚀 方向" canGo={canStep3}
             onGo={() => setPhase("directions")} />
-          <StepBtn n={4} label="📅 排期 → 出稿" canGo={canStep4}
+          <StepBtn n={4} label="📅 时间线大纲" canGo={canStep4}
             onGo={() => pack && onPackReady(pack.pack_id)} />
         </div>
         <div className="muted" style={{fontSize: 11, marginTop: 6, textAlign: "center"}}>
