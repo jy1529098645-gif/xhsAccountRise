@@ -66,10 +66,29 @@ function StrategyPage({ explicitPackId }: { explicitPackId?: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 当 URL 变为 /strategy/new 时切到 wizard
+  // URL ↔ createMode 双向同步 ：
+  //   /strategy/new           → createMode = true（强制 wizard）
+  //   /strategy/{real_id}     → createMode = false（看 pack，Bug A 修复）
+  //   /strategy（无 packId）   → 保持 createMode（既不强进 wizard 也不退出）
+  // 另外 ：sessionStorage 有 strategy.briefPrefill（从 InsightReport / Retrospective
+  // 跳过来的）→ 强制 wizard（用户意图就是新建）。
   useEffect(() => {
-    if (explicitPackId === "new") setCreateMode(true);
+    if (explicitPackId === "new") {
+      setCreateMode(true);
+    } else if (explicitPackId && explicitPackId !== "new") {
+      setCreateMode(false);
+    }
   }, [explicitPackId]);
+
+  // Bug E ：从分析报告 / 复盘跳进来时带的 briefPrefill stash — 强制进 wizard。
+  // 旧默认（v0.62.8 之前）会显示 PackView 把 stash 漏掉。
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("strategy.briefPrefill");
+      if (raw && !createMode) setCreateMode(true);
+    } catch { /* sessionStorage may be disabled */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 2) 决定默认显示哪个 pack
   const expandedPacks = history.filter(p => p.status === "expanded");

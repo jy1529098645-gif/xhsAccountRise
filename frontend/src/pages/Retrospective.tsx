@@ -557,7 +557,8 @@ function NextCyclePicker({analysis, drafts}: {analysis: any; drafts: PublishedDr
         note: `从复盘报告带入：上一轮 ${drafts.length} 篇的 wins/losses 已塞进「附加约束」，AI 会据此调整方向。`,
       }));
     } catch { /* ignore */ }
-    navigate("/strategy");
+    // Bug D 修复 ：直接进 wizard（/strategy 默认会显示 PackView 把 stash 漏掉）
+    navigate("/strategy/new");
   }
   return (
     <div style={{marginTop: 16, padding: 14, background: "var(--primary-soft)",

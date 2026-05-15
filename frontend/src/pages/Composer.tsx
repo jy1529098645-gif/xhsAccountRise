@@ -113,7 +113,7 @@ export default function Composer() {
   //   ?slot=PACK_ID:IDX&alt=N — 用户在 Strategy 板块选了某个 slot 来写
   // 两种都会显示 StrategyPackView 顶部 + 写每篇表单。?slot= 还会自动
   // 预填表单。没有任一参数 = 全新会话，渲染 wizard。
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const packIdFromUrl = searchParams.get("pack")
     || (searchParams.get("slot") || "").split(":")[0]
     || null;
@@ -412,9 +412,16 @@ export default function Composer() {
       )}
       {strategyPack && (
         <StrategyPackView pack={strategyPack}
+          compact
           onWriteClick={(slotIdx, altIdx) => {
             const slot = strategyPack.schedule?.[slotIdx];
             if (slot) handleSlotChosen(slot as TopicSlotDTO, altIdx);
+            // Bug C 修复 ：同步 URL ?slot=PACK:IDX[&alt=N]，刷新页面后还能保留选择
+            const next: Record<string, string> = {
+              slot: `${strategyPack.pack_id}:${slotIdx}`,
+            };
+            if (altIdx >= 0) next.alt = String(altIdx);
+            setSearchParams(next, { replace: true });
             // scroll to step 1
             setTimeout(() => {
               const el = document.getElementById("composer-step-1");

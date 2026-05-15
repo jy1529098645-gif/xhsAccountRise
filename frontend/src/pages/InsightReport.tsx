@@ -573,7 +573,8 @@ function OpportunityCard({opp}: {opp: any}) {
         note: `从分析报告带入 ：${opp.opportunity} (${opp.why || ""})`,
       }));
     } catch { /* fall through */ }
-    navigate("/strategy");
+    // Bug D 修复 ：直接进 wizard（/strategy 默认会显示 PackView 把 stash 漏掉）
+    navigate("/strategy/new");
   }
   return (
     <div onClick={pickIt} style={{padding: "10px 12px", marginBottom: 8,

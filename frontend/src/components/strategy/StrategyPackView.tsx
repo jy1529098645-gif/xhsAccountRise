@@ -28,9 +28,13 @@ const INTENT_COLORS: Record<string, string> = {
  *  默认行为是 navigate('/composer?slot=PACK:IDX&alt=N')。Composer 板块
  *  传 ：用 callback 在当前页填表单（不跳路由）。
  */
-export default function StrategyPackView({pack, onWriteClick}: {
+export default function StrategyPackView({pack, onWriteClick, compact = false}: {
   pack: StrategyPackDTO;
   onWriteClick?: (slotIdx: number, altIdx: number) => void;
+  /** Bug B fix ：compact=true (Composer 板块嵌入) 只渲染 pack ID 摘要 +
+   *  SchedulePanel，**省略** Overview / 周主题 / 最佳时段 / 材料 / 风险 /
+   *  指标 / IterateCard — 那些都是「起号策略板块」的内容。 */
+  compact?: boolean;
 }) {
   const navigate = useNavigate();
   function goWrite(slotIdx: number, altIdx: number) {
@@ -42,6 +46,29 @@ export default function StrategyPackView({pack, onWriteClick}: {
       ? `?slot=${encodeURIComponent(pack.pack_id)}:${slotIdx}&alt=${altIdx}`
       : `?slot=${encodeURIComponent(pack.pack_id)}:${slotIdx}`;
     navigate(`/composer${q}`);
+  }
+  if (compact) {
+    // Composer 嵌入模式 ：1 条 pack 摘要 + SchedulePanel + 「看完整大纲」链接
+    const dirName = pack.chosen_direction?.name || "";
+    return (
+      <div>
+        <div className="card" style={{padding: "10px 14px", background: "#fafafa"}}>
+          <div className="row" style={{justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap"}}>
+            <div style={{fontSize: 12.5, flex: 1, minWidth: 200}}>
+              📦 <b>当前 pack</b> ：{dirName || pack.pack_id.slice(0, 8)}
+              {pack.platform && <span className="muted" style={{marginLeft: 8}}>· {pack.platform}</span>}
+              <span className="muted" style={{marginLeft: 8}}>· {pack.schedule.length} 篇 schedule</span>
+            </div>
+            <button className="ghost" onClick={() => navigate(`/strategy/${pack.pack_id}`)}
+              style={{fontSize: 11.5, padding: "3px 10px"}}
+              title="跳起号策略板块看完整大纲（方向 / 主题 / 材料 / 风险 / 指标 / 迭代）">
+              📋 看完整大纲 →
+            </button>
+          </div>
+        </div>
+        <SchedulePanel pack={pack} onWrite={goWrite} />
+      </div>
+    );
   }
   return (
     <div>

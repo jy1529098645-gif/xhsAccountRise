@@ -227,6 +227,12 @@ def activate_project(project_id: str) -> dict[str, str]:
         project.set_active(project_id)
     except ValueError as e:
         raise HTTPException(404, str(e))
+    # Bug F 修复（项目侧）：切 project 会换底层 active library，对应 lib DB
+    # 可能还在老 schema → 跑 migrations 保证字段齐全。幂等。
+    try:
+        db.apply_migrations(verbose=False)
+    except Exception as e:
+        return {"active": project_id, "migrate_error": repr(e)[:200]}
     return {"active": project_id}
 
 
@@ -555,6 +561,14 @@ def activate_library(lib_id: str) -> dict[str, str]:
         library.set_active(lib_id)
     except ValueError as e:
         raise HTTPException(404, str(e))
+    # Bug F 修复 ：切到新激活库后，立即在它的 DB 上跑 migrations。否则用户
+    # 切到老库（schema 落后）时所有查询会因「找不到表」silently 返回空，看不
+    # 见原有数据。每次激活都 apply 是幂等的 ：已应用的 migration 会跳过。
+    try:
+        db.apply_migrations(verbose=False)
+    except Exception as e:
+        # 不挂掉 activate ：用户切了库已经成功，只是没自动 migrate
+        return {"active": lib_id, "migrate_error": repr(e)[:200]}
     return {"active": lib_id}
 
 
