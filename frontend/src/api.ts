@@ -593,6 +593,19 @@ export const api = {
       pack: StrategyPackDTO;
     }>(`/api/strategy/${packId}/iterate`, body),
 
+  // v0.62.13 ：AI 智能预填 brief — 用户在起号策略点「写这个」跳到 Composer
+  // 时调这个 ：后端用 LLM 综合 pack + slot + DNA 摘要生成完整 brief，前端
+  // 拿到后填表单。用户能看见 AI 推荐的内容 + 随便改。
+  prefillBriefFromSlot: (packId: string, body: {
+    slot_idx: number; alt_idx?: number; spec?: string;
+  }) =>
+    postJson<{
+      topic: string; angles: string[]; target_length: number;
+      cta_strength: "none" | "soft" | "strong";
+      niche: string; extra_constraints: string;
+      rationale?: string; _fallback?: boolean;
+    }>(`/api/composer/strategy/${packId}/prefill_brief`, body),
+
   // v0.53 — compliance (hard redline gate) ------------------------------
   complianceCheck: (body: {
     title?: string; body?: string; tags?: string[]; cover_prompt?: string;

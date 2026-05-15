@@ -138,9 +138,15 @@ export default function Composer() {
     });
   }
 
-  // v0.62 ：SchedulePanel 里选了哪个 slot/alt 就把那条的 metadata 直接灌进
-  // 当前 Composer 表单。等于「Strategy 的内容」+「Composer 的 form」无缝衔接。
-  function handleSlotChosen(slot: TopicSlotDTO, altIdx: number = -1) {
+  // v0.62.13 ：选了 slot/alt 后的填表流程 — 两阶段：
+  //   1) 立即机械填（fast path）：用 slot 字段填，给用户即时反馈
+  //   2) 调 prefill_brief API（slow path ~2-4s）：AI 综合 pack + slot + DNA
+  //      生成完整 brief（含字数 / CTA / 详细约束 / 一句话理由），覆盖填
+  //   期间 banner 显示「AI 正在优化 brief...」
+  const [prefillBusy, setPrefillBusy] = useState(false);
+  const [prefillRationale, setPrefillRationale] = useState<string | null>(null);
+
+  function _fillFormMechanical(slot: TopicSlotDTO, altIdx: number) {
     const alts = Array.isArray((slot as any).alternative_versions) ? (slot as any).alternative_versions : [];
     const alt = (altIdx >= 0 && altIdx < alts.length) ? alts[altIdx] : null;
     const eff = alt ? {
@@ -159,13 +165,9 @@ export default function Composer() {
       publish_slot: slot.publish_slot,
     };
     setTopic(eff.title || "");
-    // angle must be in ANGLES enum to render properly
-    if (eff.angle && ANGLES.includes(eff.angle)) {
-      setAngles([eff.angle]);
-    }
+    if (eff.angle && ANGLES.includes(eff.angle)) setAngles([eff.angle]);
     if (strategyPack?.platform) setPlatform(strategyPack.platform);
-    const niche = strategyPack?.chosen_direction?.positioning_statement || "";
-    setNiche(niche);
+    setNiche(strategyPack?.chosen_direction?.positioning_statement || "");
     setExtra([
       alt ? `🎯 从 Strategy 「${alt.label || "次选"}」 进入 ：${alt.why_alt || ""}` : "🎯 从 Strategy 推荐方案进入",
       eff.content_format ? `内容形式 ：${eff.content_format}（必须按此格式写）` : "",
@@ -176,10 +178,54 @@ export default function Composer() {
       slot.materials_needed?.length ? "需要材料：" + (slot.materials_needed as string[]).join("、") : "",
       strategyPack?.chosen_direction?.target_audience ? `目标受众：${strategyPack.chosen_direction.target_audience}` : "",
     ].filter(Boolean).join("\n\n"));
-    setPrefillNote(`从 Strategy ${alt ? `「${alt.label || "次选"}」` : "推荐方案"} 一键带入 ：${eff.title?.slice(0, 30) || ""}`);
-    // v0.62.12 ：scroll 改由 prefillNote effect 处理（用 double RAF
-    // 等 React 重渲染完成 + paint，再 scroll 到 banner 而非 form 顶部
-    // — 让用户看见「已带入」的确认，而不是直接看到 form）。
+    return eff;
+  }
+
+  async function handleSlotChosen(slot: TopicSlotDTO, altIdx: number = -1) {
+    if (!strategyPack) return;
+    // Phase 1 ：机械填（瞬间）
+    const eff = _fillFormMechanical(slot, altIdx);
+    setPrefillNote(`从起号策略 ${altIdx >= 0 ? `「次选 ${altIdx + 1}」` : "主推荐"} 带入 ：${eff.title?.slice(0, 30) || ""} · AI 正在优化 brief…`);
+    setPrefillRationale(null);
+
+    // Phase 2 ：AI 增强（2-4s）
+    setPrefillBusy(true);
+    try {
+      const slotIdx = strategyPack.schedule?.findIndex((s: any) => s === slot) ?? -1;
+      const realIdx = slotIdx >= 0
+        ? slotIdx
+        : strategyPack.schedule?.findIndex((s: any) => s.title === slot.title && s.week === slot.week);
+      if (realIdx == null || realIdx < 0) {
+        setPrefillBusy(false);
+        return;
+      }
+      const ai = await api.prefillBriefFromSlot(strategyPack.pack_id, {
+        slot_idx: realIdx, alt_idx: altIdx,
+      });
+      // 覆盖填 — 但保留用户已经手动改过的字段（topic 例外，必须用 AI 的）
+      if (ai.topic) setTopic(ai.topic);
+      if (Array.isArray(ai.angles) && ai.angles.length > 0) {
+        const cleaned = ai.angles.filter(a => ANGLES.includes(a));
+        if (cleaned.length > 0) setAngles(cleaned);
+      }
+      if (typeof ai.target_length === "number") setLength(ai.target_length);
+      if (ai.cta_strength === "none" || ai.cta_strength === "soft" || ai.cta_strength === "strong") {
+        setCta(ai.cta_strength);
+      }
+      if (ai.niche) setNiche(ai.niche);
+      if (ai.extra_constraints) setExtra(ai.extra_constraints);
+      setPrefillNote(
+        ai._fallback
+          ? `已带入 ：${ai.topic?.slice(0, 30) || ""}（AI 优化失败，用了机械填）`
+          : `✨ AI 已为你定制 brief ：${ai.topic?.slice(0, 30) || ""}（下面字段都可改）`
+      );
+      if (ai.rationale) setPrefillRationale(ai.rationale);
+    } catch (e) {
+      // 失败也没事 — 机械填的内容还在表单里
+      setPrefillNote(`已带入 ：${eff.title?.slice(0, 30) || ""}（AI 优化失败，可手改）`);
+    } finally {
+      setPrefillBusy(false);
+    }
   }
 
   function toggleAngle(a: string) {
@@ -293,26 +339,35 @@ export default function Composer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [strategyPack, slotIdxFromUrl, altIdxFromUrl]);
 
-  // v0.62.12 ：autofill 完成后滚动到 prefillNote banner（不是 form 顶部）。
-  // 用 double-RAF 确保 React 把 banner + 填好的 form 都 paint 完了再滚 ：
-  // 之前 50ms setTimeout 经常在 re-render 间隙触发，滚到错位置或不滚。
-  // 滚到 banner 而非 form，让用户先看见「✨ 已带入」确认，再往下看 form。
-  const lastScrolledNote = useRef<string | null>(null);
+  // v0.62.13 ：autofill 完成后滚到 banner（顶部「✨ AI 已为你定制 brief」）。
+  // double-RAF + 100ms 额外等待确保 ：(a) React 重渲染完 banner + AI 摘要卡 +
+  // 填好的 form ；(b) 浏览器可能的 scroll restoration 已经处理完。
+  // 上面 scrollMarginTop: 16 让 banner 顶部留 16px 气口不顶到边缘。
+  // 只在「真正新 prefill」时滚（同字符串重复不滚），避免 AI Phase 2 完成
+  // 后再次滚走用户已经在看的位置。
+  const lastScrolledKey = useRef<string>("");
   useEffect(() => {
-    if (!prefillNote || lastScrolledNote.current === prefillNote) return;
-    lastScrolledNote.current = prefillNote;
+    if (!prefillNote) return;
+    // 用 slot:alt key 做去重 ：同一 slot 只滚一次（即使 Phase 1 → Phase 2
+    // 两次更新 prefillNote 字符串），用户改了字段不会被再次拖走。
+    const key = packIdFromUrl
+      ? `${packIdFromUrl}:${slotIdxFromUrl}:${altIdxFromUrl}`
+      : prefillNote;
+    if (lastScrolledKey.current === key) return;
+    lastScrolledKey.current = key;
     requestAnimationFrame(() => requestAnimationFrame(() => {
-      const target =
-        document.getElementById("composer-prefill-banner")
-        || document.getElementById("composer-step-1");
-      if (target) {
-        target.scrollIntoView({behavior: "smooth", block: "start"});
-        // 高亮一下让用户注意到自动填充发生了
-        target.classList.add("prefill-flash");
-        setTimeout(() => target.classList.remove("prefill-flash"), 1500);
-      }
+      setTimeout(() => {
+        const target =
+          document.getElementById("composer-prefill-banner")
+          || document.getElementById("composer-step-1");
+        if (target) {
+          target.scrollIntoView({behavior: "smooth", block: "start"});
+          target.classList.add("prefill-flash");
+          setTimeout(() => target.classList.remove("prefill-flash"), 1500);
+        }
+      }, 100);
     }));
-  }, [prefillNote]);
+  }, [prefillNote, packIdFromUrl, slotIdxFromUrl, altIdxFromUrl]);
 
   async function run() {
     setErr(null); setBundle(null); setPaused(false);
@@ -474,11 +529,52 @@ export default function Composer() {
           完全不传也能跑，但效果会差。
         </div>
       )}
-      {prefillNote && (
+      {(prefillNote || prefillBusy) && (
         <div id="composer-prefill-banner"
           className="banner info"
-          style={{background: "var(--primary-soft)", borderColor: "var(--primary)", scrollMarginTop: 16}}>
-          ✨ {prefillNote} · 你可以再微调一下下面字段，或者直接 ▶️ 开始
+          style={{
+            background: "var(--primary-soft)",
+            borderColor: "var(--primary)",
+            scrollMarginTop: 16,
+            padding: "12px 14px",
+          }}>
+          <div style={{fontSize: 13.5, fontWeight: 600}}>
+            {prefillBusy ? "🤖 AI 正在为这条 slot 定制 brief…" : prefillNote}
+          </div>
+          {prefillRationale && !prefillBusy && (
+            <div style={{fontSize: 11.5, marginTop: 4, color: "var(--muted)", fontStyle: "italic"}}>
+              💡 AI 思路 ：{prefillRationale}
+            </div>
+          )}
+          {!prefillBusy && (
+            <div style={{fontSize: 11.5, marginTop: 6, color: "var(--muted)"}}>
+              下面所有字段 AI 都填好了 — 你可以直接 ▶️ 开始，或先改任意字段再开始。
+            </div>
+          )}
+        </div>
+      )}
+      {/* v0.62.13 ：AI 填好的 brief 摘要 — 让用户不用滚到 form 就能看到
+          AI 给了什么。点摘要的字段可以滚到对应 input。 */}
+      {prefillNote && !prefillBusy && (
+        <div className="card" style={{padding: "10px 14px", marginTop: -4, fontSize: 12.5,
+                                       borderLeft: "3px solid var(--primary)"}}>
+          <div style={{fontSize: 11, color: "var(--muted)", fontWeight: 600, marginBottom: 6}}>
+            ✨ AI 已填好以下字段（可改）
+          </div>
+          <div style={{display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 12px", lineHeight: 1.6}}>
+            <span className="muted">主题</span>
+            <span style={{fontWeight: 600}}>{topic || "(空)"}</span>
+            <span className="muted">角度</span>
+            <span>{angles.length ? angles.join(" / ") : "(空)"}</span>
+            <span className="muted">字数</span>
+            <span>{length} 字</span>
+            <span className="muted">CTA</span>
+            <span>{cta === "none" ? "无" : cta === "soft" ? "soft 软引导" : "strong 强转化"}</span>
+            <span className="muted">niche</span>
+            <span style={{whiteSpace: "pre-wrap"}}>{niche || "(空)"}</span>
+            <span className="muted">详细约束</span>
+            <span style={{whiteSpace: "pre-wrap", fontSize: 11.5}}>{extra || "(空)"}</span>
+          </div>
         </div>
       )}
 

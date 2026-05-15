@@ -1505,6 +1505,34 @@ class StrategyIterateRequest(BaseModel):
     iterator_spec: str = "openai:gpt-4o"
 
 
+# v0.62.13 ：AI 智能预填 brief。用户在起号策略板块点「写这个」跳到出稿
+# 板块时，前端调这个端点，拿到 LLM 综合 pack + slot + DNA 摘要生成的
+# 完整 brief（topic / angles / 字数 / CTA / niche / 详细约束 / 一句话理由）
+# 一次填进表单。用户能看见 AI 填了什么 + 随便改。
+class PrefillBriefRequest(BaseModel):
+    slot_idx: int
+    alt_idx: int = -1
+    spec: str = "openai:gpt-4o-mini"
+
+
+@app.post("/api/composer/strategy/{pack_id}/prefill_brief")
+@app.post("/api/strategy/{pack_id}/prefill_brief")
+async def prefill_brief_api(pack_id: str, req: PrefillBriefRequest) -> dict[str, Any]:
+    from ..composer import prefill as _prefill
+    try:
+        return await _prefill.prefill_brief(
+            pack_id, req.slot_idx, req.alt_idx, spec=req.spec,
+        )
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except IndexError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"prefill_brief failed ({type(e).__name__}): {str(e)[:400]}")
+
+
 @app.post("/api/composer/strategy/{pack_id}/iterate")
 @app.post("/api/strategy/{pack_id}/iterate")
 async def iterate_strategy_api(pack_id: str, req: StrategyIterateRequest) -> dict[str, Any]:
