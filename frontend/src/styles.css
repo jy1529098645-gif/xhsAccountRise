@@ -410,3 +410,14 @@ textarea { resize: vertical; min-height: 100px; font-size: 14px; }
 .platform-pill.reddit { background: #fff7ec; color: #ea580c; }
 .platform-pill.x { background: #f3f4f6; color: #1a1a1a; }
 .platform-pill.other { background: #f4f4f4; color: #555; }
+
+/* v0.62.12 ：autofill 完成时给 prefillNote banner 一个明显的高亮闪动，
+   让用户一眼看见「自动带入发生了」，不至于以为只是跳了个空白页。 */
+@keyframes prefill-flash-anim {
+  0%   { background: var(--primary); color: #fff; transform: scale(1); }
+  30%  { background: var(--primary); color: #fff; transform: scale(1.015); }
+  100% { background: var(--primary-soft); color: inherit; transform: scale(1); }
+}
+.prefill-flash {
+  animation: prefill-flash-anim 1.2s ease-out;
+}

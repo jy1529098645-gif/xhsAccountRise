@@ -177,11 +177,9 @@ export default function Composer() {
       strategyPack?.chosen_direction?.target_audience ? `目标受众：${strategyPack.chosen_direction.target_audience}` : "",
     ].filter(Boolean).join("\n\n"));
     setPrefillNote(`从 Strategy ${alt ? `「${alt.label || "次选"}」` : "推荐方案"} 一键带入 ：${eff.title?.slice(0, 30) || ""}`);
-    // 滚到表单顶部
-    setTimeout(() => {
-      const el = document.getElementById("composer-step-1");
-      if (el) el.scrollIntoView({behavior: "smooth", block: "start"});
-    }, 50);
+    // v0.62.12 ：scroll 改由 prefillNote effect 处理（用 double RAF
+    // 等 React 重渲染完成 + paint，再 scroll 到 banner 而非 form 顶部
+    // — 让用户看见「已带入」的确认，而不是直接看到 form）。
   }
 
   function toggleAngle(a: string) {
@@ -294,6 +292,27 @@ export default function Composer() {
     handleSlotChosen(slot as TopicSlotDTO, altIdxFromUrl);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [strategyPack, slotIdxFromUrl, altIdxFromUrl]);
+
+  // v0.62.12 ：autofill 完成后滚动到 prefillNote banner（不是 form 顶部）。
+  // 用 double-RAF 确保 React 把 banner + 填好的 form 都 paint 完了再滚 ：
+  // 之前 50ms setTimeout 经常在 re-render 间隙触发，滚到错位置或不滚。
+  // 滚到 banner 而非 form，让用户先看见「✨ 已带入」确认，再往下看 form。
+  const lastScrolledNote = useRef<string | null>(null);
+  useEffect(() => {
+    if (!prefillNote || lastScrolledNote.current === prefillNote) return;
+    lastScrolledNote.current = prefillNote;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const target =
+        document.getElementById("composer-prefill-banner")
+        || document.getElementById("composer-step-1");
+      if (target) {
+        target.scrollIntoView({behavior: "smooth", block: "start"});
+        // 高亮一下让用户注意到自动填充发生了
+        target.classList.add("prefill-flash");
+        setTimeout(() => target.classList.remove("prefill-flash"), 1500);
+      }
+    }));
+  }, [prefillNote]);
 
   async function run() {
     setErr(null); setBundle(null); setPaused(false);
@@ -416,17 +435,17 @@ export default function Composer() {
           onWriteClick={(slotIdx, altIdx) => {
             const slot = strategyPack.schedule?.[slotIdx];
             if (slot) handleSlotChosen(slot as TopicSlotDTO, altIdx);
-            // Bug C 修复 ：同步 URL ?slot=PACK:IDX[&alt=N]，刷新页面后还能保留选择
+            // 标记 slotPrefilledRef 为 当前 slot 的 key — 防止下一行
+            // setSearchParams 触发 URL effect 重复 handleSlotChosen。
+            slotPrefilledRef.current = `${strategyPack.pack_id}:${slotIdx}:${altIdx}`;
+            // Bug C 修复 ：同步 URL ?slot=PACK:IDX[&alt=N]，刷新页面后还能保留选择。
             const next: Record<string, string> = {
               slot: `${strategyPack.pack_id}:${slotIdx}`,
             };
             if (altIdx >= 0) next.alt = String(altIdx);
             setSearchParams(next, { replace: true });
-            // scroll to step 1
-            setTimeout(() => {
-              const el = document.getElementById("composer-step-1");
-              if (el) el.scrollIntoView({behavior: "smooth", block: "start"});
-            }, 50);
+            // v0.62.12 ：scroll 不在这里做了 — 由 prefillNote effect 统一处理，
+            // 等 setState 真渲染完再滚（double RAF），不会跑空。
           }} />
       )}
 
@@ -456,7 +475,9 @@ export default function Composer() {
         </div>
       )}
       {prefillNote && (
-        <div className="banner info" style={{background: "var(--primary-soft)", borderColor: "var(--primary)"}}>
+        <div id="composer-prefill-banner"
+          className="banner info"
+          style={{background: "var(--primary-soft)", borderColor: "var(--primary)", scrollMarginTop: 16}}>
           ✨ {prefillNote} · 你可以再微调一下下面字段，或者直接 ▶️ 开始
         </div>
       )}
