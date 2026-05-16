@@ -303,7 +303,10 @@ function StrategyPage({ explicitPackId }: { explicitPackId?: string }) {
                   上面 schedule 里每条都有「✍️ 写这个 →」按钮可单独跳。也可以直接进出稿板块挑。
                 </p>
               </div>
-              <Link to="/composer">
+              {/* 必须带上 ?pack=PACK_ID，否则出稿板块不知道要 load 哪个 pack ：
+                  落到「请先去起号策略板块创建 pack」的空状态页，用户看不到这
+                  份 schedule，体验上像是「跳错位置了」。 */}
+              <Link to={`/composer?pack=${encodeURIComponent(pack.pack_id)}`}>
                 <button style={{fontSize: 14, padding: "10px 18px", whiteSpace: "nowrap", fontWeight: 600}}>
                   ✍️ 去出稿板块 →
                 </button>

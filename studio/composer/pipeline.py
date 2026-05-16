@@ -907,11 +907,14 @@ async def _expand_inner(
         f"{pctx_block}"
         f"{report_block}\n"
         f"【运营约束】cycle_weeks={inp.cycle_weeks}, posts_per_week={inp.posts_per_week}"
-        f" ⇒ 需要排出 {topic_count} 篇\n"
+        f" ⇒ 必须排出 **正好 {topic_count} 篇**（不是「大概 N 篇」，不是「典型 1 篇/周」）\n"
         f"【用户其它约束】\n{prompts.input_blurb(inp)}\n\n"
         f"【该平台 DNA】\n{prompts.dna_blurb(dna)}\n\n"
         f"【该平台发布时段热力图】\n{_format_timing(timing_heatmap)}\n\n"
         f"{phase_rules}\n\n"
+        f"🚨 **硬约束 ：schedule 数组长度必须 = {topic_count}**。"
+        f"不要因为「一周排 1 篇就够了」的直觉去删减 — 用户明确选了每周 {inp.posts_per_week} 篇，"
+        f"就是要 {topic_count} 篇，少一篇都不行。如果同周内题材重复，宁可多写几个角度变体也别少出。\n"
         f"请基于以上信息**直接出 {topic_count} 篇排期**（不需要先列候选池再筛 — 直接出 final）。"
         + ("\n\n⭐ **产品上下文使用 — 数据驱动 + 你自己判断**：\n"
            "  ✅ **底线（不可商量）**：\n"
@@ -939,14 +942,12 @@ async def _expand_inner(
         + multi_dir_directive
     )
     scheduler_gen = registry.build(scheduler_spec)[0]
-    async def _try_scheduler(user_payload: str, max_tokens: int = 6000):
-        return await _call_json(
-            scheduler_gen, prompts.SCHEDULER_SYSTEM, user_payload,
-            max_tokens=max_tokens, tool_name="submit_schedule",
-            schema=_SCHEDULE_SCHEMA,
-        )
-    scheduler_gen = registry.build(scheduler_spec)[0]
-    async def _try_scheduler(user_payload: str, max_tokens: int = 6000):
+    # Default max_tokens scaled to topic_count : ~280 tokens per slot for the
+    # heavy detail (title + outline + materials + 2 alternative_versions +
+    # rationale), plus ~500 token JSON envelope + weekly_themes. Floor at
+    # 6000 for small counts, ceiling at 14000 (gpt-4o output limit is 16K).
+    _default_sched_tokens = max(6000, min(14000, topic_count * 280 + 500))
+    async def _try_scheduler(user_payload: str, max_tokens: int = _default_sched_tokens):
         return await _call_json(
             scheduler_gen, prompts.SCHEDULER_SYSTEM, user_payload,
             max_tokens=max_tokens, tool_name="submit_schedule",
@@ -1090,22 +1091,87 @@ async def _expand_inner(
         for s in [_to_slot_dict(_raw)]
     ]
 
-    # ---- v0.62.18 ：enforce exact slot count = inp.cycle_weeks × posts_per_week ----
-    # The scheduler LLM is told to produce exactly `topic_count` slots, but
-    # ignores that constraint occasionally — typical pattern is returning
-    # `cycle_weeks` slots (one per week, ignoring posts_per_week) or stopping
-    # 1-2 short under token pressure. Users expect "I asked for 4 weeks × 3
-    # posts = 12 slots" to mean 12, not "however many the LLM felt like".
+    # ---- v0.62.18 / .19 ：enforce exact slot count ----
+    # cycle_weeks × posts_per_week is the count the user picked in step 2.
+    # Schedulers tend to under-deliver here — common patterns ：
+    #   - LLM mentally collapses to "~1 post / week" prior, ignoring posts_per_week
+    #   - Token pressure on big counts (28+ slots × full detail) truncates output
     #
     # Strategy:
-    #   - len > topic_count: trim to first `topic_count` (LLM over-generated).
-    #   - len < topic_count: pad with synthetic placeholder slots distributed
-    #     across remaining week/day positions. Placeholder title flags AI
-    #     under-generation so the user knows to use ✍️ 写这个 to regenerate.
+    #   1. Trim if over (rare).
+    #   2. If under but > 0 ：fire a "gap-fill" second call asking for ONLY
+    #      the missing K slots, providing the existing K' titles as anti-
+    #      duplication context. Append. This yields REAL slots, not stubs.
+    #   3. If still under after gap-fill (rare network/LLM hiccup), pad with
+    #      placeholder stubs as a last-resort safety net so the count is
+    #      always exact. Placeholder titles flag the gap for the user.
     schedule_short_warning: str | None = None
     if len(schedule) > topic_count:
         schedule = schedule[:topic_count]
-    elif len(schedule) < topic_count:
+    elif 0 < len(schedule) < topic_count and "scheduler_gap" not in saved:
+        missing = topic_count - len(schedule)
+        existing_titles = "\n".join(
+            f"  - W{s.week}D{s.day_of_week} {s.title}" for s in schedule
+        )
+        # Build a focused gap-fill prompt. Critical ：tell the LLM NOT to
+        # duplicate existing slots + give exact missing count up front so
+        # there's no ambiguity. Keep weekly_themes empty in the response —
+        # we only consume schedule[].
+        gap_user = (
+            f"【已经排好的 {len(schedule)} 篇】\n{existing_titles}\n\n"
+            f"【缺口】用户原本要 {topic_count} 篇，目前只有 {len(schedule)} 篇。"
+            f"请只补出剩下的 **{missing} 篇** schedule slot（不要重复上面已有的标题 / 角度组合）。\n\n"
+            f"【方向】{chosen.name} — {chosen.positioning_statement}\n"
+            f"【受众】{chosen.target_audience}\n"
+            f"【周期】共 {inp.cycle_weeks} 周 × {inp.posts_per_week} 篇/周\n\n"
+            f"严格按 system schema 输出 ：schedule 数组长度必须 = {missing}，"
+            f"weekly_themes 可留空 []。"
+        )
+        try:
+            gap_resp = await _try_scheduler(gap_user, max_tokens=10000)
+            new_raw = gap_resp.get("schedule") or []
+            for _raw in new_raw[:missing]:
+                s = _to_slot_dict(_raw)
+                schedule.append(TopicSlot(
+                    week=int(s.get("week", 1)),
+                    day_of_week=int(s.get("day_of_week", 0)),
+                    publish_slot=str(s.get("publish_slot", "")),
+                    title=str(s.get("title", "")),
+                    title_variants=[str(x) for x in (s.get("title_variants") or [])],
+                    angle=str(s.get("angle", "")),
+                    hook_type=str(s.get("hook_type", "")),
+                    outline=[str(x) for x in (s.get("outline") or [])],
+                    materials_needed=[str(x) for x in (s.get("materials_needed") or [])],
+                    intent=str(s.get("intent", "")),
+                    content_format=str(s.get("content_format", "")),
+                    publish_rationale=str(s.get("publish_rationale", "")),
+                    direction_idx=int(s.get("direction_idx", -1)) if s.get("direction_idx") is not None else -1,
+                    decision_rationale=str(s.get("decision_rationale", "")),
+                    flexible_window=str(s.get("flexible_window", "")),
+                    alternative_versions=[
+                        dict(a) for a in (s.get("alternative_versions") or [])
+                        if isinstance(a, dict)
+                    ],
+                ))
+            _save_checkpoint("scheduler_gap", gap_resp)
+            existing_warn = sched_parsed.get("_warning")
+            note = (
+                f"gap-fill produced {len(new_raw)} of {missing} missing slot(s)"
+                if len(new_raw) >= missing
+                else f"gap-fill only produced {len(new_raw)} of {missing} requested missing slot(s)"
+            )
+            sched_parsed["_warning"] = f"{existing_warn} | {note}" if existing_warn else note
+        except Exception as e:
+            # Gap-fill failed → fall through to placeholder pad below.
+            existing_warn = sched_parsed.get("_warning")
+            sched_parsed["_warning"] = (
+                f"{existing_warn} | gap-fill error: {e!r}"
+                if existing_warn else f"gap-fill error: {e!r}"
+            )
+
+    # Final safety net ：if still short after gap-fill (rare) → pad with
+    # placeholder stubs so the count is always exact.
+    if len(schedule) < topic_count:
         # Coverage map of (week, day_of_week) positions already used, so the
         # padding doesn't collide with existing slots — it slots into gaps.
         used_positions = {(s.week, s.day_of_week) for s in schedule}
