@@ -42,14 +42,14 @@ from .synthesizer import SynthesizerAgent
 
 @dataclass
 class PipelineConfig:
-    # v0.51: Claude defaults dropped — too expensive for daily volume.
-    # Reasoning/quality roles → gpt-4o; mechanical/volume roles → deepseek.
-    # Users can still override any role via the advanced agent config UI.
-    strategist_spec: str = "openai:gpt-4o"               # strategic planning
-    drafter_spec: str = "openai:gpt-4o"                  # consumer-facing post body
+    # v0.62.20 ：reasoning/quality roles → gpt-5（最新旗舰，质量上限最高）。
+    # critic / planner 走 deepseek（cheap judgment is enough）。frontend 总
+    # 发送 spec，这些默认主要服务直接调 API 的用户。
+    strategist_spec: str = "openai:gpt-5"                # strategic planning
+    drafter_spec: str = "openai:gpt-5"                   # consumer-facing post body
     critic_spec: str = "deepseek"                        # cheap judgment is enough
-    refiner_spec: str = "openai:gpt-4o"                  # rewrite on critique
-    synthesizer_spec: str = "openai:gpt-4o"              # final fusion (user-facing)
+    refiner_spec: str = "openai:gpt-5"                   # rewrite on critique
+    synthesizer_spec: str = "openai:gpt-5"               # final fusion (user-facing)
     planner_spec: str = "deepseek"                       # publish schedule, mechanical
     # Refiner is auto-skipped when drafter pool produced ≤1 candidate (the
     # default Sonnet-only setup). Set force_refiner=True to always run it

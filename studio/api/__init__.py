@@ -676,19 +676,14 @@ class ComposeRequest(BaseModel):
     niche: str = ""
     extra_constraints: str = ""
     platform: str | None = None  # auto-inherit from active library if None
-    # v0.51: Claude defaults dropped — too expensive. Reasoning roles → gpt-4o,
-    # mechanical roles → deepseek. Users can override via the advanced UI.
-    strategist_spec: str = "openai:gpt-4o"
-    # v0.61.17 ：Composer drafter 默认改成 3 家并行（claude:sonnet + gpt-4o +
-    # deepseek）。用户反馈「候选稿几乎一模一样失去多样性」 — 根因是同一个
-    # gpt-4o 跑 N 次自然会收敛。多家轮转每个 candidate 用不同模型 + 不同
-    # default temperature（claude 1.0 / gpt-4o ~0.7 / deepseek 0.85），voice
-    # 差异立刻拉开。每家成本不同（claude 最贵）但 Composer 是最终出稿，
-    # 这钱必须花。用户可在 advanced UI 改回单家或换组合。
-    drafter_spec: str = "claude:sonnet,openai:gpt-4o,deepseek"
+    # v0.62.20 ：默认升级到 GPT-5。frontend 总是发送 spec，这些后端默认只对
+    # 直接调 API 的用户生效。drafter 保持 3 家并行（claude:sonnet + gpt-5 +
+    # deepseek）拉开 voice 差异 — 同一个模型 N 次输出会自然收敛。
+    strategist_spec: str = "openai:gpt-5"
+    drafter_spec: str = "claude:sonnet,openai:gpt-5,deepseek"
     critic_spec: str = "deepseek"
-    refiner_spec: str = "openai:gpt-4o"
-    synthesizer_spec: str = "openai:gpt-4o"
+    refiner_spec: str = "openai:gpt-5"
+    synthesizer_spec: str = "openai:gpt-5"
     planner_spec: str = "deepseek"
     skip_strategist: bool = False
     skip_critics: bool = False

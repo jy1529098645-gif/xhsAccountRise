@@ -46,7 +46,10 @@ export const AGENT_ROLES: AgentRoleSpec[] = [
     description: "先给整体方向：用什么 hook、开头怎么钩、结构骨架、避坑点",
     rationale: "一锤定音，避免下面各家 AI 各写各的散架",
     whatItProduces: "策略 (hook 类型 / 开头钩子 / 结构 / 避坑)",
-    defaultIds: ["openai"],
+    // v0.62.20 ：默认显式钉 GPT-5（最新旗舰）。之前用 bare "openai" 表面
+    // 等价于 gpt-5（env 默认），但 UI 选中的是「OpenAI GPT-5 (默认)」chip
+    // 而不是「OpenAI GPT-5」chip，用户看着两个 GPT-5 不知道选哪个。
+    defaultIds: ["openai:gpt-5"],
     canSkip: true,
   },
   {
@@ -55,7 +58,7 @@ export const AGENT_ROLES: AgentRoleSpec[] = [
     description: "多家 AI 并发起草，每家产一份候选",
     rationale: "跨模型多样性。GPT 想法跳 / DeepSeek 下沉感 / Claude 严谨",
     whatItProduces: "N 份候选稿件",
-    defaultIds: ["openai"],
+    defaultIds: ["openai:gpt-5"],
     canSkip: false,
   },
   {
@@ -73,7 +76,7 @@ export const AGENT_ROLES: AgentRoleSpec[] = [
     description: "拿评分最高的候选 + 审稿团反馈 → 重写",
     rationale: "针对性修缺陷，但保持原 hook 类型不偏题",
     whatItProduces: "改稿后的候选",
-    defaultIds: ["openai"],
+    defaultIds: ["openai:gpt-5"],
     canSkip: true,
   },
   {
@@ -82,7 +85,7 @@ export const AGENT_ROLES: AgentRoleSpec[] = [
     description: "看完所有候选 + 评分 + 改稿 → 综合各家优点写最终稿",
     rationale: "★ 核心步骤 ★ 取 A 的标题、B 的金句、C 的结构融合成一篇",
     whatItProduces: "最终融合稿 (含 rationale：从哪家取的什么)",
-    defaultIds: ["openai"],
+    defaultIds: ["openai:gpt-5"],
     canSkip: true,
   },
   {
@@ -97,15 +100,25 @@ export const AGENT_ROLES: AgentRoleSpec[] = [
 ];
 
 // "省钱预设" — same agents but all switched to cheaper models.
-// v0.51: default is now GPT-4o + DeepSeek (Claude removed from defaults due
-// to cost). Claude presets remain available for users who want them.
+// v0.62.20: default flipped from bare "openai" (env-resolved) to explicit
+// "openai:gpt-5" so the picker chip selection is unambiguous (a bare
+// "openai" chip and an explicit "openai:gpt-5" chip both exist now).
 export const COST_PRESETS: Record<string, Record<AgentRoleId, string[]>> = {
-  "默认 (4o + DeepSeek ★ 性价比最高)": {
-    strategist: ["openai"],
-    drafter: ["openai"],
+  "默认 (GPT-5 + DeepSeek ★ 推荐)": {
+    strategist: ["openai:gpt-5"],
+    drafter: ["openai:gpt-5"],
     critic: ["deepseek"],
-    refiner: ["openai"],
-    synthesizer: ["openai"],
+    refiner: ["openai:gpt-5"],
+    synthesizer: ["openai:gpt-5"],
+    planner: ["deepseek"],
+  },
+  "省钱 (GPT-5 mini + DeepSeek)": {
+    // GPT-5 mini ~10× 便宜，质量损失很小 — 适合大量起号 / 批量出稿。
+    strategist: ["openai:gpt-5-mini"],
+    drafter: ["openai:gpt-5-mini"],
+    critic: ["deepseek"],
+    refiner: ["openai:gpt-5-mini"],
+    synthesizer: ["openai:gpt-5-mini"],
     planner: ["deepseek"],
   },
   "极致省钱 (全 DeepSeek)": {
@@ -116,17 +129,17 @@ export const COST_PRESETS: Record<string, Record<AgentRoleId, string[]>> = {
     synthesizer: ["deepseek"],
     planner: ["deepseek"],
   },
-  "多样性 (4o + DeepSeek 起草)": {
-    strategist: ["openai"],
-    drafter: ["openai", "deepseek"],
+  "多样性 (GPT-5 + DeepSeek 起草)": {
+    strategist: ["openai:gpt-5"],
+    drafter: ["openai:gpt-5", "deepseek"],
     critic: ["deepseek"],
-    refiner: ["openai"],
-    synthesizer: ["openai"],
+    refiner: ["openai:gpt-5"],
+    synthesizer: ["openai:gpt-5"],
     planner: ["deepseek"],
   },
   "Claude 全开 (Opus 顶配 · 贵)": {
     strategist: ["claude:opus"],
-    drafter: ["claude:opus", "deepseek", "openai"],
+    drafter: ["claude:opus", "deepseek", "openai:gpt-5"],
     critic: ["claude:sonnet", "deepseek"],
     refiner: ["claude:opus"],
     synthesizer: ["claude:opus"],

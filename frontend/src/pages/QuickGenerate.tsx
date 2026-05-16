@@ -37,9 +37,10 @@ const DEFAULT_FORM: FormState = {
   voice_custom: "",
   target_length: 500,
   extra: "",
-  // Default = cheapest decent option. User can switch to claude:opus for
-  // best quality or deepseek for cheapest.
-  model_spec: "openai",
+  // v0.62.20 ：显式钉 GPT-5 — 最新旗舰，质量上界，用户可改成 mini / nano
+  // 省钱或换 claude:opus。bare "openai" 也能用（resolves to env default），
+  // 但 UI 选中的 chip 模糊 — 用 "openai:gpt-5" 更明确。
+  model_spec: "openai:gpt-5",
 };
 
 function loadForm(): FormState {

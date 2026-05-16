@@ -11,7 +11,10 @@ export interface AgentSelection {
 }
 
 export function defaultSelection(): AgentSelection {
-  const sel = COST_PRESETS["默认 (4o + DeepSeek ★ 性价比最高)"];
+  // v0.62.20: preset key renamed to「默认 (GPT-5 + DeepSeek ★ 推荐)」when
+  // GPT-5 became the explicit default. Keep the explicit name lookup —
+  // fail loudly if the preset table drifts away from this key.
+  const sel = COST_PRESETS["默认 (GPT-5 + DeepSeek ★ 推荐)"];
   return {
     strategist: sel.strategist, drafter: sel.drafter, critic: sel.critic,
     refiner: sel.refiner, synthesizer: sel.synthesizer, planner: sel.planner,
@@ -21,12 +24,14 @@ export function defaultSelection(): AgentSelection {
 }
 
 export function selectionToSpecs(sel: AgentSelection) {
+  // Fallback when user empties a multi-select. Pin to gpt-5 explicitly so the
+  // backend can't be silently downgraded by an OPENAI_MODEL env override.
   return {
-    strategist_spec: sel.strategist.join(",") || "openai",
-    drafter_spec: sel.drafter.join(",") || "openai",
+    strategist_spec: sel.strategist.join(",") || "openai:gpt-5",
+    drafter_spec: sel.drafter.join(",") || "openai:gpt-5",
     critic_spec: sel.critic.join(",") || "deepseek",
-    refiner_spec: sel.refiner.join(",") || "openai",
-    synthesizer_spec: sel.synthesizer.join(",") || "openai",
+    refiner_spec: sel.refiner.join(",") || "openai:gpt-5",
+    synthesizer_spec: sel.synthesizer.join(",") || "openai:gpt-5",
     planner_spec: sel.planner.join(",") || "deepseek",
     skip_strategist: sel.skip.strategist,
     skip_critics: sel.skip.critic,
