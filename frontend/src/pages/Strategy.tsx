@@ -97,9 +97,28 @@ function StrategyPage({ explicitPackId }: { explicitPackId?: string }) {
     : null;
 
   // 3) 拉指定 pack 详情
-  useEffect(() => {
+  // v0.63: 抽成 reloadPack 函数让占位 slot 重生成后能 trigger refetch
+  // （StrategyPackView → SchedulePanel.regen 调 onPackReload）。
+  async function reloadPack() {
     if (!targetPackId) { setPack(null); return; }
+    setPackLoading(true);
+    try {
+      const d = await api.getStrategy(targetPackId);
+      if (d.pack) {
+        setPack(d.pack);
+      } else {
+        setPack(null);
+        setErr("这个 pack 还没生成完成 — 重跑或换一个");
+      }
+    } catch (e: any) {
+      setErr(humaniseError(e));
+    } finally {
+      setPackLoading(false);
+    }
+  }
+  useEffect(() => {
     let cancel = false;
+    if (!targetPackId) { setPack(null); return; }
     setPackLoading(true);
     (async () => {
       try {
@@ -293,7 +312,7 @@ function StrategyPage({ explicitPackId }: { explicitPackId?: string }) {
       )}
       {pack && !err && (
         <>
-          <StrategyPackView pack={pack} />
+          <StrategyPackView pack={pack} onPackReload={reloadPack} />
           {/* 底部 ：明确「下一步去出稿」CTA — 让用户清楚两板块的依赖关系 */}
           <div className="card" style={{borderTop: "3px solid var(--ok)", marginTop: 14}}>
             <div className="row" style={{justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap"}}>

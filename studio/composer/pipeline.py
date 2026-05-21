@@ -1105,10 +1105,20 @@ async def _expand_inner(
     #   3. If still under after gap-fill (rare network/LLM hiccup), pad with
     #      placeholder stubs as a last-resort safety net so the count is
     #      always exact. Placeholder titles flag the gap for the user.
+    # v0.63: bug fix — the saved-checkpoint guard used to be just
+    # `"scheduler_gap" not in saved`, which skipped the gap-fill block
+    # whenever a previous run had RECORDED a scheduler_gap checkpoint, even
+    # if that checkpoint was empty / failed. So once a resume happened
+    # with an empty gap-fill, the placeholder slots persisted forever.
+    # Now we also accept a stale empty checkpoint and re-try the gap-fill.
+    saved_gap = saved.get("scheduler_gap")
+    saved_gap_has_slots = (
+        isinstance(saved_gap, dict) and bool(saved_gap.get("schedule"))
+    )
     schedule_short_warning: str | None = None
     if len(schedule) > topic_count:
         schedule = schedule[:topic_count]
-    elif 0 < len(schedule) < topic_count and "scheduler_gap" not in saved:
+    elif 0 < len(schedule) < topic_count and not saved_gap_has_slots:
         missing = topic_count - len(schedule)
         existing_titles = "\n".join(
             f"  - W{s.week}D{s.day_of_week} {s.title}" for s in schedule
@@ -1705,6 +1715,13 @@ async def regenerate_slot(
             schema=_SCHEDULE_SCHEMA,
         )
 
+    def _looks_like_placeholder(title: str) -> bool:
+        """LLM sometimes literally echoes "待补 #N" or "AI 漏排" back if our
+        prompt context contained the placeholder. Reject so we retry."""
+        t = title or ""
+        return ("AI 漏排" in t or "请用 ✍️" in t or t.startswith("待补 #")
+                or t.startswith("[自补]") or t == "")
+
     # L1 primary, L2 cross-family.
     primary = scheduler_spec.lower()
     fb = ("deepseek" if ("openai" in primary or "gpt" in primary)
@@ -1715,16 +1732,24 @@ async def regenerate_slot(
         try:
             r = await _try_with(spec)
             sch = r.get("schedule") or []
-            if sch and isinstance(sch[0], dict) and sch[0].get("title"):
-                new_slot_raw = sch[0]
-                last_err = None
-                break
-            last_err = f"{label}: empty schedule"
+            if sch and isinstance(sch[0], dict):
+                title = str(sch[0].get("title") or "").strip()
+                if title and not _looks_like_placeholder(title):
+                    new_slot_raw = sch[0]
+                    last_err = None
+                    break
+                last_err = (
+                    f"{label}: rejected echoed placeholder title {title!r}"
+                    if title else f"{label}: empty title"
+                )
+            else:
+                last_err = f"{label}: empty schedule"
         except Exception as e:
             last_err = f"{label}: {e!r}"
     if not new_slot_raw:
         raise RuntimeError(
-            f"regenerate_slot failed on both primary + fallback: {last_err}"
+            f"regenerate_slot 两家 LLM 都没出真实 slot ({last_err})。"
+            f"可能 ：API 限速 / 余额 / 服务暂时不可用。稍等再试或换 LLM 预设。"
         )
 
     # Preserve original (week, day_of_week, content_format) so the schedule

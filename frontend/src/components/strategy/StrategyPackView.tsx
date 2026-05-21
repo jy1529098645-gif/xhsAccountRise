@@ -28,13 +28,16 @@ const INTENT_COLORS: Record<string, string> = {
  *  默认行为是 navigate('/composer?slot=PACK:IDX&alt=N')。Composer 板块
  *  传 ：用 callback 在当前页填表单（不跳路由）。
  */
-export default function StrategyPackView({pack, onWriteClick, compact = false}: {
+export default function StrategyPackView({pack, onWriteClick, compact = false, onPackReload}: {
   pack: StrategyPackDTO;
   onWriteClick?: (slotIdx: number, altIdx: number) => void;
   /** Bug B fix ：compact=true (Composer 板块嵌入) 只渲染 pack ID 摘要 +
    *  SchedulePanel，**省略** Overview / 周主题 / 最佳时段 / 材料 / 风险 /
    *  指标 / IterateCard — 那些都是「起号策略板块」的内容。 */
   compact?: boolean;
+  /** v0.63: 占位 slot 被 regenerate_slot 改完后通知父刷新整个 pack，
+   *  避免 SchedulePanel 的 local schedule state 被父 re-render 冲掉。 */
+  onPackReload?: () => void;
 }) {
   const navigate = useNavigate();
   function goWrite(slotIdx: number, altIdx: number) {
@@ -78,7 +81,7 @@ export default function StrategyPackView({pack, onWriteClick, compact = false}: 
   return (
     <div>
       <StrategyOverview pack={pack} />
-      <SchedulePanel pack={pack} onWrite={goWrite} />
+      <SchedulePanel pack={pack} onWrite={goWrite} onPackReload={onPackReload} />
       <IterateCard pack={pack} />
     </div>
   );
@@ -240,9 +243,10 @@ function StrategyOverview({pack}: {pack: StrategyPackDTO}) {
   );
 }
 
-function SchedulePanel({pack, onWrite}: {
+function SchedulePanel({pack, onWrite, onPackReload}: {
   pack: StrategyPackDTO;
   onWrite: (slotIdx: number, altIdx: number) => void;
+  onPackReload?: () => void;
 }) {
   const [expanded, setExpanded] = useState<number | null>(null);
   const [collapsed, setCollapsed] = useState(false);
@@ -264,13 +268,25 @@ function SchedulePanel({pack, onWrite}: {
     setRegenIdx(i); setRegenErr(null);
     try {
       const r = await api.regenerateSlot(pack.pack_id, i);
+      // v0.63: update local state for immediate visual feedback...
       setSchedule(prev => {
         const next = [...prev];
         next[i] = r.slot;
         return next;
       });
+      // ...AND ask parent to refetch the full pack so the canonical source
+      // of truth syncs (otherwise a later parent re-render could clobber
+      // our local update with the stale `pack.schedule` array).
+      onPackReload?.();
     } catch (e: any) {
-      setRegenErr(humaniseError(e));
+      // v0.63: surface the real error so user doesn't think the click did
+      // nothing. Common causes: LLM API down/no key, rate limit, all
+      // 2 LLMs returning empty schedule (very rare with our cross-family
+      // fallback but possible if both providers are down).
+      const msg = humaniseError(e);
+      setRegenErr(msg || (e?.message ?? String(e)) || "重生成失败（未知原因）");
+      // eslint-disable-next-line no-console
+      console.error("regenerate_slot failed", e);
     } finally {
       setRegenIdx(null);
     }
