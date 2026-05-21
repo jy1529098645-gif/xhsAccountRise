@@ -16,7 +16,7 @@ from typing import Any, Iterable, Iterator
 from . import config, library
 
 
-def _connect(read_only: bool = False) -> sqlite3.Connection:
+def _connect(read_only: bool = False, with_adapter: bool = True) -> sqlite3.Connection:
     db_path = library.current_db_path()
     if read_only:
         uri = f"file:{db_path.as_posix()}?mode=ro"
@@ -32,22 +32,29 @@ def _connect(read_only: bool = False) -> sqlite3.Connection:
     # VIEW statements so the rest of the studio can query the canonical
     # `notes` / `comments` tables regardless of what the source schema looks
     # like. TEMP views are scoped to this connection, so re-applied each time.
-    try:
-        from . import adapt
-        active_lib_id = library.active_lib_id()
-        mapping = adapt.load_map(active_lib_id)
-        if mapping:
-            adapt.apply_views(con, mapping)
-    except Exception:
-        # Never let adapter logic break the connection itself.
-        pass
+    #
+    # v0.64.3 ：with_adapter=False 让 migration 连接跳过这一步。原因 ：adapter
+    # 在 temp.notes 上挂 VIEW 会 shadow main.notes ，当 migration 跑 ALTER
+    # TABLE RENAME 时 SQLite 扫现存 idx_notes_author 重新解析 → 解到 VIEW →
+    # "views may not be indexed" → migration 永远跑不过。migration 全部只动
+    # studio_* 表 ，不需要 adapter view。
+    if with_adapter:
+        try:
+            from . import adapt
+            active_lib_id = library.active_lib_id()
+            mapping = adapt.load_map(active_lib_id)
+            if mapping:
+                adapt.apply_views(con, mapping)
+        except Exception:
+            # Never let adapter logic break the connection itself.
+            pass
 
     return con
 
 
 @contextmanager
-def connect(read_only: bool = False) -> Iterator[sqlite3.Connection]:
-    con = _connect(read_only=read_only)
+def connect(read_only: bool = False, with_adapter: bool = True) -> Iterator[sqlite3.Connection]:
+    con = _connect(read_only=read_only, with_adapter=with_adapter)
     try:
         yield con
         if not read_only:
@@ -129,6 +136,11 @@ def apply_migrations(verbose: bool = True) -> list[str]:
     v0.64.2 ：.sql 也走 idempotent — 逐句执行 + 吞 duplicate column / already
     exists ，避免 Railway 等环境下 studio_migrations 跟实际 schema 不同步时
     永久 500。
+
+    v0.64.3 ：with_adapter=False — 跳过 adapter 在 temp.notes 上挂 VIEW 的
+    步骤。否则当 migration 做 ALTER TABLE RENAME（e.g. 014） ，SQLite 扫现
+    存 idx_notes_author 重新解析时优先解到 temp.view → "views may not be
+    indexed" → 永远跑不过。
     """
     applied_now: list[str] = []
     files = sorted(
@@ -136,7 +148,7 @@ def apply_migrations(verbose: bool = True) -> list[str]:
         + list(config.MIGRATIONS_DIR.glob("*.py")),
         key=lambda p: p.name,
     )
-    with connect() as con:
+    with connect(with_adapter=False) as con:
         done = _applied_migrations(con)
         for f in files:
             if f.name in done:
