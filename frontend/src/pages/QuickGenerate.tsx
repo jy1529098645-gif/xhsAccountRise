@@ -70,7 +70,7 @@ export default function QuickGenerate() {
   const [result, setResult] = useState<ResultState | null>(null);
 
   useEffect(() => {
-    api.platforms().then(setPlatforms).catch(() => {});
+    api.platforms().then(setPlatforms).catch(e => console.error("[QuickGenerate] platforms", e));
     // Default to active library's platform if not set yet.
     if (!form.platform) {
       api.libraries().then(libs => {
@@ -78,7 +78,7 @@ export default function QuickGenerate() {
         if (active?.platform && !form.platform) {
           setForm(prev => ({ ...prev, platform: active.platform }));
         }
-      }).catch(() => {});
+      }).catch(e => console.error("[QuickGenerate] libraries", e));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

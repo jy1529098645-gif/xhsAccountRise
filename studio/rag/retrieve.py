@@ -12,10 +12,10 @@ Trigram tokenizer requires query tokens >= 3 chars. We auto-explode topics
 into 3-gram windows when they are >= 3 chars, and fall back to title LIKE
 substring search for shorter queries.
 
-v0.63.1: every public search call is wrapped to survive missing FTS / notes /
-comments tables — libraries imported from xlsx without `auto_build_fts=1`
-used to crash the StrategyRefsPanel with a 500. Now we degrade to LIKE on
-notes (or empty for comments) and let the panel render the data we do have.
+All public search calls degrade gracefully when their tables are missing
+(xlsx-imported libs may lack FTS until auto_build_fts runs). Each branch
+returns its data type's empty value rather than raising, so the StrategyRefsPanel
+can render partial results instead of "加载参考素材失败".
 """
 from __future__ import annotations
 
@@ -140,17 +140,13 @@ def search_notes(
     """
     fts_q = _fts_query(topic)
     with db.connect(read_only=True) as con:
-        # v0.57: also pull video_duration_ms + share_count + video_url so
-        # Douyin/BiliBili refs carry their key signals down to the UI.
-        # v0.63: pull raw_json too so we can extract image URLs for xhs
-        # photo posts. Older crawler DBs may not have these columns —
-        # feature-detect via PRAGMA so we don't 500 on legacy libs.
+        # Feature-detect columns: older crawler DBs lack video_duration_ms /
+        # share_count / video_url, and xlsx-imported libs lack raw_json.
         try:
             cols = {r["name"] for r in con.execute("PRAGMA table_info(notes)")}
         except sqlite3.OperationalError:
             cols = set()
         if not cols:
-            # `notes` table not present in this library — nothing to search.
             return []
         extra_cols_wanted = ["video_duration_ms", "share_count", "video_url"]
         if include_images and "raw_json" in cols:
@@ -158,16 +154,11 @@ def search_notes(
         extra_cols = [c for c in extra_cols_wanted if c in cols]
         extra_sql = (", " + ", ".join(f"n.{c}" for c in extra_cols)) if extra_cols else ""
         extra_sql_no_prefix = (", " + ", ".join(extra_cols)) if extra_cols else ""
-        # v0.63.1: probe FTS table once. If missing (library imported via
-        # xlsx without `auto_build_fts=1`), skip straight to LIKE fallback so
-        # the panel still renders something useful.
-        has_fts = True
-        try:
-            con.execute("SELECT 1 FROM studio_fts_notes LIMIT 1")
-        except sqlite3.OperationalError:
-            has_fts = False
+        # Try FTS first and catch OperationalError on missing table / bad
+        # MATCH — saves a probe query per call. Falls through to LIKE on
+        # short queries, no FTS, or 0 hits.
         rows: list[dict[str, Any]] = []
-        if fts_q and has_fts:
+        if fts_q:
             try:
                 cur = con.execute(
                     "SELECT n.note_id, n.title, n.body, n.liked_count,"
@@ -183,10 +174,7 @@ def search_notes(
                 )
                 rows = [dict(r) for r in cur]
             except sqlite3.OperationalError as exc:
-                # Malformed MATCH (rare — _fts_query scrubs operators) or
-                # the FTS table got dropped mid-session. Fall through to
-                # LIKE so the user gets *something*.
-                _log.warning("FTS MATCH failed for %r: %s — falling back to LIKE", topic, exc)
+                _log.warning("FTS unavailable for %r: %s — falling back to LIKE", topic, exc)
         if not rows:
             # Topic too short for trigram, no FTS table, or FTS returned 0:
             # fall back to LIKE on title.
@@ -321,15 +309,14 @@ def fetch_hook_summaries(top_n: int = 5) -> list[dict[str, Any]]:
 
 
 def retrieve_for_brief(topic: str, k_notes: int = 8, n_comments: int = 15) -> dict[str, Any]:
-    """Triple-branch retrieve. v0.63.1: each branch is wrapped so a missing
-    table / malformed query in one of them doesn't 500 the others — the
-    StrategyRefsPanel still gets to render whatever data IS available."""
+    """One branch failing (missing table, malformed query) must not poison
+    the others — the panel can still render the data that did come back."""
     refs: list[dict[str, Any]] = []
     comments: list[dict[str, Any]] = []
     hooks: list[dict[str, Any]] = []
     try:
         refs = search_notes(topic, k=k_notes)
-    except Exception as exc:  # noqa: BLE001 — last-line defence
+    except Exception as exc:  # noqa: BLE001
         _log.exception("retrieve_for_brief.search_notes failed for %r: %s", topic, exc)
     try:
         comments = search_comments(topic, n=n_comments)

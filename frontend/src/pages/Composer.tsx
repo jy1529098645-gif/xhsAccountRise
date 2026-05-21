@@ -272,11 +272,12 @@ export default function Composer() {
   }, []);
 
   useEffect(() => {
-    api.platforms().then(setPlatforms).catch(() => {});
-    api.libraries().then(ls => setActiveLib(ls.find(l => l.active) ?? null)).catch(() => {});
+    api.platforms().then(setPlatforms).catch(e => console.error("[Composer] platforms", e));
+    api.libraries().then(ls => setActiveLib(ls.find(l => l.active) ?? null))
+      .catch(e => console.error("[Composer] libraries", e));
     Promise.all([api.listExternalReports(), api.listIntegratedReports()])
       .then(([ext, integ]) => setHasExternalReports(ext.length > 0 || integ.length > 0))
-      .catch(() => {});
+      .catch(e => console.error("[Composer] reports check", e));
   }, []);
 
   // Persist form state on every change so navigation doesn't blow it away.

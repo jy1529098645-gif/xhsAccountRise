@@ -254,10 +254,7 @@ def delete_project(project_id: str, hard: bool = False) -> dict[str, Any]:
     """Default behaviour: soft-archive (project hidden but data retained).
     Pass ?hard=true to PERMANENTLY remove the project + all its data
     (drafts, strategies, reports, performance, etc.). Refuses to remove
-    the default project. Returns per-table delete counts when hard.
-
-    v0.63.3 ：兜底 except 把任何意外（如 sqlite I/O / 文件锁定）都翻译成
-    400 + 可读 detail，避免前端 alert 弹一个空 / 500 内部错误堆栈。"""
+    the default project. Returns per-table delete counts when hard."""
     try:
         if hard:
             counts = project.hard_delete(project_id)
@@ -661,8 +658,8 @@ def activate_library(lib_id: str) -> dict[str, str]:
 
 @app.delete("/api/libraries/{lib_id}")
 def delete_library(lib_id: str) -> dict[str, str]:
-    """v0.63.3 ：删除资源库。激活中的库直接 409 + 提示先切换；其它意外
-    （文件被占用 / 权限不足）走 500 + 可读 detail，让前端 alert 不再裸吐 JSON。"""
+    """Active library → 409 with switch-first hint. File-system errors get
+    structured 4xx/5xx with readable detail (never bare 500)."""
     try:
         library.delete(lib_id)
     except RuntimeError as e:
@@ -762,22 +759,19 @@ def get_dna(version: str) -> dict[str, Any]:
 
 @app.get("/api/rag/search")
 def rag_search(q: str, k: int = 8, n: int = 15) -> dict[str, Any]:
-    # v0.63.1: never 500 this endpoint. The StrategyRefsPanel + DraftDetail
-    # ProvenancePanel + Composer all call this on every render; if the
-    # active library is missing FTS / has no notes / has no DNA, return an
-    # empty payload + an `error` hint instead so the panel renders empty
-    # state instead of "加载参考素材失败".
+    """Always returns 200 with {refs, comments, hooks, error?}. The frontend
+    panels call this on every render — a 500 would surface as "加载参考
+    素材失败" instead of a useful empty state."""
     q = (q or "").strip()
     if not q:
         return {"refs": [], "comments": [], "hooks": [],
                 "error": "query 为空（建议传 ≥3 字的方向名 + 定位语）"}
-    # Cap pathological queries — long positioning statements with no scrub
-    # targets used to fan-out into 100+ trigrams and tank FTS perf.
+    # Long positioning statements fan out into 100+ trigram OR clauses; cap.
     if len(q) > 200:
         q = q[:200]
     try:
         out = retrieve.retrieve_for_brief(q, k_notes=k, n_comments=n)
-    except Exception as exc:  # noqa: BLE001 — last-line defence
+    except Exception as exc:  # noqa: BLE001
         return {"refs": [], "comments": [], "hooks": [],
                 "error": f"RAG 检索失败 ：{type(exc).__name__}: {exc}"[:300]}
     out.setdefault("refs", [])

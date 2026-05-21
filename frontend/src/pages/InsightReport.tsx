@@ -24,7 +24,7 @@ export default function InsightReport() {
   useEffect(() => {
     if (!id) return;
     api.getInsight(id).then(setData).catch(e => setErr(e.message));
-    api.dnaLatest().then(setDna).catch(() => {});
+    api.dnaLatest().then(setDna).catch(e => console.error("[InsightReport] dnaLatest", e));
   }, [id]);
 
   if (err) return <div className="banner danger">{err}</div>;

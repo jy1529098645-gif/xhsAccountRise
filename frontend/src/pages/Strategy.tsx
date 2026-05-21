@@ -154,7 +154,7 @@ function StrategyPage({ explicitPackId }: { explicitPackId?: string }) {
   function handleWizardPackReady(pid: string) {
     setCreateMode(false);
     // 重新拉一次 history 让切换器显示新 pack
-    api.listStrategies().then(setHistory).catch(() => {});
+    api.listStrategies().then(setHistory).catch(e => console.error("[Strategy] listStrategies", e));
     navigate(`/strategy/${pid}`, { replace: true });
   }
 

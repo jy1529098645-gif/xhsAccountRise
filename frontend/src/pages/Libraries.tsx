@@ -39,7 +39,7 @@ function LibrariesImpl() {
   }
   useEffect(() => {
     load();
-    api.platforms().then(setPlatforms).catch(() => {});
+    api.platforms().then(setPlatforms).catch(e => console.error("[Libraries] platforms", e));
   }, []);
 
   async function handleFile(f: File | null) {
@@ -122,8 +122,6 @@ function LibrariesImpl() {
     setWorking(libId); setErr(null);
     try { await api.deleteLibrary(libId); setInfo(`✓ 已删除 ${libId}`); await load(); }
     catch (e: any) {
-      // v0.63.3 ：humaniseError 解析 FastAPI 的 {"detail":"..."} → 中文人话。
-      // 不再裸吐 JSON。常见原因 ：尝试删激活中的库 → 「先切换其他库再删」。
       // eslint-disable-next-line no-console
       console.error("[Libraries] delete failed", e);
       setErr(humaniseError(e));

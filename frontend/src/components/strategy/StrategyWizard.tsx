@@ -201,7 +201,8 @@ export default function StrategyWizard({ onPackReady }: StrategyWizardProps) {
   // v0.58: project-level product contexts (the brand bible the LLM reads)
   const [productContexts, setProductContexts] = useState<ProductContextDTO[]>([]);
   function reloadProductContexts() {
-    api.listProductContexts().then(setProductContexts).catch(() => {});
+    api.listProductContexts().then(setProductContexts)
+      .catch(e => console.error("[StrategyWizard] listProductContexts", e));
   }
   const [packId, setPackId] = useState<string | null>(null);
   const [directions, setDirections] = useState<StrategicDirectionDTO[]>([]);
@@ -268,14 +269,17 @@ export default function StrategyWizard({ onPackReady }: StrategyWizardProps) {
   // it was blocking users 60-100s on first entry without consent. Now there's
   // an explicit "✨ AI 帮拟初稿" button on the form for users who want it.
   useEffect(() => {
-    api.libraries().then(ls => setActiveLib(ls.find(l => l.active) ?? null)).catch(() => {});
-    api.platforms().then(setPlatforms).catch(() => {});
-    api.listStrategies().then(setHistory).catch(() => {});
+    api.libraries().then(ls => setActiveLib(ls.find(l => l.active) ?? null))
+      .catch(e => console.error("[StrategyWizard] libraries", e));
+    api.platforms().then(setPlatforms)
+      .catch(e => console.error("[StrategyWizard] platforms", e));
+    api.listStrategies().then(setHistory)
+      .catch(e => console.error("[StrategyWizard] listStrategies", e));
     // Check if user has external reports OR integrated reports — those count
     // as "reference material" too, so we shouldn't nag about missing DB.
     Promise.all([api.listExternalReports(), api.listIntegratedReports()])
       .then(([ext, integ]) => setHasExternalReports(ext.length > 0 || integ.length > 0))
-      .catch(() => {});
+      .catch(e => console.error("[StrategyWizard] reports check", e));
     reloadProductContexts();
     api.listStrategyGoals().then(gs => {
       setGoals(gs);
@@ -487,7 +491,7 @@ export default function StrategyWizard({ onPackReady }: StrategyWizardProps) {
       setProposeSeen(0);
       // v0.62.5 ：wizard 在 Composer 板块里跑，不持久化 URL（pack_id 在 expand
       // 后才回调给 Composer，由 Composer 决定怎么放在 URL）。
-      api.listStrategies().then(setHistory).catch(() => {});
+      api.listStrategies().then(setHistory).catch(e => console.error("[StrategyWizard] listStrategies", e));
     } catch (e: any) {
       if (isAborted(e)) {
         setInfo("⏸ 已暂停。点上面🚀重新启动会从头开始。");
@@ -547,7 +551,7 @@ export default function StrategyWizard({ onPackReady }: StrategyWizardProps) {
       setInfo(null);
       setLastFailedAction(null);
       try { localStorage.removeItem(draftKey()); } catch { /* ignore */ }
-      api.listStrategies().then(setHistory).catch(() => {});
+      api.listStrategies().then(setHistory).catch(e => console.error("[StrategyWizard] listStrategies", e));
       // v0.62.5 ：通知 Composer wizard 完成 — Composer 决定接下来怎么走
       // （默认 ：把 pack 显示在自己页面顶部 + 进入「写每篇」模式）。
       onPackReady(packId);
@@ -577,7 +581,7 @@ export default function StrategyWizard({ onPackReady }: StrategyWizardProps) {
           setInfo(null);
           setLastFailedAction(null);
           try { localStorage.removeItem(draftKey()); } catch { /* ignore */ }
-          api.listStrategies().then(setHistory).catch(() => {});
+          api.listStrategies().then(setHistory).catch(e => console.error("[StrategyWizard] listStrategies", e));
           // v0.62.5 ：同上 — wizard 完成回调 Composer。
           onPackReady(packId);
           return;

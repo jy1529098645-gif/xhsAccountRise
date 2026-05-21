@@ -57,7 +57,7 @@ export default function IntegratedReport() {
       const m: Record<string, string> = {};
       for (const r of rows as any[]) m[r.report_id] = r.name;
       setSourceNames(m);
-    }).catch(() => {});
+    }).catch(e => console.error("[IntegratedReport] sourceNames", e));
   }, [id]);
 
   function toggleInclude(idx: number) {

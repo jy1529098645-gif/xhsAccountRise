@@ -1,20 +1,12 @@
-// v0.62.5 ：StrategyPackView — 一个 pack 的「时间线大纲」纯展示页。
-//
-// 板块拆分后，「起号策略」（/strategy/:pack_id）渲染这个组件，
-// 用户在这里浏览：
-//   - 方向卡 + 文字策略指导（主线 / 元信息 / 主题 / 材料 / 风险 / 指标）
-//   - 时间线 schedule（每篇主推荐 + 2 个备选）
-//   - 下一轮迭代入口
-// 点 「✍️ 写这个 →」 直接跳 /composer?slot=PACK_ID:IDX&alt=N 进出稿。
-//
-// 之前曾搬到 Composer.tsx，这次抽成独立组件供 Strategy 板块使用。
-
+// Pure display of one strategy pack — direction card, schedule timeline,
+// per-slot RAG refs (on expand), and the iterate-to-next-cycle hook.
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../api";
 import { slotDate, topPublishingSlots } from "../../format";
 import PlatformPill from "../PlatformPill";
 import { humaniseError } from "../../errors";
+import { useRagFetch } from "../../hooks/useRagFetch";
 import RagReferenceGrid from "../RagReferenceGrid";
 import type { StrategyPackDTO } from "../../types";
 
@@ -23,11 +15,10 @@ const INTENT_COLORS: Record<string, string> = {
   "拉新": "#fff5f5", "互动": "#fff8e6", "转化": "#fdecea", "沉淀": "#f0fafe",
 };
 
-/** v0.63.2 ：RAG 查询前端 sanitize — 复用于 StrategyRefsPanel + SlotRagPanel
- *   ·  剥离 FTS5 操作符字符避免误命中
- *   ·  截到 200 字（极长 positioning_statement 会扇出 100+ trigram）
- *   ·  返回 { query, usable } ：usable=false 表示连一个 ≥3 字 token 都没有
- *     （trigram 检索的最低要求），上游就不发请求。 */
+// Backend FTS5 uses a trigram tokenizer — usable=false means no token has
+// the 3-char minimum, so the request would return 0 hits anyway. Cap at
+// 200 chars to keep long positioning statements from blowing up into 100+
+// trigram OR clauses.
 export function sanitizeRagQuery(raw: string): { query: string; usable: boolean } {
   const cleaned = (raw || "")
     .replace(/[()[\]{}"'`~!@#$%^&*+=\-./\\:;<>?|]+/g, " ")
@@ -39,21 +30,18 @@ export function sanitizeRagQuery(raw: string): { query: string; usable: boolean 
   return { query: cleaned, usable };
 }
 
-/** Top-level composite: a full pack viewer.
- *
- *  v0.62.5 ：onWriteClick 可选。Strategy 板块（/strategy/:pack_id）不传 ：
- *  默认行为是 navigate('/composer?slot=PACK:IDX&alt=N')。Composer 板块
- *  传 ：用 callback 在当前页填表单（不跳路由）。
- */
+// onWriteClick: omit on the Strategy page (default navigates to
+// /composer?slot=...); pass on the Composer page to fill the inline brief
+// form without changing routes.
 export default function StrategyPackView({pack, onWriteClick, compact = false, onPackReload}: {
   pack: StrategyPackDTO;
   onWriteClick?: (slotIdx: number, altIdx: number) => void;
-  /** Bug B fix ：compact=true (Composer 板块嵌入) 只渲染 pack ID 摘要 +
+  /** compact=true (Composer embed) only renders pack ID summary +
    *  SchedulePanel，**省略** Overview / 周主题 / 最佳时段 / 材料 / 风险 /
    *  指标 / IterateCard — 那些都是「起号策略板块」的内容。 */
   compact?: boolean;
-  /** v0.63: 占位 slot 被 regenerate_slot 改完后通知父刷新整个 pack，
-   *  避免 SchedulePanel 的 local schedule state 被父 re-render 冲掉。 */
+  /** Refresh the whole pack after a slot regenerate — keeps the canonical
+   *  source of truth in sync with SchedulePanel's local optimistic update. */
   onPackReload?: () => void;
 }) {
   const navigate = useNavigate();
@@ -98,8 +86,6 @@ export default function StrategyPackView({pack, onWriteClick, compact = false, o
   return (
     <div>
       <StrategyOverview pack={pack} />
-      {/* v0.63 ：起号策略最后一步显示「AI 看了哪些真实参考」— 用户专门要求
-          的功能在 Strategy 也要可见。按选定方向自动 RAG 检索资源库。 */}
       <StrategyRefsPanel pack={pack} />
       <SchedulePanel pack={pack} onWrite={goWrite} onPackReload={onPackReload} />
       <IterateCard pack={pack} />
@@ -107,65 +93,19 @@ export default function StrategyPackView({pack, onWriteClick, compact = false, o
   );
 }
 
-/**
- * v0.63 ：用 pack.chosen_direction 的 name + positioning_statement 当
- * query 去 RAG 检索资源库，列出真实爆款帖图文（封面 + 标题 + 互动数据）。
- * 让用户在「起号策略最后一步」就能看到 AI 用了哪些素材决策。
- *
- * 每个 pack 只查一次（按 pack_id 缓存于 useEffect 依赖）。
- *
- * v0.63.1: 错误处理强化 ——
- *  · 后端 /api/rag/search 永远 200（empty list + `error` 字段），但失败时
- *    UI 仍要让用户看到「为什么 0 条」+ 🔄 重试按钮。
- *  · query 在前端先 sanitize ：截到 200 字、去掉 FTS5 不喜欢的符号、保证
- *    至少有 3 个连续字符（trigram 最低要求）— 否则不发请求。
- *  · 错误 banner 露出真实信息（console + UI），不再用 humaniseError 把
- *    "Failed to fetch" 翻译成「后端没启动」这种 误导用户 的消息（之前因
- *    为这一条用户来回报 bug 两次）。
- */
+// "Why this direction" — RAG refs against the chosen direction's
+// name + positioning. Separate from per-slot panels (which justify each
+// individual post).
 function StrategyRefsPanel({pack}: {pack: StrategyPackDTO}) {
-  const [data, setData] = useState<any | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
-  const [reloadKey, setReloadKey] = useState(0);
-
-  // Support either single (chosen_direction) or multi (chosen_directions[0]) shape.
   const chosen = pack.chosen_direction
     || (Array.isArray(pack.chosen_directions) && pack.chosen_directions[0])
     || null;
-
-  // Build a clean query. Cap length, drop FTS5 operator chars, keep CJK +
-  // letters + digits + spaces. (sanitizeRagQuery is shared with SlotRagPanel.)
   const { query, usable: queryUsable } = sanitizeRagQuery(
     chosen ? `${chosen.name || ""} ${chosen.positioning_statement || ""}` : "",
   );
-
-  useEffect(() => {
-    if (!queryUsable) { setLoading(false); return; }
-    let cancel = false;
-    setLoading(true); setErr(null);
-    api.ragSearch(query, 8, 12)
-      .then((d: any) => {
-        if (cancel) return;
-        // backend now returns 200 with `error` field on internal failures
-        if (d && d.error && (d.refs?.length ?? 0) === 0 && (d.comments?.length ?? 0) === 0) {
-          setErr(String(d.error));
-        }
-        setData(d);
-      })
-      .catch((e: any) => {
-        if (cancel) return;
-        // eslint-disable-next-line no-console
-        console.error("[StrategyRefsPanel] ragSearch failed", e);
-        // Show humanised + raw — humaniseError ignores it if it's just "Failed to fetch"
-        // (which sometimes lies — see errors.ts comment), so we append the raw message.
-        const human = humaniseError(e);
-        const raw = e?.message ?? String(e ?? "");
-        setErr(human === raw ? human : `${human}\n（原始 ：${raw.slice(0, 200)}）`);
-      })
-      .finally(() => { if (!cancel) setLoading(false); });
-    return () => { cancel = true; };
-  }, [pack.pack_id, query, queryUsable, reloadKey]);
+  const { data, loading, err, retry } = useRagFetch(
+    query, queryUsable, 8, 12, [pack.pack_id], "StrategyRefsPanel",
+  );
 
   if (loading) {
     return (
@@ -192,7 +132,7 @@ function StrategyRefsPanel({pack}: {pack: StrategyPackDTO}) {
               {!queryUsable && query && " — 太短/无 ≥3 字 token，FTS 检索不到"}
             </p>
           </div>
-          <button className="ghost" onClick={() => setReloadKey(k => k + 1)}
+          <button className="ghost" onClick={retry}
             style={{fontSize: 11.5, padding: "3px 10px", whiteSpace: "nowrap"}}>
             🔄 重试
           </button>
@@ -200,10 +140,7 @@ function StrategyRefsPanel({pack}: {pack: StrategyPackDTO}) {
       </div>
     );
   }
-  if (!queryUsable) {
-    // No real query → no panel (rather than empty-state noise).
-    return null;
-  }
+  if (!queryUsable) return null;
   if (!data || ((data.refs?.length ?? 0) === 0 && (data.comments?.length ?? 0) === 0 && (data.hooks?.length ?? 0) === 0)) {
     return (
       <div className="card" style={{marginTop: 12, borderLeft: "4px solid #ddd"}}>
@@ -215,7 +152,7 @@ function StrategyRefsPanel({pack}: {pack: StrategyPackDTO}) {
               先去「资源库」里导入更多和这个方向相关的真实帖，AI 才能拿到参考。
             </p>
           </div>
-          <button className="ghost" onClick={() => setReloadKey(k => k + 1)}
+          <button className="ghost" onClick={retry}
             style={{fontSize: 11.5, padding: "3px 10px", whiteSpace: "nowrap"}}>
             🔄 重试
           </button>
@@ -223,9 +160,6 @@ function StrategyRefsPanel({pack}: {pack: StrategyPackDTO}) {
       </div>
     );
   }
-
-  // backend /api/rag/search 返回的字段名是 xhs schema (liked_count / image_urls /
-  // ...) — RagReferenceGrid 直接接受这个 shape (RagRef 类型与 API 一致)。
   return (
     <RagReferenceGrid
       refs={data.refs || []}
@@ -235,7 +169,7 @@ function StrategyRefsPanel({pack}: {pack: StrategyPackDTO}) {
       subtitle={`按「${chosen?.name || "方向名"}」从你资源库里筛出的真实爆款帖。点封面 / 标题跳原帖 — 这些就是 AI 决策这个方向时实际读到的内容。`}
       defaultOpen={true}
       rightSlot={
-        <button className="ghost" onClick={(e) => { e.preventDefault(); setReloadKey(k => k + 1); }}
+        <button className="ghost" onClick={(e) => { e.preventDefault(); retry(); }}
           style={{fontSize: 11.5, padding: "2px 8px"}}
           title="重新去 RAG 拉一遍参考素材">🔄 刷新</button>
       }
@@ -243,32 +177,17 @@ function StrategyRefsPanel({pack}: {pack: StrategyPackDTO}) {
   );
 }
 
-/**
- * v0.63.2 ：单条 schedule slot 的「这一篇的真实参考」面板。
- *
- * 用户要求 ：「起号策略最后一步时间线的产出 — 所有 schedule 都要有真实
- * 的参考」。SchedulePanel 里每条 slot 展开时挂一个这个组件，按本 slot
- * 自己的 title + angle + outline 去 RAG，独立于方向级别的 StrategyRefsPanel
- * （那个是「为什么选这个方向」的证据，这个是「为什么 这一篇 这么写」的证据）。
- *
- * 懒加载 ：只有 slot 展开（父 isExp=true）时才挂载、才发请求。收起即卸载
- * 状态；下次展开会重发请求（轻量代价换简单代码）。
- *
- * 数据少时静默隐藏（query 不可用 / 0 命中），不打扰用户。
- */
+// "Why this post" — RAG refs against one schedule slot's title + angle +
+// outline. Lazy: only mounts when the slot is expanded; remounts (and
+// refetches) on re-expand.
 function SlotRagPanel({slot, slotIdx, packId, altIdx = -1}: {
   slot: any;
   slotIdx: number;
   packId: string;
-  /** -1 = 主推荐；≥0 = alt index。用来给 query 缓存 key 区分。 */
+  // -1 = main recommendation; >=0 = alt index (disambiguates cache key
+  // when alts are expanded under the same slot).
   altIdx?: number;
 }) {
-  const [data, setData] = useState<any | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
-  const [reloadKey, setReloadKey] = useState(0);
-
-  // 拼 query ：标题 + 角度 + outline 前两点 / mini_outline 前两点
   const rawParts: string[] = [];
   if (slot?.title) rawParts.push(String(slot.title));
   if (slot?.angle) rawParts.push(String(slot.angle));
@@ -276,33 +195,10 @@ function SlotRagPanel({slot, slotIdx, packId, altIdx = -1}: {
     : Array.isArray(slot?.mini_outline) ? slot.mini_outline : [];
   for (const o of outline.slice(0, 2)) if (o) rawParts.push(String(o));
   const { query, usable: queryUsable } = sanitizeRagQuery(rawParts.join(" "));
+  const { data, loading, err, retry } = useRagFetch(
+    query, queryUsable, 6, 8, [packId, slotIdx, altIdx], "SlotRagPanel",
+  );
 
-  useEffect(() => {
-    if (!queryUsable) { setLoading(false); return; }
-    let cancel = false;
-    setLoading(true); setErr(null);
-    // 单 slot 检索量比方向级小一些 ：6 refs + 8 comments 够用。
-    api.ragSearch(query, 6, 8)
-      .then((d: any) => {
-        if (cancel) return;
-        if (d && d.error && (d.refs?.length ?? 0) === 0 && (d.comments?.length ?? 0) === 0) {
-          setErr(String(d.error));
-        }
-        setData(d);
-      })
-      .catch((e: any) => {
-        if (cancel) return;
-        // eslint-disable-next-line no-console
-        console.error("[SlotRagPanel] ragSearch failed", e);
-        const human = humaniseError(e);
-        const raw = e?.message ?? String(e ?? "");
-        setErr(human === raw ? human : `${human}\n（原始 ：${raw.slice(0, 200)}）`);
-      })
-      .finally(() => { if (!cancel) setLoading(false); });
-    return () => { cancel = true; };
-  }, [packId, slotIdx, altIdx, query, queryUsable, reloadKey]);
-
-  // 没可用 query 就静默隐藏（极短标题等）
   if (!queryUsable) return null;
 
   if (loading) {
@@ -326,7 +222,7 @@ function SlotRagPanel({slot, slotIdx, packId, altIdx = -1}: {
           <div style={{flex: 1, minWidth: 0, whiteSpace: "pre-wrap"}}>
             ⚠️ 这一篇没拉到参考素材：{err}
           </div>
-          <button className="ghost" onClick={() => setReloadKey(k => k + 1)}
+          <button className="ghost" onClick={retry}
             style={{fontSize: 11, padding: "2px 8px", whiteSpace: "nowrap"}}>
             🔄 重试
           </button>
@@ -351,15 +247,15 @@ function SlotRagPanel({slot, slotIdx, packId, altIdx = -1}: {
   return (
     <div style={{marginTop: 8}}>
       <RagReferenceGrid
-        refs={data.refs || []}
-        comments={data.comments || []}
-        hooks={data.hooks || []}
+        refs={data?.refs || []}
+        comments={data?.comments || []}
+        hooks={data?.hooks || []}
         title="📚 这一篇 AI 看的真实参考"
         subtitle="按这一篇 slot 的标题 + 角度从资源库里筛出的真实爆款。点封面 / 标题跳原帖 — 验证 AI 没瞎编。"
         defaultOpen={true}
         className="card"
         rightSlot={
-          <button className="ghost" onClick={(e) => { e.preventDefault(); setReloadKey(k => k + 1); }}
+          <button className="ghost" onClick={(e) => { e.preventDefault(); retry(); }}
             style={{fontSize: 11, padding: "2px 8px"}}
             title="重新去 RAG 拉一遍">🔄 刷新</button>
         }
@@ -531,15 +427,14 @@ function SchedulePanel({pack, onWrite, onPackReload}: {
 }) {
   const [expanded, setExpanded] = useState<number | null>(null);
   const [collapsed, setCollapsed] = useState(false);
-  // v0.63: 本地 schedule 副本支持单 slot 重生成后 inline 替换。每次 pack
-  // 变化时同步；regenerate_slot 成功后只更新这里，无需重新拉整个 pack。
+  // Local optimistic copy so a single-slot regenerate updates inline
+  // without re-fetching the whole pack.
   const initialSchedule = Array.isArray(pack.schedule) ? pack.schedule : [];
   const [schedule, setSchedule] = useState<any[]>(initialSchedule);
   useEffect(() => { setSchedule(Array.isArray(pack.schedule) ? pack.schedule : []); }, [pack]);
   const [regenIdx, setRegenIdx] = useState<number | null>(null);
   const [regenErr, setRegenErr] = useState<string | null>(null);
 
-  // v0.63: 判断一个 slot 是不是 gap-fill 占位（AI 实际没排出来的占位行）
   function isPlaceholder(s: any): boolean {
     const t = String(s?.title || "");
     return t.includes("AI 漏排") || t.startsWith("待补 #") || t.includes("请用 ✍️");
@@ -549,21 +444,15 @@ function SchedulePanel({pack, onWrite, onPackReload}: {
     setRegenIdx(i); setRegenErr(null);
     try {
       const r = await api.regenerateSlot(pack.pack_id, i);
-      // v0.63: update local state for immediate visual feedback...
       setSchedule(prev => {
         const next = [...prev];
         next[i] = r.slot;
         return next;
       });
-      // ...AND ask parent to refetch the full pack so the canonical source
-      // of truth syncs (otherwise a later parent re-render could clobber
-      // our local update with the stale `pack.schedule` array).
+      // Refetch the canonical pack so a later parent re-render doesn't
+      // clobber the optimistic update with the stale schedule array.
       onPackReload?.();
     } catch (e: any) {
-      // v0.63: surface the real error so user doesn't think the click did
-      // nothing. Common causes: LLM API down/no key, rate limit, all
-      // 2 LLMs returning empty schedule (very rare with our cross-family
-      // fallback but possible if both providers are down).
       const msg = humaniseError(e);
       setRegenErr(msg || (e?.message ?? String(e)) || "重生成失败（未知原因）");
       // eslint-disable-next-line no-console
@@ -609,7 +498,6 @@ function SchedulePanel({pack, onWrite, onPackReload}: {
             const dt = slotDate(cycleStart, s.week, s.day_of_week);
             const dateLabel = dt ? dt.display : `W${s.week}·D${s.day_of_week}`;
             const alts = Array.isArray(s.alternative_versions) ? s.alternative_versions : [];
-            // v0.63: placeholder slot = AI scheduler 没排出来时填的占位行
             const placeholder = isPlaceholder(s);
             const isRegenerating = regenIdx === i;
             return (
@@ -712,9 +600,7 @@ function SchedulePanel({pack, onWrite, onPackReload}: {
                         </button>
                       </div>
                     </div>
-                    {/* v0.63.2 ：这一篇 slot 自己的真实参考素材
-                        （封面 + 标题 + 互动数据 + tags + 用户原话评论 + Hook 模板）。
-                        占位 slot（待补 / AI 漏排）跳过 — 它们没有可用的标题 query。 */}
+                    {/* Skip placeholder slots — no usable title query. */}
                     {!placeholder && (
                       <SlotRagPanel
                         slot={s}
@@ -763,8 +649,6 @@ function SchedulePanel({pack, onWrite, onPackReload}: {
                             ✍️ 写这个 →
                           </button>
                         </div>
-                        {/* v0.63.2 ：每个备选 alt 用自己 title + angle + mini_outline
-                            去 RAG。备选和主推荐的角度往往不同，参考素材也该不同。 */}
                         {(alt.title || alt.angle) && (
                           <SlotRagPanel
                             slot={alt}
@@ -848,7 +732,8 @@ function IterateCard({pack}: {pack: StrategyPackDTO}) {
 
   useEffect(() => {
     if (!pack?.pack_id) return;
-    api.listStrategyPerformance(pack.pack_id).then(setHistory).catch(() => {});
+    api.listStrategyPerformance(pack.pack_id).then(setHistory)
+      .catch(e => console.error("[IterateCard] listStrategyPerformance", e));
   }, [pack?.pack_id]);
 
   async function submit() {

@@ -215,6 +215,13 @@ export interface RagHook {
   examples: { title: string; liked_count: number }[];
 }
 
+export interface RagSearchResult {
+  refs: RagRef[];
+  comments: RagComment[];
+  hooks: RagHook[];
+  error?: string;
+}
+
 export interface VariantChild {
   draft_id: string;
   generated_at: number;

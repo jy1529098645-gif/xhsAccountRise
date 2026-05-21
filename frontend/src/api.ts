@@ -5,6 +5,7 @@ import type {
   ProjectDTO, InsightReportDTO,
   ComplianceCheck, ComplianceHit, PromptProposal,
   ProductContextDTO, GoalTypeDTO,
+  RagSearchResult,
 } from "./types";
 
 const STATIC_PLATFORMS: Platform[] = [
@@ -73,6 +74,16 @@ class HttpError extends Error {
   constructor(status: number, message: string) {
     super(message); this.status = status;
   }
+}
+
+// Shared error formatter so HttpError.message always carries
+// `${METHOD} ${path} → ${status}: ${body}` — that exact shape is what
+// humaniseError() parses to extract FastAPI's {"detail":"..."} and turn it
+// into a readable Chinese alert. Don't change the format without updating
+// humaniseError's regex in `errors.ts`.
+async function throwHttpError(method: string, path: string, res: Response): Promise<never> {
+  const text = await res.text().catch(() => "");
+  throw new HttpError(res.status, `${method} ${path} → ${res.status}: ${text.slice(0, 400)}`);
 }
 
 async function getJson<T>(apiPath: string, staticPath?: string): Promise<T> {
@@ -276,23 +287,16 @@ export const api = {
   deleteLibrary: async (libId: string) => {
     const backend = backendUrl();
     if (!backend) throw new HttpError(0, "删除库需要本地后端");
-    const res = await fetch(`${backend}/api/libraries/${encodeURIComponent(libId)}`,
-      { method: "DELETE" });
-    if (!res.ok) {
-      // v0.63.3 ：把 FastAPI 返回的 {"detail":"..."} JSON 文本原封不动塞进
-      // HttpError.message — humaniseError() 会识别 status + JSON detail 并
-      // 翻译成易读的中文。之前直接 throw res.text() 让用户看到一坨 JSON
-      // ，是「删除失败 ：{\"detail\":\"...\"}」这种报错的根源。
-      const text = await res.text().catch(() => "");
-      throw new HttpError(res.status, `DELETE /api/libraries/${libId} → ${res.status}: ${text.slice(0, 400)}`);
-    }
+    const path = `/api/libraries/${encodeURIComponent(libId)}`;
+    const res = await fetch(`${backend}${path}`, { method: "DELETE" });
+    if (!res.ok) await throwHttpError("DELETE", path, res);
     return res.json();
   },
   analyzeLibrary: (libId: string) => postJson<any>(`/api/libraries/${libId}/analyze`, {}),
 
   // RAG -----------------
   ragSearch: (q: string, k = 6, n = 10) =>
-    getJson<any>(`/api/rag/search?q=${encodeURIComponent(q)}&k=${k}&n=${n}`),
+    getJson<RagSearchResult>(`/api/rag/search?q=${encodeURIComponent(q)}&k=${k}&n=${n}`),
 
   // Drafts -----------------
   drafts: () => getJson<DraftListItem[]>("/api/drafts", "drafts.json"),
@@ -398,37 +402,30 @@ export const api = {
   archiveProject: async (projectId: string) => {
     const backend = backendUrl();
     if (!backend) throw new HttpError(0, "需要本地后端");
-    const res = await fetch(`${backend}/api/projects/${encodeURIComponent(projectId)}`,
-      { method: "DELETE" });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new HttpError(res.status, `DELETE /api/projects/${projectId} → ${res.status}: ${text.slice(0, 400)}`);
-    }
+    const path = `/api/projects/${encodeURIComponent(projectId)}`;
+    const res = await fetch(`${backend}${path}`, { method: "DELETE" });
+    if (!res.ok) await throwHttpError("DELETE", path, res);
     return res.json();
   },
   hardDeleteProject: async (projectId: string) => {
     const backend = backendUrl();
     if (!backend) throw new HttpError(0, "需要本地后端");
-    // v0.63.3 ：和 deleteLibrary 一样，把 HTTP status + 完整 detail JSON
-    // 一起带回去给 humaniseError 解析，alert 框就能拿到中文人话版报错。
-    const res = await fetch(`${backend}/api/projects/${encodeURIComponent(projectId)}?hard=true`,
-      { method: "DELETE" });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new HttpError(res.status, `DELETE /api/projects/${projectId} → ${res.status}: ${text.slice(0, 400)}`);
-    }
+    const path = `/api/projects/${encodeURIComponent(projectId)}?hard=true`;
+    const res = await fetch(`${backend}${path}`, { method: "DELETE" });
+    if (!res.ok) await throwHttpError("DELETE", path, res);
     return res.json() as Promise<{ deleted: string; rows: Record<string, number> }>;
   },
   patchProject: async (projectId: string, body: { name?: string; description?: string; emoji?: string }) => {
     const backend = backendUrl();
     if (!backend) throw new HttpError(0, "需要本地后端");
-    const res = await fetch(`${backend}/api/projects/${projectId}`, {
+    const path = `/api/projects/${encodeURIComponent(projectId)}`;
+    const res = await fetch(`${backend}${path}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: body.name ?? "", description: body.description ?? "", emoji: body.emoji ?? "📁",
       }),
     });
-    if (!res.ok) throw new HttpError(res.status, await res.text());
+    if (!res.ok) await throwHttpError("PATCH", path, res);
     return res.json();
   },
 

@@ -390,7 +390,7 @@ function PerformanceWidget({draft, onChanged}: {draft: any; onChanged: () => voi
       if (cancel) return;
       const me = rows.find(r => r.draft_id === draft.draft_id);
       setRecent(me?.performance ?? []);
-    }).catch(() => {});
+    }).catch(e => console.error("[DraftDetail] performance", e));
     return () => { cancel = true; };
   }, [draft.draft_id, draft.published]);
 
@@ -863,7 +863,7 @@ function RepurposeCard({draftId, sourcePlatform, onDone}: {
 
   useEffect(() => {
     if (opened && libs.length === 0) {
-      api.libraries().then(setLibs as any).catch(() => {});
+      api.libraries().then(setLibs as any).catch(e => console.error("[DraftDetail] libraries", e));
     }
   }, [opened, libs.length]);
 
