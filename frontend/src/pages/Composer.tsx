@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { fmtLikes, roleName, coerceStringList } from "../format";
 import { useTargetPlatform } from "../components/PlatformPicker";
+import RagReferenceGrid from "../components/RagReferenceGrid";
 import AgentConfigPanel, {
   AgentSelection, defaultSelection, selectionToSpecs,
 } from "../components/AgentConfigPanel";
@@ -842,22 +843,19 @@ function ComposeResult({bundle}: {bundle: ComposeBundle}) {
         </div>
       )}
 
-      {/* v0.61.25 ：refs 概览卡保留（这里只列标题）— 详细内容在下面 final 稿
-          section 里折叠展开。 */}
-      {bundle.rag && Array.isArray(bundle.rag.refs) && bundle.rag.refs.length > 0 && (
-        <div className="card">
-          <h2>📚 参考爆款 ({bundle.rag.refs.length})</h2>
-          <ol>
-            {bundle.rag.refs.slice(0, 5).map((r: any) => (
-              <li key={r.note_id}>
-                [{fmtLikes(r.liked_count ?? r.likes)} likes] {r.title}
-              </li>
-            ))}
-          </ol>
-          <p className="muted" style={{fontSize: 12}}>
-            + {(bundle.rag as any).comments_count ?? 0} 条用户原话评论 + {(bundle.rag.hooks?.length ?? 0)} 个 hook 模板
-          </p>
-        </div>
+      {/* v0.63 ：AI 参考的真实素材 — 用户专门提的需求。出稿当下就要看到
+          (不只是历史出稿)。位置在候选稿之上 — 用户拿到候选时第一眼就看到
+          AI 真的读了哪些原帖，验证没瞎编。
+          替换了 v0.61.25 的纯文本小卡片 + 下面 final 稿 section 里折叠的
+          ReferenceSourcesPanel。 */}
+      {bundle.rag && (
+        <RagReferenceGrid
+          refs={(bundle.rag.refs as any) || []}
+          comments={(bundle.rag as any).comments || []}
+          hooks={(bundle.rag.hooks as any) || []}
+          title="📚 AI 写这条稿时参考的真实素材"
+          subtitle="下面是 AI 起草时实际读到的真实贴文 + 用户原话 + hook 模板。点封面图或标题跳原帖看完整图文，验证 AI 没瞎编。"
+        />
       )}
 
       {Array.isArray(bundle.drafts) && bundle.drafts.length > 0 && (
@@ -904,10 +902,7 @@ function ComposeResult({bundle}: {bundle: ComposeBundle}) {
           <div className="candidate-grid">
             <Candidate c={chosenDraft as any} highlighted />
           </div>
-          {/* v0.61.25 ：AI 写这条稿时具体参考了哪些素材 — 让用户能验证 AI 没瞎编 */}
-          {bundle.rag && (
-            <ReferenceSourcesPanel rag={bundle.rag as any} />
-          )}
+          {/* v0.63 ：已上移到候选稿之前用图文卡片显示（RagReferenceGrid）。 */}
         </div>
       )}
 

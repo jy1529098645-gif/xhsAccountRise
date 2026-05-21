@@ -15,6 +15,7 @@ import { api } from "../../api";
 import { slotDate, topPublishingSlots } from "../../format";
 import PlatformPill from "../PlatformPill";
 import { humaniseError } from "../../errors";
+import RagReferenceGrid from "../RagReferenceGrid";
 import type { StrategyPackDTO } from "../../types";
 
 const DIRECTION_COLORS = ["#2E5C8A", "#a36df0", "#10a37f", "#e0a800", "#c4429a", "#5BC0EB", "#FCB97D", "#7a6fc8"];
@@ -81,9 +82,79 @@ export default function StrategyPackView({pack, onWriteClick, compact = false, o
   return (
     <div>
       <StrategyOverview pack={pack} />
+      {/* v0.63 ：起号策略最后一步显示「AI 看了哪些真实参考」— 用户专门要求
+          的功能在 Strategy 也要可见。按选定方向自动 RAG 检索资源库。 */}
+      <StrategyRefsPanel pack={pack} />
       <SchedulePanel pack={pack} onWrite={goWrite} onPackReload={onPackReload} />
       <IterateCard pack={pack} />
     </div>
+  );
+}
+
+/**
+ * v0.63 ：用 pack.chosen_direction 的 name + positioning_statement 当
+ * query 去 RAG 检索资源库，列出真实爆款帖图文（封面 + 标题 + 互动数据）。
+ * 让用户在「起号策略最后一步」就能看到 AI 用了哪些素材决策。
+ *
+ * 每个 pack 只查一次（按 pack_id 缓存于 useEffect 依赖）。
+ */
+function StrategyRefsPanel({pack}: {pack: StrategyPackDTO}) {
+  const [data, setData] = useState<any | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  const chosen = pack.chosen_direction;
+  const query = chosen
+    ? `${chosen.name || ""} ${chosen.positioning_statement || ""}`.trim()
+    : "";
+
+  useEffect(() => {
+    if (!query) { setLoading(false); return; }
+    let cancel = false;
+    setLoading(true); setErr(null);
+    api.ragSearch(query, 8, 12)
+      .then((d: any) => { if (!cancel) setData(d); })
+      .catch((e: any) => { if (!cancel) setErr(humaniseError(e)); })
+      .finally(() => { if (!cancel) setLoading(false); });
+    return () => { cancel = true; };
+  }, [pack.pack_id, query]);
+
+  if (loading) {
+    return (
+      <div className="card" style={{marginTop: 12, borderLeft: "4px solid var(--primary)",
+                                     background: "var(--primary-soft)"}}>
+        <h2 style={{margin: 0, fontSize: 14, color: "var(--primary)"}}>
+          📚 AI 决策这个方向时看的真实素材 · 加载中…
+        </h2>
+        <p className="muted" style={{fontSize: 12, margin: "4px 0 0"}}>
+          按「{chosen?.name || "方向名"}」去资源库 FTS 检索真实爆款 + 抽取封面图…
+        </p>
+      </div>
+    );
+  }
+  if (err) {
+    return (
+      <div className="card" style={{marginTop: 12, borderLeft: "4px solid var(--warn, #f6c265)"}}>
+        <h2 style={{margin: 0, fontSize: 14}}>📚 加载参考素材失败</h2>
+        <p className="muted" style={{fontSize: 12, margin: "4px 0 0"}}>{err}</p>
+      </div>
+    );
+  }
+  if (!data || ((data.refs?.length ?? 0) === 0 && (data.comments?.length ?? 0) === 0 && (data.hooks?.length ?? 0) === 0)) {
+    return null;
+  }
+
+  // backend /api/rag/search 返回的字段名是 xhs schema (liked_count / image_urls /
+  // ...) — RagReferenceGrid 直接接受这个 shape (RagRef 类型与 API 一致)。
+  return (
+    <RagReferenceGrid
+      refs={data.refs || []}
+      comments={data.comments || []}
+      hooks={data.hooks || []}
+      title="📚 AI 决策这个方向时参考的真实素材"
+      subtitle={`按「${chosen?.name || "方向名"}」从你资源库里筛出的真实爆款帖。点封面 / 标题跳原帖 — 这些就是 AI 决策这个方向时实际读到的内容。`}
+      defaultOpen={true}
+    />
   );
 }
 
