@@ -471,7 +471,14 @@ def _empty_view_sql(view_name: str, canonical_cols: list[str]) -> str:
 def build_view_sql(mapping: dict[str, Any]) -> list[str]:
     """Always emits BOTH `notes` and `comments` views — real if the mapping
     has a source_table, else a 0-row placeholder. Downstream SQL never
-    crashes from a missing view."""
+    crashes from a missing view.
+
+    v0.64.1 ：FROM 一律加 `main.` 限定。如果用户的源 schema 里也有个叫
+    `notes` 的表（这正是 AI 适配最常 pick 的源），不限定时 SQLite 解析
+    `FROM notes` 优先去找 temp schema → 找到我们这个 view 自己 → 报错
+    "view notes is circularly defined"。`main.notes` 强制走真实表所在的
+    main schema，循环消失。
+    """
     statements: list[str] = []
 
     notes_spec = mapping.get("notes")
@@ -484,7 +491,7 @@ def build_view_sql(mapping: dict[str, Any]) -> list[str]:
                 f"DROP VIEW IF EXISTS temp.notes;\n"
                 f"CREATE TEMP VIEW notes AS\n"
                 f"SELECT\n  {sel}\n"
-                f"FROM {_quote_ident(table)}"
+                f"FROM main.{_quote_ident(table)}"
                 + (f"\n{where}" if where else "")
                 + ";"
             )
@@ -503,7 +510,7 @@ def build_view_sql(mapping: dict[str, Any]) -> list[str]:
                 f"DROP VIEW IF EXISTS temp.comments;\n"
                 f"CREATE TEMP VIEW comments AS\n"
                 f"SELECT\n  {sel}\n"
-                f"FROM {_quote_ident(table)}"
+                f"FROM main.{_quote_ident(table)}"
                 + (f"\n{where}" if where else "")
                 + ";"
             )

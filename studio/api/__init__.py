@@ -69,6 +69,42 @@ app.add_middleware(
 )
 
 
+# v0.64.1 ：未捕获异常的 JSON 化处理。FastAPI 默认对未处理异常返回 plain
+# text "Internal Server Error"，body 空 — 远端排查时只能盯着 Railway logs。
+# 这里把异常类名 + 短消息塞进 JSON body，前端的 humaniseError 会拿到一句
+# 人话错误。STUDIO_DEBUG_ERRORS=1 时额外带 traceback（用于自己调试，别在
+# 公开部署里开）。
+from fastapi import Request
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exc_handler(request: Request, exc: StarletteHTTPException):
+    # Pass HTTPException through unchanged — those have intentional status+detail.
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=getattr(exc, "headers", None) or {},
+    )
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exc_handler(request: Request, exc: Exception):
+    import traceback
+    payload: dict[str, Any] = {
+        "error_type": type(exc).__name__,
+        "error": str(exc)[:500] or repr(exc)[:500],
+        "path": str(request.url.path),
+    }
+    # 默认带 traceback ：这是个人工具，先看错再说 ；公开部署可以 STUDIO_DEBUG_ERRORS=0 关掉。
+    if os.environ.get("STUDIO_DEBUG_ERRORS", "1") != "0":
+        payload["traceback"] = traceback.format_exc()[-4000:]
+    # 同时 log 到 stderr — Railway 控制台可看，但这里 JSON 化也保证客户端拿到
+    import logging
+    logging.getLogger(__name__).exception("unhandled %s on %s", type(exc).__name__, request.url.path)
+    return JSONResponse(status_code=500, content=payload)
+
+
 # ---------------- health / status -----------------
 
 @app.get("/api/health")
