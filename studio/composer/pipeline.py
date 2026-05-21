@@ -1326,19 +1326,73 @@ async def _expand_inner(
                     # handles 5×600 char output cleanly and we want fewer
                     # round-trips. For 12 slots: 12/5 → 3 batches instead of 4.)
 
-    async def _draft_batch(slots_with_idx: list[tuple[int, TopicSlot]]) -> list[tuple[int, str, str | None]]:
+    # v0.63: cross-slot text-reuse prevention. Within one strategy cycle the
+    # batch drafter occasionally writes very similar openings / hook
+    # sentences across different slots (especially when title+angle overlap).
+    # We track every written slot's opening line and:
+    #   (a) feed already-used openings as a negative-prompt to retries
+    #   (b) detect collisions post-hoc and re-draft the duplicate slots
+    # Single-character-level signatures keep collision check cheap.
+    import re as _re
+
+    def _opening(text: str) -> str:
+        """First non-empty content line (the hook). What tends to repeat."""
+        for ln in (text or "").splitlines():
+            s = ln.strip()
+            if s and not s.startswith(("[", "【", "—", "-", "*", "#")):
+                return s[:80]
+        return (text or "").strip()[:80]
+
+    def _normalise(text: str) -> str:
+        """Cheap signature: drop whitespace/punctuation for fuzzy compare."""
+        return _re.sub(r"[\s　\.,，。!！？\?\-—·*…]+", "", text or "").lower()
+
+    def _avoid_block(used_openings: list[str], used_titles: list[str]) -> str:
+        if not used_openings and not used_titles:
+            return ""
+        out = ["\n\n⚠️ **同一策略周期内禁止复用文本（硬约束，不是建议）**："]
+        if used_openings:
+            out.append("已被其它 slot 用过的开头第一句 / hook（请用完全不同的句式 + 不同的具体细节）：")
+            out.extend(f"  - {o}" for o in used_openings[-20:])
+        if used_titles:
+            out.append("已写过的标题（请确保正文角度 / 例子 / 数字与这些篇都不一样）：")
+            out.extend(f"  - {t}" for t in used_titles[-20:])
+        return "\n".join(out)
+
+    # Cross-family fallback generator for the per-slot retry pass. When the
+    # primary drafter family keeps returning empty for a particular slot
+    # (e.g. tool_use schema quirks on a specific model), try the other
+    # major family before declaring the slot dead.
+    def _fallback_spec() -> str:
+        primary = drafter_spec.lower()
+        if "openai" in primary or "gpt" in primary:
+            return "deepseek"
+        if "deepseek" in primary:
+            return "openai:gpt-5"
+        return "openai:gpt-5"
+
+    try:
+        drafter_fallback = registry.build(_fallback_spec())[0]
+    except Exception:
+        drafter_fallback = None
+
+    async def _draft_batch(slots_with_idx: list[tuple[int, TopicSlot]],
+                            avoid_openings: list[str] | None = None,
+                            avoid_titles: list[str] | None = None,
+                           ) -> list[tuple[int, str, str | None]]:
         if not slots_with_idx:
             return []
         slot_blocks = "\n\n".join(_slot_block(i, s) for i, s in slots_with_idx)
+        avoid = _avoid_block(avoid_openings or [], avoid_titles or [])
         batch_prompt = (
             f"{direction_block}\n\n"
             f"【一次性给你 {len(slots_with_idx)} 个 slot，请同时为每个写 body_draft】\n\n"
             f"{slot_blocks}\n\n"
             f"按 schema 输出 ：drafts 数组，每项 {{ idx: <对应 slot 编号>, body_draft: <完整正文> }}。"
             f" 每个 body_draft 必须按它自己的 content_format 写（图文 vs 短视频脚本 vs 长视频章节差别很大）。"
-            f" 不同 slot 之间的口吻和内容要有差异化，不要互相重复。"
+            f" 不同 slot 之间的开头 hook、具体例子、数字、案例都要明显不同 — 不要换个词复述同一段。"
+            f"{avoid}"
         )
-        idx_to_slot = {i: s for i, s in slots_with_idx}
         last_err: str | None = None
         for attempt in (1, 2):
             try:
@@ -1367,6 +1421,42 @@ async def _expand_inner(
         # Both attempts failed/empty — return empty per-slot with the error.
         return [(i, "", last_err) for i, _ in slots_with_idx]
 
+    async def _draft_single(slot_idx: int, slot: TopicSlot,
+                             avoid_openings: list[str],
+                             avoid_titles: list[str],
+                             use_fallback: bool = False) -> tuple[int, str, str | None]:
+        """v0.63: single-slot retry — used when batch left a slot empty OR
+        when a duplicate hook needs re-drafting. Carries the avoid-list so
+        it can't repeat what was already written."""
+        gen = drafter_fallback if (use_fallback and drafter_fallback) else drafter_chosen
+        avoid = _avoid_block(avoid_openings, avoid_titles)
+        prompt = (
+            f"{direction_block}\n\n"
+            f"【请为下面这 1 个 slot 写完整 body_draft】\n\n"
+            f"{_slot_block(slot_idx, slot)}\n"
+            f"按 schema 输出 ：drafts 数组（长度 1）格式 {{ idx: {slot_idx}, body_draft: <完整正文> }}。"
+            f"{avoid}"
+        )
+        try:
+            r = await asyncio.wait_for(
+                _call_json(
+                    gen, prompts.BODY_DRAFTER_BATCH_SYSTEM, prompt,
+                    max_tokens=4000,
+                    tool_name="submit_body_draft_batch",
+                    schema=_BODY_DRAFT_BATCH_SCHEMA,
+                ),
+                timeout=120,
+            )
+            drafts = r.get("drafts") or []
+            for d in drafts:
+                if isinstance(d, dict):
+                    body = str(d.get("body_draft", "")).strip()
+                    if body:
+                        return (slot_idx, body, None)
+            return (slot_idx, "", "empty body_draft in single retry")
+        except Exception as e:
+            return (slot_idx, "", repr(e))
+
     # --- Body-drafter pool + Resourcer in parallel ---
     # Resourcer only reads titles/materials from the schedule, NOT body_drafts,
     # so it can run concurrently with the body-drafter pool. This saves ~20s
@@ -1394,9 +1484,7 @@ async def _expand_inner(
                     for item in saved["drafter"] if isinstance(item, dict)]
         if not schedule:
             return []
-        # Batch slots by BATCH_SIZE; run batches in parallel. For 12 slots
-        # with BATCH_SIZE=3 → 4 parallel calls instead of 12 (no rate-limit
-        # storms, smoother latency).
+        # Phase A: batch sweep. Batches run in parallel for latency.
         batches: list[list[tuple[int, TopicSlot]]] = []
         cur: list[tuple[int, TopicSlot]] = []
         for i, s in enumerate(schedule):
@@ -1405,13 +1493,69 @@ async def _expand_inner(
                 batches.append(cur); cur = []
         if cur: batches.append(cur)
         batch_results = await asyncio.gather(*[_draft_batch(b) for b in batches])
-        results: list[tuple[int, str, str | None]] = []
+        results: dict[int, tuple[str, str | None]] = {}
         for br in batch_results:
-            results.extend(br)
+            for idx, body, err in br:
+                results[idx] = (body, err)
+
+        # v0.63 Phase B: recover empty slots + de-duplicate similar openings.
+        # Two failure modes patched here:
+        #   1. Batch returned empty body_draft for some slot → re-draft it
+        #      single-slot, then cross-family fallback if still empty.
+        #   2. Two slots got nearly identical opening lines → keep the
+        #      longer draft, re-draft the other with the loser's signature
+        #      added to the avoid-list.
+        used_openings: list[str] = []
+        used_titles: list[str] = []
+        seen_sig_to_idx: dict[str, int] = {}
+        to_redraft: list[int] = []
+        for idx in sorted(results.keys()):
+            body, err = results[idx]
+            slot = schedule[idx] if 0 <= idx < len(schedule) else None
+            if slot and slot.title:
+                used_titles.append(slot.title)
+            if not body:
+                to_redraft.append(idx)
+                continue
+            sig = _normalise(_opening(body))
+            if sig and sig in seen_sig_to_idx:
+                other = seen_sig_to_idx[sig]
+                loser = idx if len(body) <= len(results[other][0]) else other
+                if loser not in to_redraft:
+                    to_redraft.append(loser)
+                if loser == other:
+                    seen_sig_to_idx[sig] = idx
+                    used_openings.append(_opening(body))
+                # Else: loser is `idx`, keep `other`'s opening in pool, don't
+                # add this one yet (will be added after re-draft).
+            else:
+                if sig:
+                    seen_sig_to_idx[sig] = idx
+                used_openings.append(_opening(body))
+
+        # Re-draft sequentially so each call sees the updated avoid-list.
+        # Two LLM-call ceiling per redraft (primary + cross-family fallback).
+        for idx in to_redraft:
+            if not (0 <= idx < len(schedule)):
+                continue
+            _check_cancel()
+            slot = schedule[idx]
+            _, body, err = await _draft_single(
+                idx, slot, used_openings, used_titles, use_fallback=False,
+            )
+            if not body and drafter_fallback is not None:
+                _, body, err = await _draft_single(
+                    idx, slot, used_openings, used_titles, use_fallback=True,
+                )
+            results[idx] = (body, err)
+            if body:
+                used_openings.append(_opening(body))
+
+        out_list = [(idx, body, err) for idx, (body, err) in sorted(results.items())]
         _save_checkpoint("drafter", [
-            {"idx": idx, "body": d, "err": e} for idx, d, e in results
+            {"idx": idx, "body": d, "err": e} for idx, d, e in out_list
         ])
-        return results
+        return out_list
 
     async def _resourcer_call():
         if "resourcer" in saved:

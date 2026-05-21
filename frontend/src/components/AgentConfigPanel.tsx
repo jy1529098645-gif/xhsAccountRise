@@ -10,6 +10,22 @@ export interface AgentSelection {
   skip: Record<AgentRoleId, boolean>;
 }
 
+const ROLE_KEYS: AgentRoleId[] = [
+  "strategist", "drafter", "critic", "refiner", "synthesizer", "planner",
+];
+
+// v0.63: detect which preset (if any) matches the current selection — so
+// the picker can display the chosen preset's name AFTER the user picks
+// one, instead of always showing the "切换预设…" placeholder.
+function matchPresetName(sel: AgentSelection): string {
+  const same = (a: string[], b: string[]) =>
+    a.length === b.length && [...a].sort().join("|") === [...b].sort().join("|");
+  for (const [name, p] of Object.entries(COST_PRESETS)) {
+    if (ROLE_KEYS.every(role => same(sel[role], p[role]))) return name;
+  }
+  return "";
+}
+
 export function defaultSelection(): AgentSelection {
   // v0.62.20: preset key renamed to「默认 (GPT-5 + DeepSeek ★ 推荐)」when
   // GPT-5 became the explicit default. Keep the explicit name lookup —
@@ -68,18 +84,36 @@ export default function AgentConfigPanel({
   }
   function reset() { onChange(defaultSelection()); }
 
+  const activePresetName = matchPresetName(selection);
+
   return (
     <div className="agent-config">
       <div className="agent-config-toolbar">
         <div className="muted" style={{ fontSize: 12 }}>
           为每个角色选 AI。多选的角色（起草团 / 审稿团）会并行调用每个勾上的家。
+          {/* v0.63: 用户改完后能看到「当前预设：xxx」或「自定义组合」，
+              不再以为自己没选成功（之前 select 一直显示"切换预设…"）。 */}
+          {activePresetName ? (
+            <span style={{ marginLeft: 6, color: "var(--primary)", fontWeight: 600 }}>
+              · 当前预设：{activePresetName}
+            </span>
+          ) : (
+            <span style={{ marginLeft: 6, color: "var(--muted)" }}>· 自定义组合</span>
+          )}
         </div>
         <div className="row" style={{ gap: 6 }}>
-          <select onChange={e => { if (e.target.value) { applyPreset(e.target.value); e.target.value = ""; } }}
-            defaultValue=""
-            style={{ fontSize: 12 }}>
-            <option value="" disabled>切换预设…</option>
-            {Object.keys(COST_PRESETS).map(name => <option key={name} value={name}>{name}</option>)}
+          <select
+            value={activePresetName}
+            onChange={e => { if (e.target.value) applyPreset(e.target.value); }}
+            style={{ fontSize: 12 }}
+            title={activePresetName || "切换预设"}
+          >
+            {!activePresetName && (
+              <option value="" disabled>切换预设…（当前为自定义）</option>
+            )}
+            {Object.keys(COST_PRESETS).map(name => (
+              <option key={name} value={name}>{name}</option>
+            ))}
           </select>
           <button className="ghost" onClick={reset} style={{ fontSize: 12 }}>↺ 恢复默认</button>
         </div>
