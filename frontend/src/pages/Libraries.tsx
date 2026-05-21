@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
+import { humaniseError } from "../errors";
 import { fmtBytes, fmtRelative, fmtTime, platformLabel } from "../format";
 import PlatformPill from "../components/PlatformPill";
 import { PLATFORM_GUIDES, GITHUB_REPO } from "../catalog";
@@ -120,7 +121,13 @@ function LibrariesImpl() {
   async function del(libId: string) {
     setWorking(libId); setErr(null);
     try { await api.deleteLibrary(libId); setInfo(`✓ 已删除 ${libId}`); await load(); }
-    catch (e: any) { setErr(e.message); }
+    catch (e: any) {
+      // v0.63.3 ：humaniseError 解析 FastAPI 的 {"detail":"..."} → 中文人话。
+      // 不再裸吐 JSON。常见原因 ：尝试删激活中的库 → 「先切换其他库再删」。
+      // eslint-disable-next-line no-console
+      console.error("[Libraries] delete failed", e);
+      setErr(humaniseError(e));
+    }
     finally { setWorking(null); }
   }
 

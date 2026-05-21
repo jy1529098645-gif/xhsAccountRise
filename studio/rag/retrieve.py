@@ -11,15 +11,24 @@ Strategy:
 Trigram tokenizer requires query tokens >= 3 chars. We auto-explode topics
 into 3-gram windows when they are >= 3 chars, and fall back to title LIKE
 substring search for shorter queries.
+
+v0.63.1: every public search call is wrapped to survive missing FTS / notes /
+comments tables — libraries imported from xlsx without `auto_build_fts=1`
+used to crash the StrategyRefsPanel with a 500. Now we degrade to LIKE on
+notes (or empty for comments) and let the panel render the data we do have.
 """
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
+import sqlite3
 from typing import Any
 
 from .. import config, db
+
+_log = logging.getLogger(__name__)
 
 
 _NON_TOKEN = re.compile(r"[\s,，、;；]+", flags=re.UNICODE)
@@ -136,40 +145,66 @@ def search_notes(
         # v0.63: pull raw_json too so we can extract image URLs for xhs
         # photo posts. Older crawler DBs may not have these columns —
         # feature-detect via PRAGMA so we don't 500 on legacy libs.
-        cols = {r["name"] for r in con.execute("PRAGMA table_info(notes)")}
+        try:
+            cols = {r["name"] for r in con.execute("PRAGMA table_info(notes)")}
+        except sqlite3.OperationalError:
+            cols = set()
+        if not cols:
+            # `notes` table not present in this library — nothing to search.
+            return []
         extra_cols_wanted = ["video_duration_ms", "share_count", "video_url"]
         if include_images and "raw_json" in cols:
             extra_cols_wanted.append("raw_json")
         extra_cols = [c for c in extra_cols_wanted if c in cols]
         extra_sql = (", " + ", ".join(f"n.{c}" for c in extra_cols)) if extra_cols else ""
         extra_sql_no_prefix = (", " + ", ".join(extra_cols)) if extra_cols else ""
-        if fts_q:
-            cur = con.execute(
-                "SELECT n.note_id, n.title, n.body, n.liked_count,"
-                "       n.collected_count, n.comment_count, n.image_count,"
-                "       n.tags_json, n.author_nickname, n.url"
-                f"{extra_sql},"
-                "       bm25(studio_fts_notes) AS bm"
-                " FROM studio_fts_notes"
-                " JOIN notes n ON n.note_id = studio_fts_notes.note_id"
-                " WHERE studio_fts_notes MATCH ?"
-                " ORDER BY bm LIMIT ?",
-                (fts_q, candidate_pool),
-            )
-            rows = [dict(r) for r in cur]
-        else:
-            # Topic too short for trigram; fall back to LIKE on title.
+        # v0.63.1: probe FTS table once. If missing (library imported via
+        # xlsx without `auto_build_fts=1`), skip straight to LIKE fallback so
+        # the panel still renders something useful.
+        has_fts = True
+        try:
+            con.execute("SELECT 1 FROM studio_fts_notes LIMIT 1")
+        except sqlite3.OperationalError:
+            has_fts = False
+        rows: list[dict[str, Any]] = []
+        if fts_q and has_fts:
+            try:
+                cur = con.execute(
+                    "SELECT n.note_id, n.title, n.body, n.liked_count,"
+                    "       n.collected_count, n.comment_count, n.image_count,"
+                    "       n.tags_json, n.author_nickname, n.url"
+                    f"{extra_sql},"
+                    "       bm25(studio_fts_notes) AS bm"
+                    " FROM studio_fts_notes"
+                    " JOIN notes n ON n.note_id = studio_fts_notes.note_id"
+                    " WHERE studio_fts_notes MATCH ?"
+                    " ORDER BY bm LIMIT ?",
+                    (fts_q, candidate_pool),
+                )
+                rows = [dict(r) for r in cur]
+            except sqlite3.OperationalError as exc:
+                # Malformed MATCH (rare — _fts_query scrubs operators) or
+                # the FTS table got dropped mid-session. Fall through to
+                # LIKE so the user gets *something*.
+                _log.warning("FTS MATCH failed for %r: %s — falling back to LIKE", topic, exc)
+        if not rows:
+            # Topic too short for trigram, no FTS table, or FTS returned 0:
+            # fall back to LIKE on title.
             like = f"%{topic}%"
-            cur = con.execute(
-                "SELECT note_id, title, body, liked_count, collected_count,"
-                "       comment_count, image_count, tags_json, author_nickname, url"
-                f"{extra_sql_no_prefix},"
-                "       0 AS bm"
-                " FROM notes WHERE title LIKE ? OR body LIKE ?"
-                " ORDER BY liked_count DESC LIMIT ?",
-                (like, like, candidate_pool),
-            )
-            rows = [dict(r) for r in cur]
+            try:
+                cur = con.execute(
+                    "SELECT note_id, title, body, liked_count, collected_count,"
+                    "       comment_count, image_count, tags_json, author_nickname, url"
+                    f"{extra_sql_no_prefix},"
+                    "       0 AS bm"
+                    " FROM notes WHERE title LIKE ? OR body LIKE ?"
+                    " ORDER BY liked_count DESC LIMIT ?",
+                    (like, like, candidate_pool),
+                )
+                rows = [dict(r) for r in cur]
+            except sqlite3.OperationalError as exc:
+                _log.warning("notes LIKE fallback failed: %s", exc)
+                return []
 
     if not rows:
         return []
@@ -199,17 +234,22 @@ def search_comments(topic: str, n: int = 15) -> list[dict[str, Any]]:
     fts_q = _fts_query(topic)
     if not fts_q:
         return []
-    with db.connect(read_only=True) as con:
-        cur = con.execute(
-            "SELECT c.comment_id, c.note_id, c.content, c.like_count,"
-            "       bm25(studio_fts_comments) AS bm"
-            " FROM studio_fts_comments"
-            " JOIN comments c ON c.comment_id = studio_fts_comments.comment_id"
-            " WHERE studio_fts_comments MATCH ?"
-            " ORDER BY bm LIMIT ?",
-            (fts_q, n * 3),
-        )
-        rows = [dict(r) for r in cur]
+    try:
+        with db.connect(read_only=True) as con:
+            cur = con.execute(
+                "SELECT c.comment_id, c.note_id, c.content, c.like_count,"
+                "       bm25(studio_fts_comments) AS bm"
+                " FROM studio_fts_comments"
+                " JOIN comments c ON c.comment_id = studio_fts_comments.comment_id"
+                " WHERE studio_fts_comments MATCH ?"
+                " ORDER BY bm LIMIT ?",
+                (fts_q, n * 3),
+            )
+            rows = [dict(r) for r in cur]
+    except sqlite3.OperationalError as exc:
+        # FTS or comments table missing for this lib — degrade gracefully.
+        _log.warning("search_comments unavailable: %s", exc)
+        return []
     # Prefer comments with higher likes.
     rows.sort(key=lambda r: (r["like_count"] or 0), reverse=True)
     return rows[:n]
@@ -218,18 +258,25 @@ def search_comments(topic: str, n: int = 15) -> list[dict[str, Any]]:
 def fetch_hook_summaries(top_n: int = 5) -> list[dict[str, Any]]:
     """Pull hook templates from the latest DNA artifact (W2 fallback) or
     from studio_hook_templates if any have been promoted."""
-    with db.connect(read_only=True) as con:
+    try:
+        con_cm = db.connect(read_only=True)
+    except sqlite3.OperationalError:
+        return []
+    with con_cm as con:
         # Prefer curated templates table if populated. Order by per-post payoff
         # (avg_likes), not sample size — we want the LLM to anchor on what
         # actually performs, not what's just frequent.
-        rows = list(
-            con.execute(
-                "SELECT category, pattern, example_note_ids_json, avg_likes,"
-                "       sample_size FROM studio_hook_templates WHERE active = 1"
-                " ORDER BY avg_likes DESC LIMIT ?",
-                (top_n,),
+        try:
+            rows = list(
+                con.execute(
+                    "SELECT category, pattern, example_note_ids_json, avg_likes,"
+                    "       sample_size FROM studio_hook_templates WHERE active = 1"
+                    " ORDER BY avg_likes DESC LIMIT ?",
+                    (top_n,),
+                )
             )
-        )
+        except sqlite3.OperationalError:
+            rows = []
         if rows:
             return [
                 {
@@ -242,10 +289,13 @@ def fetch_hook_summaries(top_n: int = 5) -> list[dict[str, Any]]:
                 for r in rows
             ]
         # Fallback: read latest DNA artifact.
-        row = con.execute(
-            "SELECT payload_json FROM studio_dna_artifacts"
-            " ORDER BY created_at DESC LIMIT 1"
-        ).fetchone()
+        try:
+            row = con.execute(
+                "SELECT payload_json FROM studio_dna_artifacts"
+                " ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+        except sqlite3.OperationalError:
+            row = None
     if not row:
         return []
     try:
@@ -271,8 +321,22 @@ def fetch_hook_summaries(top_n: int = 5) -> list[dict[str, Any]]:
 
 
 def retrieve_for_brief(topic: str, k_notes: int = 8, n_comments: int = 15) -> dict[str, Any]:
-    return {
-        "refs": search_notes(topic, k=k_notes),
-        "comments": search_comments(topic, n=n_comments),
-        "hooks": fetch_hook_summaries(),
-    }
+    """Triple-branch retrieve. v0.63.1: each branch is wrapped so a missing
+    table / malformed query in one of them doesn't 500 the others — the
+    StrategyRefsPanel still gets to render whatever data IS available."""
+    refs: list[dict[str, Any]] = []
+    comments: list[dict[str, Any]] = []
+    hooks: list[dict[str, Any]] = []
+    try:
+        refs = search_notes(topic, k=k_notes)
+    except Exception as exc:  # noqa: BLE001 — last-line defence
+        _log.exception("retrieve_for_brief.search_notes failed for %r: %s", topic, exc)
+    try:
+        comments = search_comments(topic, n=n_comments)
+    except Exception as exc:  # noqa: BLE001
+        _log.exception("retrieve_for_brief.search_comments failed for %r: %s", topic, exc)
+    try:
+        hooks = fetch_hook_summaries()
+    except Exception as exc:  # noqa: BLE001
+        _log.exception("retrieve_for_brief.fetch_hook_summaries failed: %s", exc)
+    return {"refs": refs, "comments": comments, "hooks": hooks}

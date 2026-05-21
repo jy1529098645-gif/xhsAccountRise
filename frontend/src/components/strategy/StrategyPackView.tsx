@@ -23,6 +23,22 @@ const INTENT_COLORS: Record<string, string> = {
   "拉新": "#fff5f5", "互动": "#fff8e6", "转化": "#fdecea", "沉淀": "#f0fafe",
 };
 
+/** v0.63.2 ：RAG 查询前端 sanitize — 复用于 StrategyRefsPanel + SlotRagPanel
+ *   ·  剥离 FTS5 操作符字符避免误命中
+ *   ·  截到 200 字（极长 positioning_statement 会扇出 100+ trigram）
+ *   ·  返回 { query, usable } ：usable=false 表示连一个 ≥3 字 token 都没有
+ *     （trigram 检索的最低要求），上游就不发请求。 */
+export function sanitizeRagQuery(raw: string): { query: string; usable: boolean } {
+  const cleaned = (raw || "")
+    .replace(/[()[\]{}"'`~!@#$%^&*+=\-./\\:;<>?|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 200);
+  if (!cleaned) return { query: "", usable: false };
+  const usable = cleaned.split(/\s+/).some(t => t.length >= 3);
+  return { query: cleaned, usable };
+}
+
 /** Top-level composite: a full pack viewer.
  *
  *  v0.62.5 ：onWriteClick 可选。Strategy 板块（/strategy/:pack_id）不传 ：
@@ -97,27 +113,59 @@ export default function StrategyPackView({pack, onWriteClick, compact = false, o
  * 让用户在「起号策略最后一步」就能看到 AI 用了哪些素材决策。
  *
  * 每个 pack 只查一次（按 pack_id 缓存于 useEffect 依赖）。
+ *
+ * v0.63.1: 错误处理强化 ——
+ *  · 后端 /api/rag/search 永远 200（empty list + `error` 字段），但失败时
+ *    UI 仍要让用户看到「为什么 0 条」+ 🔄 重试按钮。
+ *  · query 在前端先 sanitize ：截到 200 字、去掉 FTS5 不喜欢的符号、保证
+ *    至少有 3 个连续字符（trigram 最低要求）— 否则不发请求。
+ *  · 错误 banner 露出真实信息（console + UI），不再用 humaniseError 把
+ *    "Failed to fetch" 翻译成「后端没启动」这种 误导用户 的消息（之前因
+ *    为这一条用户来回报 bug 两次）。
  */
 function StrategyRefsPanel({pack}: {pack: StrategyPackDTO}) {
   const [data, setData] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
-  const chosen = pack.chosen_direction;
-  const query = chosen
-    ? `${chosen.name || ""} ${chosen.positioning_statement || ""}`.trim()
-    : "";
+  // Support either single (chosen_direction) or multi (chosen_directions[0]) shape.
+  const chosen = pack.chosen_direction
+    || (Array.isArray(pack.chosen_directions) && pack.chosen_directions[0])
+    || null;
+
+  // Build a clean query. Cap length, drop FTS5 operator chars, keep CJK +
+  // letters + digits + spaces. (sanitizeRagQuery is shared with SlotRagPanel.)
+  const { query, usable: queryUsable } = sanitizeRagQuery(
+    chosen ? `${chosen.name || ""} ${chosen.positioning_statement || ""}` : "",
+  );
 
   useEffect(() => {
-    if (!query) { setLoading(false); return; }
+    if (!queryUsable) { setLoading(false); return; }
     let cancel = false;
     setLoading(true); setErr(null);
     api.ragSearch(query, 8, 12)
-      .then((d: any) => { if (!cancel) setData(d); })
-      .catch((e: any) => { if (!cancel) setErr(humaniseError(e)); })
+      .then((d: any) => {
+        if (cancel) return;
+        // backend now returns 200 with `error` field on internal failures
+        if (d && d.error && (d.refs?.length ?? 0) === 0 && (d.comments?.length ?? 0) === 0) {
+          setErr(String(d.error));
+        }
+        setData(d);
+      })
+      .catch((e: any) => {
+        if (cancel) return;
+        // eslint-disable-next-line no-console
+        console.error("[StrategyRefsPanel] ragSearch failed", e);
+        // Show humanised + raw — humaniseError ignores it if it's just "Failed to fetch"
+        // (which sometimes lies — see errors.ts comment), so we append the raw message.
+        const human = humaniseError(e);
+        const raw = e?.message ?? String(e ?? "");
+        setErr(human === raw ? human : `${human}\n（原始 ：${raw.slice(0, 200)}）`);
+      })
       .finally(() => { if (!cancel) setLoading(false); });
     return () => { cancel = true; };
-  }, [pack.pack_id, query]);
+  }, [pack.pack_id, query, queryUsable, reloadKey]);
 
   if (loading) {
     return (
@@ -135,13 +183,45 @@ function StrategyRefsPanel({pack}: {pack: StrategyPackDTO}) {
   if (err) {
     return (
       <div className="card" style={{marginTop: 12, borderLeft: "4px solid var(--warn, #f6c265)"}}>
-        <h2 style={{margin: 0, fontSize: 14}}>📚 加载参考素材失败</h2>
-        <p className="muted" style={{fontSize: 12, margin: "4px 0 0"}}>{err}</p>
+        <div className="row" style={{justifyContent: "space-between", alignItems: "flex-start", gap: 8}}>
+          <div style={{flex: 1, minWidth: 0}}>
+            <h2 style={{margin: 0, fontSize: 14}}>📚 加载参考素材失败</h2>
+            <p className="muted" style={{fontSize: 12, margin: "4px 0 0", whiteSpace: "pre-wrap"}}>{err}</p>
+            <p className="muted" style={{fontSize: 11, margin: "6px 0 0"}}>
+              query ：<code style={{background: "#f6f6f6", padding: "1px 4px"}}>{query || "(空)"}</code>
+              {!queryUsable && query && " — 太短/无 ≥3 字 token，FTS 检索不到"}
+            </p>
+          </div>
+          <button className="ghost" onClick={() => setReloadKey(k => k + 1)}
+            style={{fontSize: 11.5, padding: "3px 10px", whiteSpace: "nowrap"}}>
+            🔄 重试
+          </button>
+        </div>
       </div>
     );
   }
-  if (!data || ((data.refs?.length ?? 0) === 0 && (data.comments?.length ?? 0) === 0 && (data.hooks?.length ?? 0) === 0)) {
+  if (!queryUsable) {
+    // No real query → no panel (rather than empty-state noise).
     return null;
+  }
+  if (!data || ((data.refs?.length ?? 0) === 0 && (data.comments?.length ?? 0) === 0 && (data.hooks?.length ?? 0) === 0)) {
+    return (
+      <div className="card" style={{marginTop: 12, borderLeft: "4px solid #ddd"}}>
+        <div className="row" style={{justifyContent: "space-between", alignItems: "flex-start", gap: 8}}>
+          <div style={{flex: 1}}>
+            <h2 style={{margin: 0, fontSize: 14}}>📚 资源库里这个方向没匹配到爆款</h2>
+            <p className="muted" style={{fontSize: 12, margin: "4px 0 0"}}>
+              query 「{query.slice(0, 60)}{query.length > 60 ? "…" : ""}」在当前资源库的 FTS 索引里 0 命中。
+              先去「资源库」里导入更多和这个方向相关的真实帖，AI 才能拿到参考。
+            </p>
+          </div>
+          <button className="ghost" onClick={() => setReloadKey(k => k + 1)}
+            style={{fontSize: 11.5, padding: "3px 10px", whiteSpace: "nowrap"}}>
+            🔄 重试
+          </button>
+        </div>
+      </div>
+    );
   }
 
   // backend /api/rag/search 返回的字段名是 xhs schema (liked_count / image_urls /
@@ -154,7 +234,137 @@ function StrategyRefsPanel({pack}: {pack: StrategyPackDTO}) {
       title="📚 AI 决策这个方向时参考的真实素材"
       subtitle={`按「${chosen?.name || "方向名"}」从你资源库里筛出的真实爆款帖。点封面 / 标题跳原帖 — 这些就是 AI 决策这个方向时实际读到的内容。`}
       defaultOpen={true}
+      rightSlot={
+        <button className="ghost" onClick={(e) => { e.preventDefault(); setReloadKey(k => k + 1); }}
+          style={{fontSize: 11.5, padding: "2px 8px"}}
+          title="重新去 RAG 拉一遍参考素材">🔄 刷新</button>
+      }
     />
+  );
+}
+
+/**
+ * v0.63.2 ：单条 schedule slot 的「这一篇的真实参考」面板。
+ *
+ * 用户要求 ：「起号策略最后一步时间线的产出 — 所有 schedule 都要有真实
+ * 的参考」。SchedulePanel 里每条 slot 展开时挂一个这个组件，按本 slot
+ * 自己的 title + angle + outline 去 RAG，独立于方向级别的 StrategyRefsPanel
+ * （那个是「为什么选这个方向」的证据，这个是「为什么 这一篇 这么写」的证据）。
+ *
+ * 懒加载 ：只有 slot 展开（父 isExp=true）时才挂载、才发请求。收起即卸载
+ * 状态；下次展开会重发请求（轻量代价换简单代码）。
+ *
+ * 数据少时静默隐藏（query 不可用 / 0 命中），不打扰用户。
+ */
+function SlotRagPanel({slot, slotIdx, packId, altIdx = -1}: {
+  slot: any;
+  slotIdx: number;
+  packId: string;
+  /** -1 = 主推荐；≥0 = alt index。用来给 query 缓存 key 区分。 */
+  altIdx?: number;
+}) {
+  const [data, setData] = useState<any | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  // 拼 query ：标题 + 角度 + outline 前两点 / mini_outline 前两点
+  const rawParts: string[] = [];
+  if (slot?.title) rawParts.push(String(slot.title));
+  if (slot?.angle) rawParts.push(String(slot.angle));
+  const outline = Array.isArray(slot?.outline) ? slot.outline
+    : Array.isArray(slot?.mini_outline) ? slot.mini_outline : [];
+  for (const o of outline.slice(0, 2)) if (o) rawParts.push(String(o));
+  const { query, usable: queryUsable } = sanitizeRagQuery(rawParts.join(" "));
+
+  useEffect(() => {
+    if (!queryUsable) { setLoading(false); return; }
+    let cancel = false;
+    setLoading(true); setErr(null);
+    // 单 slot 检索量比方向级小一些 ：6 refs + 8 comments 够用。
+    api.ragSearch(query, 6, 8)
+      .then((d: any) => {
+        if (cancel) return;
+        if (d && d.error && (d.refs?.length ?? 0) === 0 && (d.comments?.length ?? 0) === 0) {
+          setErr(String(d.error));
+        }
+        setData(d);
+      })
+      .catch((e: any) => {
+        if (cancel) return;
+        // eslint-disable-next-line no-console
+        console.error("[SlotRagPanel] ragSearch failed", e);
+        const human = humaniseError(e);
+        const raw = e?.message ?? String(e ?? "");
+        setErr(human === raw ? human : `${human}\n（原始 ：${raw.slice(0, 200)}）`);
+      })
+      .finally(() => { if (!cancel) setLoading(false); });
+    return () => { cancel = true; };
+  }, [packId, slotIdx, altIdx, query, queryUsable, reloadKey]);
+
+  // 没可用 query 就静默隐藏（极短标题等）
+  if (!queryUsable) return null;
+
+  if (loading) {
+    return (
+      <div className="muted" style={{
+        marginTop: 8, padding: "6px 10px", background: "#f8f8f8",
+        borderRadius: 4, fontSize: 11.5,
+      }}>
+        📚 给这一篇查参考素材中 …（按「{slot?.title ? String(slot.title).slice(0, 30) : "标题"}」检索资源库）
+      </div>
+    );
+  }
+  if (err) {
+    return (
+      <div style={{
+        marginTop: 8, padding: "6px 10px", background: "#fff8e6",
+        borderRadius: 4, fontSize: 11.5, color: "#8a5a00",
+        borderLeft: "3px solid #f6c265",
+      }}>
+        <div className="row" style={{justifyContent: "space-between", alignItems: "flex-start", gap: 8}}>
+          <div style={{flex: 1, minWidth: 0, whiteSpace: "pre-wrap"}}>
+            ⚠️ 这一篇没拉到参考素材：{err}
+          </div>
+          <button className="ghost" onClick={() => setReloadKey(k => k + 1)}
+            style={{fontSize: 11, padding: "2px 8px", whiteSpace: "nowrap"}}>
+            🔄 重试
+          </button>
+        </div>
+      </div>
+    );
+  }
+  const refsN = data?.refs?.length ?? 0;
+  const commentsN = data?.comments?.length ?? 0;
+  const hooksN = data?.hooks?.length ?? 0;
+  if (refsN === 0 && commentsN === 0 && hooksN === 0) {
+    return (
+      <div className="muted" style={{
+        marginTop: 8, padding: "6px 10px", background: "#fafafa",
+        borderRadius: 4, fontSize: 11.5, borderLeft: "3px solid #ddd",
+      }}>
+        📚 这一篇在你的资源库里没匹配到爆款 — 先去「资源库」补一些和「{slot?.title ? String(slot.title).slice(0, 24) : "标题"}」
+        相关的真实帖，再回来看。
+      </div>
+    );
+  }
+  return (
+    <div style={{marginTop: 8}}>
+      <RagReferenceGrid
+        refs={data.refs || []}
+        comments={data.comments || []}
+        hooks={data.hooks || []}
+        title="📚 这一篇 AI 看的真实参考"
+        subtitle="按这一篇 slot 的标题 + 角度从资源库里筛出的真实爆款。点封面 / 标题跳原帖 — 验证 AI 没瞎编。"
+        defaultOpen={true}
+        className="card"
+        rightSlot={
+          <button className="ghost" onClick={(e) => { e.preventDefault(); setReloadKey(k => k + 1); }}
+            style={{fontSize: 11, padding: "2px 8px"}}
+            title="重新去 RAG 拉一遍">🔄 刷新</button>
+        }
+      />
+    </div>
   );
 }
 
@@ -502,6 +712,17 @@ function SchedulePanel({pack, onWrite, onPackReload}: {
                         </button>
                       </div>
                     </div>
+                    {/* v0.63.2 ：这一篇 slot 自己的真实参考素材
+                        （封面 + 标题 + 互动数据 + tags + 用户原话评论 + Hook 模板）。
+                        占位 slot（待补 / AI 漏排）跳过 — 它们没有可用的标题 query。 */}
+                    {!placeholder && (
+                      <SlotRagPanel
+                        slot={s}
+                        slotIdx={i}
+                        packId={pack.pack_id}
+                        altIdx={-1}
+                      />
+                    )}
                     {/* Alternative options */}
                     {alts.map((alt: any, ai: number) => (
                       <div key={ai} style={{
@@ -542,6 +763,16 @@ function SchedulePanel({pack, onWrite, onPackReload}: {
                             ✍️ 写这个 →
                           </button>
                         </div>
+                        {/* v0.63.2 ：每个备选 alt 用自己 title + angle + mini_outline
+                            去 RAG。备选和主推荐的角度往往不同，参考素材也该不同。 */}
+                        {(alt.title || alt.angle) && (
+                          <SlotRagPanel
+                            slot={alt}
+                            slotIdx={i}
+                            packId={pack.pack_id}
+                            altIdx={ai}
+                          />
+                        )}
                       </div>
                     ))}
                   </div>

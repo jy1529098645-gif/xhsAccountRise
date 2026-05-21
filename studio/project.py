@@ -229,9 +229,9 @@ def update_meta(project_id: str, *, name: str | None = None,
 def archive(project_id: str) -> None:
     p = get_project(project_id)
     if not p:
-        raise ValueError(f"project not found: {project_id}")
+        raise ValueError(f"没找到这个项目（project_id={project_id}）— 可能已经被删过或刷新页面后再试。")
     if p.is_default:
-        raise RuntimeError("cannot archive the default project")
+        raise RuntimeError("🛑 默认项目不能归档。先把活跃数据切到默认项目再处理其它项目。")
     with _gconn() as con:
         con.execute(
             "UPDATE studio_projects SET archived=1, updated_at=? WHERE project_id=?",
@@ -248,9 +248,12 @@ def hard_delete(project_id: str) -> dict[str, int]:
     Refuses to delete the default project."""
     p = get_project(project_id)
     if not p:
-        raise ValueError(f"project not found: {project_id}")
+        raise ValueError(f"没找到这个项目（project_id={project_id}）— 可能已经被删过或刷新页面后再试。")
     if p.is_default:
-        raise RuntimeError("cannot delete the default project")
+        raise RuntimeError(
+            "🛑 「默认项目」不能删 — 它是其它项目的 fallback。"
+            "如果你想清空默认项目里的数据，去对应板块（出稿历史 / 起号策略）逐条删。"
+        )
 
     if active_project_id() == project_id:
         set_active("default")

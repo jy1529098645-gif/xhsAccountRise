@@ -254,7 +254,10 @@ def delete_project(project_id: str, hard: bool = False) -> dict[str, Any]:
     """Default behaviour: soft-archive (project hidden but data retained).
     Pass ?hard=true to PERMANENTLY remove the project + all its data
     (drafts, strategies, reports, performance, etc.). Refuses to remove
-    the default project. Returns per-table delete counts when hard."""
+    the default project. Returns per-table delete counts when hard.
+
+    v0.63.3 ：兜底 except 把任何意外（如 sqlite I/O / 文件锁定）都翻译成
+    400 + 可读 detail，避免前端 alert 弹一个空 / 500 内部错误堆栈。"""
     try:
         if hard:
             counts = project.hard_delete(project_id)
@@ -263,6 +266,14 @@ def delete_project(project_id: str, hard: bool = False) -> dict[str, Any]:
         return {"archived": project_id, "hard": False}
     except (ValueError, RuntimeError) as e:
         raise HTTPException(400, str(e))
+    except Exception as e:  # noqa: BLE001 — last-line defence
+        import logging
+        logging.getLogger(__name__).exception("delete_project failed: %s", e)
+        raise HTTPException(
+            500,
+            f"删除时发生意外错误：{type(e).__name__}: {str(e)[:200]}。"
+            f"如果反复出现 ：（1）关闭其它打开了这个项目的页签 （2）重启后端再试。",
+        )
 
 
 # ---------------- library ------------------------
@@ -650,10 +661,26 @@ def activate_library(lib_id: str) -> dict[str, str]:
 
 @app.delete("/api/libraries/{lib_id}")
 def delete_library(lib_id: str) -> dict[str, str]:
+    """v0.63.3 ：删除资源库。激活中的库直接 409 + 提示先切换；其它意外
+    （文件被占用 / 权限不足）走 500 + 可读 detail，让前端 alert 不再裸吐 JSON。"""
     try:
         library.delete(lib_id)
     except RuntimeError as e:
         raise HTTPException(409, str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(404, f"资源库目录不存在：{e}")
+    except PermissionError as e:
+        raise HTTPException(
+            403, f"删除被文件系统拒绝（可能是另一个进程占用了 .db）：{e}",
+        )
+    except Exception as e:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).exception("delete_library failed: %s", e)
+        raise HTTPException(
+            500,
+            f"删除资源库时发生意外错误：{type(e).__name__}: {str(e)[:200]}。"
+            f"如果反复出现 ：检查 data/libraries/{lib_id}/ 目录是否被其它程序锁定。",
+        )
     return {"deleted": lib_id}
 
 
@@ -735,7 +762,28 @@ def get_dna(version: str) -> dict[str, Any]:
 
 @app.get("/api/rag/search")
 def rag_search(q: str, k: int = 8, n: int = 15) -> dict[str, Any]:
-    return retrieve.retrieve_for_brief(q, k_notes=k, n_comments=n)
+    # v0.63.1: never 500 this endpoint. The StrategyRefsPanel + DraftDetail
+    # ProvenancePanel + Composer all call this on every render; if the
+    # active library is missing FTS / has no notes / has no DNA, return an
+    # empty payload + an `error` hint instead so the panel renders empty
+    # state instead of "加载参考素材失败".
+    q = (q or "").strip()
+    if not q:
+        return {"refs": [], "comments": [], "hooks": [],
+                "error": "query 为空（建议传 ≥3 字的方向名 + 定位语）"}
+    # Cap pathological queries — long positioning statements with no scrub
+    # targets used to fan-out into 100+ trigrams and tank FTS perf.
+    if len(q) > 200:
+        q = q[:200]
+    try:
+        out = retrieve.retrieve_for_brief(q, k_notes=k, n_comments=n)
+    except Exception as exc:  # noqa: BLE001 — last-line defence
+        return {"refs": [], "comments": [], "hooks": [],
+                "error": f"RAG 检索失败 ：{type(exc).__name__}: {exc}"[:300]}
+    out.setdefault("refs", [])
+    out.setdefault("comments", [])
+    out.setdefault("hooks", [])
+    return out
 
 
 # ---------------- compose ------------------------

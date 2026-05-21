@@ -505,7 +505,10 @@ def _ingest_stats(meta: LibraryMeta) -> LibraryMeta:
 
 def delete(lib_id: str) -> None:
     if lib_id == active_lib_id():
-        raise RuntimeError("cannot delete active library; switch first")
+        raise RuntimeError(
+            "🛑 这是当前激活中的资源库，先在「资源库」页点其它库的「切换为当前」"
+            "把它切下来再删 — 否则 RAG / DNA / 出稿都会指向空。"
+        )
     target = LIBRARIES_DIR / lib_id
     if target.exists():
         shutil.rmtree(target)

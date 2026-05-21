@@ -276,8 +276,16 @@ export const api = {
   deleteLibrary: async (libId: string) => {
     const backend = backendUrl();
     if (!backend) throw new HttpError(0, "删除库需要本地后端");
-    const res = await fetch(`${backend}/api/libraries/${libId}`, { method: "DELETE" });
-    if (!res.ok) throw new HttpError(res.status, await res.text());
+    const res = await fetch(`${backend}/api/libraries/${encodeURIComponent(libId)}`,
+      { method: "DELETE" });
+    if (!res.ok) {
+      // v0.63.3 ：把 FastAPI 返回的 {"detail":"..."} JSON 文本原封不动塞进
+      // HttpError.message — humaniseError() 会识别 status + JSON detail 并
+      // 翻译成易读的中文。之前直接 throw res.text() 让用户看到一坨 JSON
+      // ，是「删除失败 ：{\"detail\":\"...\"}」这种报错的根源。
+      const text = await res.text().catch(() => "");
+      throw new HttpError(res.status, `DELETE /api/libraries/${libId} → ${res.status}: ${text.slice(0, 400)}`);
+    }
     return res.json();
   },
   analyzeLibrary: (libId: string) => postJson<any>(`/api/libraries/${libId}/analyze`, {}),
@@ -390,15 +398,25 @@ export const api = {
   archiveProject: async (projectId: string) => {
     const backend = backendUrl();
     if (!backend) throw new HttpError(0, "需要本地后端");
-    const res = await fetch(`${backend}/api/projects/${projectId}`, { method: "DELETE" });
-    if (!res.ok) throw new HttpError(res.status, await res.text());
+    const res = await fetch(`${backend}/api/projects/${encodeURIComponent(projectId)}`,
+      { method: "DELETE" });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new HttpError(res.status, `DELETE /api/projects/${projectId} → ${res.status}: ${text.slice(0, 400)}`);
+    }
     return res.json();
   },
   hardDeleteProject: async (projectId: string) => {
     const backend = backendUrl();
     if (!backend) throw new HttpError(0, "需要本地后端");
-    const res = await fetch(`${backend}/api/projects/${projectId}?hard=true`, { method: "DELETE" });
-    if (!res.ok) throw new HttpError(res.status, await res.text());
+    // v0.63.3 ：和 deleteLibrary 一样，把 HTTP status + 完整 detail JSON
+    // 一起带回去给 humaniseError 解析，alert 框就能拿到中文人话版报错。
+    const res = await fetch(`${backend}/api/projects/${encodeURIComponent(projectId)}?hard=true`,
+      { method: "DELETE" });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new HttpError(res.status, `DELETE /api/projects/${projectId} → ${res.status}: ${text.slice(0, 400)}`);
+    }
     return res.json() as Promise<{ deleted: string; rows: Record<string, number> }>;
   },
   patchProject: async (projectId: string, body: { name?: string; description?: string; emoji?: string }) => {

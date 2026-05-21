@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { humaniseError } from "../errors";
 import type { ProjectDTO } from "../types";
 
 export default function ProjectPicker() {
@@ -88,7 +89,13 @@ export default function ProjectPicker() {
                       if (p.active) window.location.reload();
                       else await load();
                     } catch (err: any) {
-                      alert("删除失败 ：" + err.message);
+                      // v0.63.3 ：之前 alert 里直接吐 `err.message` — 后端返回的是
+                      // {"detail":"..."} 形式的 JSON 文本，用户看到一坨 JSON 误以为
+                      // 「报错不让我删除」。改用 humaniseError 解析 FastAPI 的 detail。
+                      // eslint-disable-next-line no-console
+                      console.error("[ProjectPicker] hardDelete failed", err);
+                      const friendly = humaniseError(err);
+                      alert("删除失败 ：\n" + friendly);
                     } finally { setBusy(false); }
                   }}
                 >✕</button>
