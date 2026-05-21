@@ -94,21 +94,97 @@ _IDEMPOTENT_ERR_PHRASES = (
 
 
 def _split_sql_statements(sql: str) -> list[str]:
-    """朴素按 ; 切 — 项目所有迁移都没在字符串里塞分号 ，足够用。
-    去掉纯注释 / 空白的块。"""
+    """SQL state-machine splitter — 只在"真正"的语句分隔 ; 处切。
+
+    v0.64.4 ：原版本 sql.split(";") 太笨 ，碰到 ; 在注释里（e.g.
+    "-- has 0..N items; pipelines read all"）或字符串里（e.g.
+    DEFAULT 'a;b'）会切错 ，下游 SQLite 报 incomplete input。
+
+    跟踪状态 ：line comment (--) / block comment (/* */) / single quote /
+    double quote。只在所有状态都 closed 的时候 ; 才是真分隔符。
+    """
     out: list[str] = []
-    for raw in sql.split(";"):
-        s = raw.strip()
-        if not s:
+    buf: list[str] = []
+    i = 0
+    n = len(sql)
+    # 状态机变量
+    in_line_comment = False  # 直到 \n
+    in_block_comment = False  # 直到 */
+    in_single = False         # 直到下一个 ' (sqlite 不支持 \' 转义 ， '' 是 escape)
+    in_double = False         # 直到下一个 "
+    while i < n:
+        c = sql[i]
+        nxt = sql[i + 1] if i + 1 < n else ""
+        if in_line_comment:
+            buf.append(c)
+            if c == "\n":
+                in_line_comment = False
+            i += 1
             continue
-        # 全是 -- 注释或空行的块跳过（不发给 sqlite）
-        non_comment = [
-            line for line in s.split("\n")
+        if in_block_comment:
+            buf.append(c)
+            if c == "*" and nxt == "/":
+                buf.append(nxt); i += 2; in_block_comment = False
+                continue
+            i += 1
+            continue
+        if in_single:
+            buf.append(c)
+            if c == "'":
+                # SQLite 转义 ：两个连续单引号 = 字面单引号 ，不结束字符串
+                if nxt == "'":
+                    buf.append(nxt); i += 2
+                    continue
+                in_single = False
+            i += 1
+            continue
+        if in_double:
+            buf.append(c)
+            if c == '"':
+                if nxt == '"':
+                    buf.append(nxt); i += 2
+                    continue
+                in_double = False
+            i += 1
+            continue
+        # 正常状态 ：看是否进入注释 / 字符串 ， 或者遇到分隔符 ;
+        if c == "-" and nxt == "-":
+            in_line_comment = True
+            buf.append(c); i += 1
+            continue
+        if c == "/" and nxt == "*":
+            in_block_comment = True
+            buf.append(c); buf.append(nxt); i += 2
+            continue
+        if c == "'":
+            in_single = True; buf.append(c); i += 1
+            continue
+        if c == '"':
+            in_double = True; buf.append(c); i += 1
+            continue
+        if c == ";":
+            stmt = "".join(buf).strip()
+            if stmt:
+                # 全是注释 / 空白的块跳过
+                meaningful = [
+                    line for line in stmt.split("\n")
+                    if line.strip() and not line.strip().startswith("--")
+                ]
+                if meaningful:
+                    out.append(stmt)
+            buf = []
+            i += 1
+            continue
+        buf.append(c); i += 1
+    # 尾巴 ：最后一条语句可能没 ;
+    tail = "".join(buf).strip()
+    if tail:
+        meaningful = [
+            line for line in tail.split("\n")
             if line.strip() and not line.strip().startswith("--")
         ]
-        if not non_comment:
-            continue
-        out.append(s)
+        if meaningful:
+            out.append(tail)
     return out
 
 
