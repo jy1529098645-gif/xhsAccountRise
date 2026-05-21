@@ -2371,6 +2371,47 @@ def product_context_set_active(
 
 
 # ============================================================================
+# v0.64 — Benchmark accounts: user marks N authors in current library as
+# "对标账号", RAG search boosts their notes in hybrid ranking.
+# ============================================================================
+
+from .. import benchmarks as _bench  # noqa: E402
+
+
+@app.get("/api/benchmarks")
+def benchmarks_list() -> dict[str, Any]:
+    return {"accounts": _bench.list_accounts()}
+
+
+class BenchmarkAddRequest(BaseModel):
+    account_id: str
+    nickname: str = ""
+    note: str = ""
+
+
+@app.post("/api/benchmarks")
+def benchmarks_add(req: BenchmarkAddRequest) -> dict[str, Any]:
+    try:
+        return _bench.add_account(req.account_id, req.nickname, req.note)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/benchmarks/{account_id}")
+def benchmarks_remove(account_id: str) -> dict[str, Any]:
+    removed = _bench.remove_account(account_id)
+    if not removed:
+        raise HTTPException(404, "account not in benchmark list")
+    return {"removed": True, "account_id": account_id}
+
+
+@app.get("/api/benchmarks/authors/search")
+def benchmarks_authors_search(q: str, limit: int = 20) -> dict[str, Any]:
+    limit = max(1, min(50, int(limit or 20)))
+    return {"authors": _bench.search_authors(q, limit=limit)}
+
+
+# ============================================================================
 # v0.54 — Static frontend serving for one-image cloud deploys.
 #
 # When the container is built via the repo's Dockerfile, the React app's

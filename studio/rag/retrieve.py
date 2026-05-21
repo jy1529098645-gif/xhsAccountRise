@@ -26,7 +26,7 @@ import re
 import sqlite3
 from typing import Any
 
-from .. import config, db
+from .. import benchmarks, config, db
 
 _log = logging.getLogger(__name__)
 
@@ -163,7 +163,7 @@ def search_notes(
                 cur = con.execute(
                     "SELECT n.note_id, n.title, n.body, n.liked_count,"
                     "       n.collected_count, n.comment_count, n.image_count,"
-                    "       n.tags_json, n.author_nickname, n.url"
+                    "       n.tags_json, n.author_id, n.author_nickname, n.url"
                     f"{extra_sql},"
                     "       bm25(studio_fts_notes) AS bm"
                     " FROM studio_fts_notes"
@@ -182,7 +182,8 @@ def search_notes(
             try:
                 cur = con.execute(
                     "SELECT note_id, title, body, liked_count, collected_count,"
-                    "       comment_count, image_count, tags_json, author_nickname, url"
+                    "       comment_count, image_count, tags_json, author_id,"
+                    "       author_nickname, url"
                     f"{extra_sql_no_prefix},"
                     "       0 AS bm"
                     " FROM notes WHERE title LIKE ? OR body LIKE ?"
@@ -206,6 +207,11 @@ def search_notes(
             r.pop("raw_json", None)
         else:
             r["image_urls"] = []
+    # v0.64 ：对标账号 boost — 一次性拿 active id 集合（表不在就空集，下面
+    # 的 in 运算自动退化为全部 False，零开销）。bonus 加在 hybrid_score 上，
+    # 0.5 量级 = 比"engagement 满分"还重一点，但相关度趋零的帖子仍排不上来。
+    bench_ids = benchmarks.get_active_ids()
+    benchmark_bonus = 0.5
     bms = [r["bm"] for r in rows]
     bm_min, bm_max = min(bms), max(bms)
     bm_span = max(1e-6, bm_max - bm_min)
@@ -213,7 +219,11 @@ def search_notes(
         # bm25 is negative; lower = better. Normalise to [0,1] where 1 = best.
         relevance = (bm_max - r["bm"]) / bm_span if bm_max != bm_min else 1.0
         engagement = math.log10((r["liked_count"] or 0) + 1) / 6.0  # 100K → ~0.83
-        r["hybrid_score"] = relevance + likes_weight * engagement
+        is_bench = bool(r.get("author_id") and r["author_id"] in bench_ids)
+        r["is_benchmark"] = is_bench
+        r["hybrid_score"] = relevance + likes_weight * engagement + (
+            benchmark_bonus if is_bench else 0.0
+        )
     rows.sort(key=lambda r: r["hybrid_score"], reverse=True)
     return rows[:k]
 

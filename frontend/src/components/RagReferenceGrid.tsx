@@ -80,7 +80,15 @@ export default function RagReferenceGrid({
               return (
                 <div key={r.note_id || idx} style={{
                   padding: 0, borderRadius: 8, overflow: "hidden",
-                  background: "#fff", border: "1px solid #ececec",
+                  background: "#fff",
+                  // v0.64 ：对标账号的笔记换金色 border + 浅金背景，让用户
+                  // 一眼看出"AI 用了我标的对标账号"。
+                  border: r.is_benchmark
+                    ? "2px solid #d4a017"
+                    : "1px solid #ececec",
+                  boxShadow: r.is_benchmark
+                    ? "0 0 0 1px rgba(212,160,23,0.15)"
+                    : undefined,
                   display: "flex", flexDirection: "column",
                 }}>
                   {cover ? (
@@ -125,6 +133,12 @@ export default function RagReferenceGrid({
                       <span className="tag-pill" style={{background: "var(--primary-soft)", color: "var(--primary)", fontSize: 10.5}}>
                         #{idx + 1}
                       </span>
+                      {r.is_benchmark && (
+                        <span className="tag-pill" title="这条来自你标的对标账号 — RAG 排序时被加权了"
+                          style={{background: "#fff3d6", color: "#9c6c00", fontSize: 10.5, fontWeight: 600}}>
+                          🎯 对标
+                        </span>
+                      )}
                       {(r.duration_sec ?? 0) > 0 ? (
                         <span className="tag-pill" style={{fontSize: 10.5}}>▶︎ {r.duration_sec}s</span>
                       ) : (r.image_count ?? 0) > 0 ? (

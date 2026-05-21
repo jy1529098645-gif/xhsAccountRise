@@ -192,6 +192,7 @@ export interface RagRef {
   duration_sec?: number;
   share_count?: number;
   image_count?: number;
+  author_id?: string;
   author_nickname?: string;
   tags?: string[];
   // v0.63: actual image URLs extracted from crawler raw_json so the
@@ -199,6 +200,9 @@ export interface RagRef {
   // cover_image = image_urls[0] (convenience).
   image_urls?: string[];
   cover_image?: string;
+  // v0.64: true when this note's author is in the user's 对标账号 list.
+  // RagReferenceGrid badges it so the user sees "AI 优先用了你标的对标账号"。
+  is_benchmark?: boolean;
 }
 
 export interface RagComment {
@@ -220,6 +224,30 @@ export interface RagSearchResult {
   comments: RagComment[];
   hooks: RagHook[];
   error?: string;
+}
+
+// v0.64 — 对标账号
+export interface BenchmarkAccountDTO {
+  account_id: string;
+  nickname: string;
+  note: string;
+  added_at: number;
+  note_count: number;
+  top_likes: number;
+  top_title: string;
+  top_url: string;
+  // true 表示这个 account_id 在当前 library 里已经一篇笔记都没有了 ——
+  // 多半是切了 library 或者老爬虫 dump 被删，UI 给个灰色提示。
+  missing_in_library: boolean;
+}
+
+export interface BenchmarkAuthorSearchResult {
+  author_id: string;
+  author_nickname: string;
+  note_count: number;
+  top_likes: number;
+  total_likes: number;
+  already_added: boolean;
 }
 
 export interface VariantChild {

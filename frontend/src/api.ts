@@ -6,6 +6,7 @@ import type {
   ComplianceCheck, ComplianceHit, PromptProposal,
   ProductContextDTO, GoalTypeDTO,
   RagSearchResult,
+  BenchmarkAccountDTO, BenchmarkAuthorSearchResult,
 } from "./types";
 
 const STATIC_PLATFORMS: Platform[] = [
@@ -297,6 +298,26 @@ export const api = {
   // RAG -----------------
   ragSearch: (q: string, k = 6, n = 10) =>
     getJson<RagSearchResult>(`/api/rag/search?q=${encodeURIComponent(q)}&k=${k}&n=${n}`),
+
+  // 对标账号 (v0.64) -----------------
+  benchmarksList: () =>
+    getJson<{ accounts: BenchmarkAccountDTO[] }>("/api/benchmarks"),
+  benchmarksAdd: (account_id: string, nickname = "", note = "") =>
+    postJson<{ account_id: string; nickname: string; note: string }>(
+      "/api/benchmarks", { account_id, nickname, note },
+    ),
+  benchmarksRemove: async (accountId: string) => {
+    const backend = backendUrl();
+    if (!backend) throw new HttpError(0, "需要本地后端");
+    const path = `/api/benchmarks/${encodeURIComponent(accountId)}`;
+    const res = await fetch(`${backend}${path}`, { method: "DELETE" });
+    if (!res.ok) await throwHttpError("DELETE", path, res);
+    return res.json() as Promise<{ removed: boolean; account_id: string }>;
+  },
+  benchmarksSearchAuthors: (q: string, limit = 20) =>
+    getJson<{ authors: BenchmarkAuthorSearchResult[] }>(
+      `/api/benchmarks/authors/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+    ),
 
   // Drafts -----------------
   drafts: () => getJson<DraftListItem[]>("/api/drafts", "drafts.json"),

@@ -20,6 +20,7 @@ import IntegratedReport from "./pages/IntegratedReport";
 import Reports from "./pages/Reports";
 import Retrospective from "./pages/Retrospective";
 import QuickGenerate from "./pages/QuickGenerate";
+import Benchmarks from "./pages/Benchmarks";
 
 // Re-keys the ErrorBoundary by pathname so a crashed page auto-resets
 // the boundary when the user navigates somewhere else.
@@ -90,6 +91,8 @@ export default function App() {
             放在复盘前面 — 用户写完主流程后还想临时来一篇时最顺手。 */}
         <NavLink to="/quick" className={({isActive}) => isActive ? "active" : ""}>⚡ 快速生成 <span style={{fontSize: 10, color: "var(--muted)"}}>可选</span></NavLink>
         <NavLink to="/retrospective" className={({isActive}) => isActive ? "active" : ""}>📊 复盘 <span style={{fontSize: 10, color: "var(--muted)"}}>第 4 步</span></NavLink>
+        {/* v0.64 ：对标账号 — 从已上传 library 里挑账号 ，retrieve 时加权 */}
+        <NavLink to="/benchmarks" className={({isActive}) => isActive ? "active" : ""}>🎯 对标账号</NavLink>
         <NavLink to="/dashboard" className={({isActive}) => isActive ? "active" : ""}>🗂️ 数据总览</NavLink>
         <RunningJobsIndicator />
         <NavLink to="/analysis" className={({isActive}) => isActive ? "active" : ""}>🧬 爆款分析（粗粒度）</NavLink>
@@ -124,6 +127,7 @@ export default function App() {
             <Route path="/composer" element={<Composer />} />
             <Route path="/quick" element={<QuickGenerate />} />
             <Route path="/retrospective" element={<Retrospective />} />
+            <Route path="/benchmarks" element={<Benchmarks />} />
             <Route path="/drafts" element={<Drafts />} />
             <Route path="/drafts/:id" element={<DraftDetail />} />
             {/* v0.54: /libraries is folded into /settings#libraries.
