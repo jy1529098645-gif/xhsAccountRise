@@ -72,12 +72,63 @@ def _applied_migrations(con: sqlite3.Connection) -> set[str]:
     return {r[0] for r in con.execute("SELECT name FROM studio_migrations")}
 
 
+# v0.64.2 ：用户报告 Railway 死循环 — migration 013 的 ALTER TABLE 上次成功了
+# 但 studio_migrations 那行 INSERT 没落库（Railway 中途重启 / volume 部分恢复 /
+# executescript 边界），后续启动一直重 ALTER → "duplicate column" → migrate 永
+# 远不过 → uvicorn 永远不启 → healthcheck 不通 → Railway 拒收。
+#
+# 防御方案 ：所有 .sql 迁移逐句执行 ，对幂等性错误（duplicate column / table
+# already exists / index already exists）吞掉日志继续 — 而不是让单条失败 rollback
+# 整个迁移。这只放过"重复 DDL"，其它错误照常 raise 让 migrate 失败可见。
+_IDEMPOTENT_ERR_PHRASES = (
+    "duplicate column",
+    "already exists",      # CREATE TABLE / VIEW / INDEX 重复
+)
+
+
+def _split_sql_statements(sql: str) -> list[str]:
+    """朴素按 ; 切 — 项目所有迁移都没在字符串里塞分号 ，足够用。
+    去掉纯注释 / 空白的块。"""
+    out: list[str] = []
+    for raw in sql.split(";"):
+        s = raw.strip()
+        if not s:
+            continue
+        # 全是 -- 注释或空行的块跳过（不发给 sqlite）
+        non_comment = [
+            line for line in s.split("\n")
+            if line.strip() and not line.strip().startswith("--")
+        ]
+        if not non_comment:
+            continue
+        out.append(s)
+    return out
+
+
+def _execute_sql_tolerant(con: sqlite3.Connection, sql: str, migration_name: str) -> None:
+    """逐句执行 .sql 迁移 ，吞掉幂等错误。"""
+    for stmt in _split_sql_statements(sql):
+        try:
+            con.execute(stmt)
+        except sqlite3.OperationalError as e:
+            msg = str(e).lower()
+            if any(p in msg for p in _IDEMPOTENT_ERR_PHRASES):
+                # 这一句之前跑过了 — 安静继续
+                print(f"[migrate] {migration_name} ：跳过已应用语句 ({e})")
+                continue
+            raise
+
+
 def apply_migrations(verbose: bool = True) -> list[str]:
     """Apply pending migrations from studio/migrations/*.{sql,py}.
 
     v0.62.10 ：支持 .py 迁移 — 为了写出 idempotent 的复杂迁移（e.g. 014
     需要根据当前 schema 状态决定 ALTER / COPY / DROP，纯 SQL 表达不了）。
     .py 文件必须有 `def up(con):` 函数。
+
+    v0.64.2 ：.sql 也走 idempotent — 逐句执行 + 吞 duplicate column / already
+    exists ，避免 Railway 等环境下 studio_migrations 跟实际 schema 不同步时
+    永久 500。
     """
     applied_now: list[str] = []
     files = sorted(
@@ -92,7 +143,7 @@ def apply_migrations(verbose: bool = True) -> list[str]:
                 continue
             if f.suffix == ".sql":
                 sql = f.read_text(encoding="utf-8")
-                con.executescript(sql)
+                _execute_sql_tolerant(con, sql, f.name)
             elif f.suffix == ".py":
                 import importlib.util
                 spec = importlib.util.spec_from_file_location(
