@@ -599,6 +599,13 @@ export const api = {
   // v0.59: 起号目标分类（GoalPicker step 用）
   listStrategyGoals: () =>
     getJson<GoalTypeDTO[]>("/api/strategy/goals").catch(() => []),
+  // v0.63: 用户在时间线上点占位 slot 的「✍️ 写这个」时调这个 endpoint —
+  // 后端用 scheduler LLM 重生成 1 个 slot 替换占位，自动跨家 fallback。
+  regenerateSlot: (packId: string, slotIdx: number, opts?: { scheduler_spec?: string }) =>
+    postJson<{ slot_idx: number; slot: any }>(
+      `/api/strategy/${packId}/regenerate_slot`,
+      { slot_idx: slotIdx, ...opts },
+    ),
   listStrategies: () => getJson<StrategyListItem[]>("/api/strategy", "strategies.json").catch(() => [] as StrategyListItem[]),
   getStrategy: (packId: string) => getJson<StrategyDetail>(`/api/strategy/${packId}`),
   deleteStrategy: async (packId: string) => {

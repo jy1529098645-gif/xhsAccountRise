@@ -246,7 +246,35 @@ function SchedulePanel({pack, onWrite}: {
 }) {
   const [expanded, setExpanded] = useState<number | null>(null);
   const [collapsed, setCollapsed] = useState(false);
-  const schedule = Array.isArray(pack.schedule) ? pack.schedule : [];
+  // v0.63: 本地 schedule 副本支持单 slot 重生成后 inline 替换。每次 pack
+  // 变化时同步；regenerate_slot 成功后只更新这里，无需重新拉整个 pack。
+  const initialSchedule = Array.isArray(pack.schedule) ? pack.schedule : [];
+  const [schedule, setSchedule] = useState<any[]>(initialSchedule);
+  useEffect(() => { setSchedule(Array.isArray(pack.schedule) ? pack.schedule : []); }, [pack]);
+  const [regenIdx, setRegenIdx] = useState<number | null>(null);
+  const [regenErr, setRegenErr] = useState<string | null>(null);
+
+  // v0.63: 判断一个 slot 是不是 gap-fill 占位（AI 实际没排出来的占位行）
+  function isPlaceholder(s: any): boolean {
+    const t = String(s?.title || "");
+    return t.includes("AI 漏排") || t.startsWith("待补 #") || t.includes("请用 ✍️");
+  }
+
+  async function regen(i: number) {
+    setRegenIdx(i); setRegenErr(null);
+    try {
+      const r = await api.regenerateSlot(pack.pack_id, i);
+      setSchedule(prev => {
+        const next = [...prev];
+        next[i] = r.slot;
+        return next;
+      });
+    } catch (e: any) {
+      setRegenErr(humaniseError(e));
+    } finally {
+      setRegenIdx(null);
+    }
+  }
   const dirName = (pack.chosen_direction && pack.chosen_direction.name) || "";
   const cycleStart = pack.input.cycle_start_date || "";
   return (
@@ -273,22 +301,36 @@ function SchedulePanel({pack, onWrite}: {
               这份 pack 的 schedule 为空，可能上一次 expand 出错。回出稿板块重跑。
             </div>
           )}
+          {regenErr && (
+            <div className="banner danger" onClick={() => setRegenErr(null)}
+              style={{fontSize: 12, marginBottom: 4, cursor: "pointer"}}>
+              重生成失败：{regenErr}（点关闭）
+            </div>
+          )}
           {schedule.map((s: any, i: number) => {
             const isExp = expanded === i;
             const dt = slotDate(cycleStart, s.week, s.day_of_week);
             const dateLabel = dt ? dt.display : `W${s.week}·D${s.day_of_week}`;
             const alts = Array.isArray(s.alternative_versions) ? s.alternative_versions : [];
+            // v0.63: placeholder slot = AI scheduler 没排出来时填的占位行
+            const placeholder = isPlaceholder(s);
+            const isRegenerating = regenIdx === i;
             return (
               <div key={i} style={{
-                border: isExp ? "1px solid var(--primary)" : "1px solid #eee",
+                border: placeholder
+                  ? "1px solid #f6c265"
+                  : (isExp ? "1px solid var(--primary)" : "1px solid #eee"),
                 borderRadius: 6,
-                background: isExp ? "var(--primary-soft)" : "#fff",
+                background: placeholder
+                  ? "#fffbf2"
+                  : (isExp ? "var(--primary-soft)" : "#fff"),
               }}>
                 <div className="row" style={{
                   padding: "6px 10px", gap: 8, alignItems: "center", cursor: "pointer",
                 }} onClick={() => setExpanded(isExp ? null : i)}>
                   <span style={{
-                    fontSize: 11, padding: "1px 6px", background: "var(--primary)",
+                    fontSize: 11, padding: "1px 6px",
+                    background: placeholder ? "#b06200" : "var(--primary)",
                     color: "#fff", borderRadius: 4, fontWeight: 600, flexShrink: 0,
                   }}>#{i + 1}</span>
                   <span className="muted" style={{fontSize: 11, flexShrink: 0, minWidth: 80}}>
@@ -300,17 +342,33 @@ function SchedulePanel({pack, onWrite}: {
                   <span style={{
                     flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600,
                     overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                  }}>{s.title || "(无标题)"}</span>
-                  {s.angle && <span className="tag-pill" style={{fontSize: 10.5, flexShrink: 0}}>{s.angle}</span>}
-                  {s.content_format && (
+                    color: placeholder ? "#b06200" : undefined,
+                  }}>
+                    {placeholder ? "⚠️ AI 漏排 · 点 🔁 让 AI 重新出这一篇" : (s.title || "(无标题)")}
+                  </span>
+                  {!placeholder && s.angle && (
+                    <span className="tag-pill" style={{fontSize: 10.5, flexShrink: 0}}>{s.angle}</span>
+                  )}
+                  {!placeholder && s.content_format && (
                     <span className="tag-pill" style={{fontSize: 10.5, flexShrink: 0}}>
                       {s.content_format}
                     </span>
                   )}
-                  {alts.length > 0 && (
+                  {!placeholder && alts.length > 0 && (
                     <span className="muted" style={{fontSize: 10.5, flexShrink: 0}}>
                       + {alts.length} 备选
                     </span>
+                  )}
+                  {placeholder && (
+                    <button onClick={(e) => { e.stopPropagation(); regen(i); }}
+                      disabled={isRegenerating}
+                      style={{
+                        fontSize: 11.5, padding: "3px 10px", flexShrink: 0,
+                        background: "#fff", border: "1px solid #b06200",
+                        color: "#b06200", fontWeight: 600,
+                      }}>
+                      {isRegenerating ? "🤖 重生成中…" : "🔁 让 AI 重新出"}
+                    </button>
                   )}
                   <span style={{fontSize: 11, color: "var(--muted)", flexShrink: 0}}>{isExp ? "▴" : "▾"}</span>
                 </div>

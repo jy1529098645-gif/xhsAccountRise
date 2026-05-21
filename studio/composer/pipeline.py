@@ -1127,9 +1127,54 @@ async def _expand_inner(
             f"严格按 system schema 输出 ：schedule 数组长度必须 = {missing}，"
             f"weekly_themes 可留空 []。"
         )
+
+        async def _gap_fill_with_fallback(user_payload: str) -> list[Any]:
+            """v0.63 ：3-level gap-fill so 'AI 漏排' placeholder is RARELY seen.
+            L1 = primary scheduler retry. L2 = same scheduler with shorter
+            prompt (often token-pressure related). L3 = cross-family LLM
+            (DeepSeek if primary was OpenAI, OpenAI if primary was DeepSeek).
+            Returns the first non-empty schedule list."""
+            # L1: primary
+            try:
+                r = await _try_scheduler(user_payload, max_tokens=10000)
+                if r.get("schedule"):
+                    return r["schedule"]
+            except Exception:
+                pass
+            # L2: minimal prompt (less context, less token pressure)
+            try:
+                minimal = (
+                    f"【方向】{chosen.name}\n"
+                    f"【已有 {len(schedule)} 篇标题】\n" +
+                    "\n".join(f"  - {s.title}" for s in schedule[-8:]) + "\n\n"
+                    f"请补出 **正好 {missing} 篇** 不同角度的标题 + 大纲。"
+                    f"weekly_themes 可空。"
+                )
+                r = await _try_scheduler(minimal, max_tokens=8000)
+                if r.get("schedule"):
+                    return r["schedule"]
+            except Exception:
+                pass
+            # L3: cross-family fallback
+            primary = scheduler_spec.lower()
+            fb_spec = ("deepseek" if ("openai" in primary or "gpt" in primary)
+                       else "openai:gpt-4o")
+            try:
+                fb_gen = registry.build(fb_spec)[0]
+                r = await _call_json(
+                    fb_gen, prompts.SCHEDULER_SYSTEM, user_payload,
+                    max_tokens=10000, tool_name="submit_schedule",
+                    schema=_SCHEDULE_SCHEMA,
+                )
+                if r.get("schedule"):
+                    return r["schedule"]
+            except Exception:
+                pass
+            return []
+
         try:
-            gap_resp = await _try_scheduler(gap_user, max_tokens=10000)
-            new_raw = gap_resp.get("schedule") or []
+            new_raw = await _gap_fill_with_fallback(gap_user)
+            gap_resp = {"schedule": new_raw}
             for _raw in new_raw[:missing]:
                 s = _to_slot_dict(_raw)
                 schedule.append(TopicSlot(
@@ -1450,6 +1495,123 @@ async def _expand_inner(
         "topic_candidate_count": len(all_topics),
         "elapsed_s": elapsed_total,
     }
+
+
+async def regenerate_slot(
+    pack_id: str,
+    slot_idx: int,
+    scheduler_spec: str = "openai:gpt-4o",
+) -> dict[str, Any]:
+    """v0.63 ：用户在 UI 上点「✍️ 写这个」时调这个 endpoint 替换占位 slot。
+
+    用 scheduler LLM 再单独生成 1 个 slot 来替换 schedule[slot_idx]，
+    避免和已有 slot 的标题/角度重复（传现有 slot 标题作为 negative
+    constraint）。如果主家 LLM 出 0 个 slot，自动跨家 fallback。
+
+    持久化 ：更新 studio_strategies.pack_json 里 schedule[slot_idx]。
+    返回 {slot_idx, title, outline, angle, ...} 让前端立刻渲染。
+    """
+    db.apply_migrations(verbose=False)
+    with db.connect(read_only=True) as con:
+        # v0.62 renamed studio_strategies → studio_composer_packs.
+        row = con.execute(
+            "SELECT pack_json, platform FROM studio_composer_packs WHERE pack_id = ?",
+            (pack_id,),
+        ).fetchone()
+    if not row or not row["pack_json"]:
+        raise LookupError(f"strategy pack not found or not expanded yet: {pack_id}")
+    pack_data = json.loads(row["pack_json"])
+    schedule = pack_data.get("schedule") or []
+    if slot_idx < 0 or slot_idx >= len(schedule):
+        raise IndexError(f"slot_idx out of range: {slot_idx}")
+
+    chosen = pack_data.get("chosen_direction") or {}
+    platform = row["platform"] or pack_data.get("platform") or "xiaohongshu"
+    inp_data = pack_data.get("input") or {}
+    cycle_weeks = int(inp_data.get("cycle_weeks") or 4)
+    posts_per_week = int(inp_data.get("posts_per_week") or 3)
+
+    target_slot = schedule[slot_idx]
+    avoid_titles = [str(s.get("title") or "") for i, s in enumerate(schedule)
+                    if i != slot_idx and s.get("title")]
+    avoid_block = (
+        "\n【已有标题（请勿重复 / 角度也别撞）】\n"
+        + "\n".join(f"  - {t}" for t in avoid_titles[:30])
+        if avoid_titles else ""
+    )
+
+    user_prompt = (
+        f"【账号方向】{chosen.get('name','')} — {chosen.get('positioning_statement','')}\n"
+        f"【目标受众】{chosen.get('target_audience','')}\n"
+        f"【平台】{platform}\n"
+        f"【周期】{cycle_weeks} 周 × {posts_per_week} 篇/周\n\n"
+        f"【缺口】请重新出 **1 篇** 排期 slot 替换原来的占位 — "
+        f"目标 week={target_slot.get('week') or 1}, "
+        f"day_of_week={target_slot.get('day_of_week') or 0}。"
+        f"{avoid_block}\n\n"
+        f"严格按 system schema 输出 ：schedule 数组长度 = 1，"
+        f"weekly_themes 可留空 []。"
+    )
+
+    async def _try_with(spec: str):
+        gen = registry.build(spec)[0]
+        return await _call_json(
+            gen, prompts.SCHEDULER_SYSTEM, user_prompt,
+            max_tokens=4000, tool_name="submit_schedule",
+            schema=_SCHEDULE_SCHEMA,
+        )
+
+    # L1 primary, L2 cross-family.
+    primary = scheduler_spec.lower()
+    fb = ("deepseek" if ("openai" in primary or "gpt" in primary)
+          else "openai:gpt-4o")
+    new_slot_raw: dict[str, Any] | None = None
+    last_err: str | None = None
+    for spec, label in [(scheduler_spec, "primary"), (fb, "fallback")]:
+        try:
+            r = await _try_with(spec)
+            sch = r.get("schedule") or []
+            if sch and isinstance(sch[0], dict) and sch[0].get("title"):
+                new_slot_raw = sch[0]
+                last_err = None
+                break
+            last_err = f"{label}: empty schedule"
+        except Exception as e:
+            last_err = f"{label}: {e!r}"
+    if not new_slot_raw:
+        raise RuntimeError(
+            f"regenerate_slot failed on both primary + fallback: {last_err}"
+        )
+
+    # Preserve original (week, day_of_week, content_format) so the schedule
+    # grid doesn't shuffle — replace only the topical content.
+    new_slot = {
+        **target_slot,
+        "title": str(new_slot_raw.get("title") or ""),
+        "title_variants": [str(x) for x in (new_slot_raw.get("title_variants") or [])],
+        "angle": str(new_slot_raw.get("angle") or target_slot.get("angle") or ""),
+        "hook_type": str(new_slot_raw.get("hook_type") or ""),
+        "outline": [str(x) for x in (new_slot_raw.get("outline") or [])],
+        "materials_needed": [str(x) for x in (new_slot_raw.get("materials_needed") or [])],
+        "intent": str(new_slot_raw.get("intent") or target_slot.get("intent") or ""),
+        "publish_rationale": str(new_slot_raw.get("publish_rationale") or ""),
+        "decision_rationale": str(new_slot_raw.get("decision_rationale") or ""),
+        "flexible_window": str(new_slot_raw.get("flexible_window") or ""),
+        "alternative_versions": [
+            dict(a) for a in (new_slot_raw.get("alternative_versions") or [])
+            if isinstance(a, dict)
+        ],
+        # Clear any prior body_draft — user will regenerate via Composer.
+        "body_draft": "",
+    }
+    schedule[slot_idx] = new_slot
+    pack_data["schedule"] = schedule
+    with db.connect() as con:
+        con.execute(
+            "UPDATE studio_composer_packs SET pack_json=?, updated_at=? WHERE pack_id=?",
+            (json.dumps(pack_data, ensure_ascii=False), int(time.time()), pack_id),
+        )
+    return {"slot_idx": slot_idx, "slot": new_slot}
 
 
 def _format_timing(heatmap: list[dict]) -> str:

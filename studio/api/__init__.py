@@ -1370,6 +1370,32 @@ async def strategy_propose_stream(req: StrategyInput):
     )
 
 
+class StrategySlotRegenerateRequest(BaseModel):
+    slot_idx: int = Field(ge=0)
+    scheduler_spec: str = "openai:gpt-4o"
+
+
+@app.post("/api/composer/strategy/{pack_id}/regenerate_slot")
+@app.post("/api/strategy/{pack_id}/regenerate_slot")
+async def strategy_regenerate_slot(
+    pack_id: str, req: StrategySlotRegenerateRequest,
+) -> dict[str, Any]:
+    """v0.63 ：用户在 Strategy 时间线上点占位 slot 的「✍️ 写这个」时调这个。
+    后端用 scheduler LLM 重新生成 1 个 slot 替换占位，跨家 fallback 兜底。
+    IndexError 必须先于 LookupError 捕获（IndexError 是 LookupError 子类）。
+    """
+    try:
+        return await strategy_pipeline.regenerate_slot(
+            pack_id, req.slot_idx, scheduler_spec=req.scheduler_spec,
+        )
+    except IndexError as e:
+        raise HTTPException(400, str(e))
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+
+
 @app.post("/api/composer/strategy/{pack_id}/expand")
 @app.post("/api/strategy/{pack_id}/expand")
 async def strategy_expand(pack_id: str, req: StrategyExpandRequest) -> dict[str, Any]:
