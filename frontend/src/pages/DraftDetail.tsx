@@ -96,6 +96,16 @@ export default function DraftDetail() {
         </tbody></table>
       </div>
 
+      {/* v0.63: AI 参考的真实素材 — 用户专门提的需求，原本埋在第 8 位
+          (Brief / Trace / Plan / Performance / Variant / Repurpose /
+          Monetization / Douyin Provenance 之后) 用户根本看不到。
+          上移到 Brief 之后做页面第 2 块卡片。Douyin 专属面板紧跟在它后面。 */}
+      {finalCand?.douyin && (
+        <DouyinProvenancePanel candidate={{...finalCand, douyin_struct: finalCand?.meta?.douyin_meta}} />
+      )}
+
+      <ProvenancePanel rag={data.rag} draftId={d.draft_id} onRefreshed={reload} />
+
       {trace.length > 0 && (
         <div className="card">
           <h2>Agent 时间线</h2>
@@ -187,12 +197,6 @@ export default function DraftDetail() {
 
       {/* v0.61.27 ：变现套装 — 商单评估 + 引流话术 */}
       <MonetizationCard draftId={d.draft_id} />
-
-      {finalCand?.douyin && (
-        <DouyinProvenancePanel candidate={{...finalCand, douyin_struct: finalCand?.meta?.douyin_meta}} />
-      )}
-
-      <ProvenancePanel rag={data.rag} draftId={d.draft_id} onRefreshed={reload} />
 
       <div className="card">
         <h2>候选 ({cands.length})</h2>
@@ -1084,6 +1088,7 @@ function ProvenancePanel({rag, draftId, onRefreshed}: {
 }) {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
+  const [autoTried, setAutoTried] = useState(false);
   const refs = rag?.refs ?? [];
   const comments = rag?.comments ?? [];
   const hooks = rag?.hooks ?? [];
@@ -1108,21 +1113,39 @@ function ProvenancePanel({rag, draftId, onRefreshed}: {
     }
   }
 
+  // v0.63: 老 draft 没持久化 rag 时，自动 backfill 一次（用户专门提的
+  // 功能不应该让他先看到「空」再去点按钮）。autoTried 防止 reload 后又
+  // 触发死循环。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (draftId && !hasAny && !autoTried && !refreshing) {
+      setAutoTried(true);
+      refresh();
+    }
+  }, [draftId, hasAny, autoTried]);
+
   // v0.63: 老 draft (pre-v0.55) 没持久化 rag → 显示一个邀请用户点 "刷新参考数据"
   // 的占位卡片，而不是悄悄隐藏整个面板。
   if (!hasAny) {
     if (!draftId) return null;
     return (
-      <div className="card" style={{marginTop: 12, borderLeft: "4px solid var(--warn, #f6c265)", background: "#fffbf2"}}>
+      <div className="card" style={{marginTop: 12, borderLeft: "4px solid var(--primary)",
+                                     background: "var(--primary-soft)"}}>
         <div className="spread" style={{alignItems: "center"}}>
           <div>
-            <h2 style={{margin: 0, fontSize: 14}}>📚 这条稿子还没有持久化参考数据</h2>
+            <h2 style={{margin: 0, fontSize: 14, color: "var(--primary)"}}>
+              📚 AI 参考的真实素材
+              {refreshing && <span style={{marginLeft: 10, fontSize: 12, fontWeight: 400}}>· 加载中…</span>}
+            </h2>
             <p className="muted" style={{fontSize: 12, margin: "4px 0 0"}}>
-              {refreshNote || "可能是 pre-v0.55 老稿。点右边按钮按当前 brief 主题重新跑 RAG 检索，加载真实爆款帖 + 封面图。"}
+              {refreshing
+                ? "正在按 brief 主题去资源库 FTS 检索真实爆款帖 + 抽取封面图…（5-10 秒）"
+                : (refreshNote ||
+                   "这条稿子是 pre-v0.55 老稿，还没持久化参考数据 — 加载中会显示真实爆款帖的封面图 + 标题 + 互动数据 + tags。")}
             </p>
           </div>
           <button onClick={refresh} disabled={refreshing} style={{fontSize: 12, whiteSpace: "nowrap"}}>
-            {refreshing ? "🤖 检索中…" : "🔄 加载参考数据"}
+            {refreshing ? "🤖 检索中…" : "🔄 立即加载"}
           </button>
         </div>
       </div>
