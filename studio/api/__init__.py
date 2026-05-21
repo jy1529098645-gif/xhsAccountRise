@@ -310,6 +310,82 @@ def active_library() -> dict[str, Any]:
     }
 
 
+@app.post("/api/libraries/import_xlsx")
+async def import_library_xlsx(
+    file: UploadFile = File(...),
+    display_name: str = Form(...),
+    platform: str = Form("douyin"),
+    activate: str = Form("1"),
+    build_fts: str = Form("1"),
+) -> dict[str, Any]:
+    """Ingest an xlsx export (e.g. Douyin scrape report) into a SQLite library.
+    The xlsx is parsed in-memory, mapped to the canonical `notes` schema, and
+    registered like any other library. xhs-shaped pipelines (DNA / RAG /
+    strategy) consume the result unchanged.
+
+    v0.57: after ingest, the endpoint also:
+      - activates the new library (so the user can compose against it right
+        away — matches the .db upload behaviour)
+      - rebuilds the FTS5 index (so RAG retrieval finds matches without the
+        user having to click 'Analyze' first)
+    Pass `activate=0` / `build_fts=0` to opt out.
+    """
+    from .. import ingest_xlsx
+    from ..rag import build_index
+    import tempfile
+    blob = await file.read()
+    if len(blob) < 4:
+        raise HTTPException(400, "empty upload")
+    if blob[:2] != b"PK":
+        raise HTTPException(400, "uploaded file is not an xlsx (xlsx files start with PK header)")
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(blob)
+        tmp_path = Path(tmp.name)
+    try:
+        meta, stats = ingest_xlsx.import_xlsx_library(
+            tmp_path, display_name=display_name, platform=platform,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(400, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+    finally:
+        try: tmp_path.unlink()
+        except OSError: pass
+
+    out: dict[str, Any] = {
+        "lib_id": meta.lib_id,
+        "display_name": meta.display_name,
+        "platform": meta.platform,
+        "notes_count": meta.notes_count,
+        "size_bytes": meta.size_bytes,
+        "ingest": {
+            "rows_in": stats["rows_in"],
+            "rows_out": stats["rows_out"],
+            "dropped_duplicate": stats["dropped_duplicate"],
+            "extras_rows": stats["extras_rows"],
+            "columns_recognised": stats["columns_recognised"],
+            "source_columns": stats["source_columns"],
+        },
+    }
+    if activate in ("1", "true", "yes"):
+        try:
+            library.set_active(meta.lib_id)
+            out["activated"] = True
+        except Exception as e:
+            out["activate_error"] = repr(e)
+    if build_fts in ("1", "true", "yes"):
+        try:
+            db.apply_migrations(verbose=False)
+            fts_stats = build_index.rebuild_all()
+            out["fts"] = fts_stats
+        except Exception as e:
+            out["fts_error"] = repr(e)
+    return out
+
+
 @app.post("/api/libraries/upload")
 async def upload_library(
     file: UploadFile = File(...),
@@ -1061,6 +1137,48 @@ def get_draft(draft_id: str) -> dict[str, Any]:
     except Exception:
         rag_payload = {}
 
+    # v0.57: Douyin per-candidate meta (structured payload + library
+    # titles inspired the draft + predicted KPI vs bucket baseline).
+    # Wrapped in try/except so an older library without the 011 migration
+    # applied still serves drafts (just without the Provenance panel).
+    douyin_by_cand: dict[str, dict[str, Any]] = {}
+    try:
+        with db.connect(read_only=True) as con:
+            for r in con.execute(
+                "SELECT * FROM studio_douyin_drafts_meta WHERE draft_id = ?",
+                (draft_id,),
+            ):
+                rd = dict(r)
+                rd["predicted_metrics"] = json.loads(rd.pop("predicted_metrics_json") or "{}")
+                lib_ids = json.loads(rd.pop("library_title_ids_json") or "[]")
+                rd["hashtags"] = json.loads(rd.pop("hashtags_json") or "[]")
+                titles: list[dict[str, Any]] = []
+                if lib_ids:
+                    qmarks = ",".join(["?"] * len(lib_ids))
+                    try:
+                        for tr in con.execute(
+                            f"SELECT title_id, category, title, hashtags_json, char_len"
+                            f"  FROM studio_douyin_titles"
+                            f" WHERE title_id IN ({qmarks})",
+                            lib_ids,
+                        ):
+                            t = dict(tr)
+                            try:
+                                t["hashtags"] = json.loads(t.pop("hashtags_json") or "[]")
+                            except (json.JSONDecodeError, TypeError):
+                                t["hashtags"] = []
+                            titles.append(t)
+                    except Exception:
+                        pass
+                rd["library_titles"] = titles
+                douyin_by_cand[rd["candidate_id"]] = rd
+    except Exception:
+        douyin_by_cand = {}
+    for c in cands:
+        dm = douyin_by_cand.get(c["candidate_id"])
+        if dm:
+            c["douyin"] = dm
+
     return {
         "draft": d_dict | {"brief": json.loads(d["brief_json"])},
         "candidates": cands,
@@ -1073,6 +1191,10 @@ def get_draft(draft_id: str) -> dict[str, Any]:
             "hooks": rag_payload.get("hooks", []),
         },
         "variants": [dict(r) for r in var_children],
+        # v0.57: any candidate's douyin meta indicates this whole draft is
+        # a Douyin draft. The frontend uses this to choose between xhs
+        # ProvenancePanel and DouyinProvenancePanel.
+        "douyin": next(iter(douyin_by_cand.values()), None),
     }
 
 

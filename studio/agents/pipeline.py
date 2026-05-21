@@ -33,6 +33,7 @@ from ..generators.base import Generator
 from .base import AgentContext
 from .critic import CriticPoolAgent
 from .drafter import DrafterPoolAgent
+from .douyin_drafter import DouyinDrafterPoolAgent
 from .planner import PlannerAgent
 from .refiner import RefinerAgent
 from .researcher import ResearcherAgent
@@ -117,19 +118,35 @@ async def run_pipeline(
     researcher = ResearcherAgent(
         k_refs=cfg.k_refs, n_comments=cfg.n_comments, top_hooks=cfg.top_hooks,
     )
-    # v0.61.22 ：DrafterPoolAgent 同时接受 round-robin pool + 每角度 override。
-    drafter_pool = DrafterPoolAgent(drafters, angle_models=cfg.angle_models)
+    # v0.57: Douyin gets its own drafter (structured shot-script schema +
+    # title-library retrieval + playbook prompt context). xhs / kuaishou /
+    # bilibili etc. keep the xhs-shaped DrafterPoolAgent.
+    is_douyin = brief.platform == "douyin"
+    drafter_pool = (
+        DouyinDrafterPoolAgent(drafters)
+        if is_douyin
+        else DrafterPoolAgent(drafters, angle_models=cfg.angle_models)
+    )
     critics = registry.build(cfg.critic_spec) if not cfg.skip_critics else []
     critic_pool = CriticPoolAgent(critics) if critics else None
+    # v0.57: refiner + synthesizer run xhs-shaped prompts. If they touched
+    # Douyin candidates they'd flatten the structured payload (shots /
+    # hook_3s / hashtags / predicted_metrics / library title IDs) into a
+    # single xhs body string. For Douyin: skip refiner entirely; keep
+    # synthesizer in the pipeline but force generator=None so it falls
+    # back to _pick_best (picks the best Douyin candidate AS-IS).
     refiner = (
         RefinerAgent(_first(registry.build(cfg.refiner_spec)))
-        if not cfg.skip_refiner else None
+        if (not cfg.skip_refiner and not is_douyin) else None
     )
     # v0.61.19 ：只有 fuse_synthesizer=True 才传 generator 给 SynthesizerAgent，
     # 否则 generator=None → 走 _pick_best 自动挑 critic 最高分（保 voice）。
+    # v0.57: Douyin always uses _pick_best (no LLM fusion) to preserve the
+    # structured douyin_meta.
     synth_gen = (
         _first(registry.build(cfg.synthesizer_spec))
-        if (not cfg.skip_synthesizer and cfg.fuse_synthesizer) else None
+        if (not cfg.skip_synthesizer and cfg.fuse_synthesizer and not is_douyin)
+        else None
     )
     synthesizer = SynthesizerAgent(generator=synth_gen)
     planner = (
@@ -207,6 +224,12 @@ def _persist(ctx: AgentContext, cfg: PipelineConfig,
                 "comment_count": r.get("comment_count"),
                 "url": r.get("url"),
                 "body_excerpt": (r.get("body") or "")[:400],
+                # v0.57: video-platform fields so ProvenancePanel shows
+                # ▶︎ duration + 🔁 shares for Douyin/BiliBili refs.
+                "duration_sec": int((r.get("video_duration_ms") or 0) / 1000),
+                "share_count": r.get("share_count") or 0,
+                "image_count": r.get("image_count") or 0,
+                "author_nickname": r.get("author_nickname") or "",
             }
             for r in (ctx.refs or [])
         ],
@@ -268,9 +291,11 @@ def _persist(ctx: AgentContext, cfg: PipelineConfig,
         inserted_ids: set[str] = set()
         for c in ctx.drafts:
             _insert_candidate(con, draft_id, c, now, chosen=False)
+            _insert_douyin_meta(con, draft_id, c, now)
             inserted_ids.add(c.candidate_id)
         if ctx.refined and ctx.refined.candidate_id not in inserted_ids:
             _insert_candidate(con, draft_id, ctx.refined, now, chosen=False)
+            _insert_douyin_meta(con, draft_id, ctx.refined, now)
             inserted_ids.add(ctx.refined.candidate_id)
         # Synthesizer often produces a fresh candidate (its own candidate_id);
         # if so it isn't in ctx.drafts or ctx.refined yet, so insert it too.
@@ -278,6 +303,7 @@ def _persist(ctx: AgentContext, cfg: PipelineConfig,
         # 'chosen' marker silently drops.
         if ctx.final and ctx.final.candidate_id not in inserted_ids:
             _insert_candidate(con, draft_id, ctx.final, now, chosen=False)
+            _insert_douyin_meta(con, draft_id, ctx.final, now)
             inserted_ids.add(ctx.final.candidate_id)
         if ctx.final:
             con.execute(
@@ -412,6 +438,37 @@ def _persist(ctx: AgentContext, cfg: PipelineConfig,
     }
 
 
+def _insert_douyin_meta(con, draft_id: str, c, now: int) -> None:
+    """Persist the structured Douyin payload (when the draft was generated
+    via DouyinDrafterPoolAgent) into studio_douyin_drafts_meta. No-op for
+    xhs candidates whose payload.douyin_meta is empty. Wrapped in try so
+    a missing 011 migration on an older library doesn't break persistence."""
+    meta = getattr(c.payload, "douyin_meta", None) or {}
+    if not meta:
+        return
+    bucket = meta.get("content_bucket") or {}
+    try:
+        con.execute(
+            "INSERT OR REPLACE INTO studio_douyin_drafts_meta"
+            " (candidate_id, draft_id, content_bucket_id, content_bucket_label,"
+            "  predicted_metrics_json, library_title_ids_json,"
+            "  duration_sec, hashtags_json, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                c.candidate_id, draft_id,
+                meta.get("content_bucket_id"),
+                bucket.get("label") if isinstance(bucket, dict) else None,
+                json.dumps(meta.get("predicted_metrics") or {}, ensure_ascii=False),
+                json.dumps(meta.get("library_title_ids") or [], ensure_ascii=False),
+                meta.get("duration_sec_target"),
+                json.dumps(meta.get("hashtags") or [], ensure_ascii=False),
+                now,
+            ),
+        )
+    except Exception:
+        pass
+
+
 def _insert_candidate(con, draft_id: str, c, now: int, chosen: bool) -> None:
     meta = {
         "latency_ms": c.latency_ms,
@@ -419,6 +476,13 @@ def _insert_candidate(con, draft_id: str, c, now: int, chosen: bool) -> None:
         "cost_estimate_usd": c.cost_estimate_usd,
         "error": c.error,
     }
+    # v0.57: when the draft came from the Douyin pipeline, stash the full
+    # structured payload (shots, hook_3s, cta_voice, caption, cover_text)
+    # alongside the latency/cost meta. The DouyinProvenancePanel reads
+    # this on the frontend to render the shot-list timeline.
+    dy_meta = getattr(c.payload, "douyin_meta", None)
+    if dy_meta:
+        meta["douyin_meta"] = dy_meta
     con.execute(
         "INSERT INTO studio_draft_candidates"
         " (candidate_id, draft_id, llm, title, body, tags_json,"

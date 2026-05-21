@@ -351,6 +351,19 @@ textarea { resize: vertical; min-height: 100px; font-size: 14px; }
 .picker-create { display: flex; gap: 4px; padding: 4px; align-items: center; }
 .picker-create input { font-size: 12px; padding: 4px 6px; }
 
+/* v0.56 — Target platform picker (sidebar, below ProjectPicker). Same
+   layout as ProjectPicker but with a small "目标平台" eyebrow label inside
+   the button so users see what the picker controls (otherwise the lone
+   platform name looks like a filter chip). */
+.platform-picker { position: relative; margin: 4px 0 12px; }
+.platform-picker-btn {
+  background: linear-gradient(135deg, var(--primary-soft) 0%, #fafafa 100%);
+  border-color: var(--primary);
+}
+.platform-picker-btn .picker-name { line-height: 1.15; }
+.platform-picker-btn:hover { background: var(--primary-soft); }
+.picker-menu-footer { padding: 6px 8px; border-top: 1px solid var(--border); margin-top: 4px; }
+
 /* Progress timeline ---------------------------------------------------- */
 .progress-timeline { margin: 8px 0 16px; }
 .progress-bar-outer {

@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import { fmtTime, roleName, coerceStringList } from "../format";
 import PlatformPill from "../components/PlatformPill";
+import DouyinProvenancePanel from "../components/DouyinProvenancePanel";
 import type { ComplianceHit, RagRef, RagComment, RagHook, VariantChild } from "../types";
 
 export default function DraftDetail() {
@@ -186,6 +187,10 @@ export default function DraftDetail() {
 
       {/* v0.61.27 ：变现套装 — 商单评估 + 引流话术 */}
       <MonetizationCard draftId={d.draft_id} />
+
+      {finalCand?.douyin && (
+        <DouyinProvenancePanel candidate={{...finalCand, douyin_struct: finalCand?.meta?.douyin_meta}} />
+      )}
 
       <ProvenancePanel rag={data.rag} />
 
@@ -1087,7 +1092,12 @@ function ProvenancePanel({rag}: {rag?: {refs: RagRef[]; comments: RagComment[]; 
             <h3 style={{margin: "8px 0 4px", fontSize: 13}}>🔥 参考爆款（Researcher 抓的 top-K）</h3>
             <table className="table">
               <thead><tr>
-                <th>标题</th><th className="num">点赞</th><th className="num">收藏</th><th className="num">评论</th>
+                <th>标题</th>
+                <th className="num">👍</th>
+                <th className="num">⭐</th>
+                <th className="num">💬</th>
+                {/* v0.57: video platforms (Douyin / BiliBili) want share + duration */}
+                <th className="num">🔁/▶︎</th>
               </tr></thead>
               <tbody>
                 {rag.refs.map(r => (
@@ -1100,6 +1110,14 @@ function ProvenancePanel({rag}: {rag?: {refs: RagRef[]; comments: RagComment[]; 
                     <td className="num">{r.liked_count?.toLocaleString?.() ?? "—"}</td>
                     <td className="num">{r.collected_count?.toLocaleString?.() ?? "—"}</td>
                     <td className="num">{r.comment_count?.toLocaleString?.() ?? "—"}</td>
+                    <td className="num" style={{fontSize: 11}}>
+                      {(r.share_count ?? 0) > 0 && <>🔁 {r.share_count!.toLocaleString()}</>}
+                      {(r.duration_sec ?? 0) > 0 && (
+                        <>{(r.share_count ?? 0) > 0 ? " · " : ""}▶︎ {r.duration_sec}s</>
+                      )}
+                      {!(r.share_count ?? 0) && !(r.duration_sec ?? 0) &&
+                        (r.image_count ?? 0) > 0 && <>🖼️ {r.image_count}</>}
+                    </td>
                   </tr>
                 ))}
               </tbody>

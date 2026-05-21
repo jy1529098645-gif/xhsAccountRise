@@ -43,13 +43,19 @@ function LibrariesImpl() {
 
   async function handleFile(f: File | null) {
     if (!f) return;
-    if (!/\.(db|sqlite|sqlite3)$/i.test(f.name)) {
-      setErr(`只接受 SQLite (.db / .sqlite / .sqlite3)：${f.name}`);
+    const isSqlite = /\.(db|sqlite|sqlite3)$/i.test(f.name);
+    const isXlsx = /\.xlsx$/i.test(f.name);
+    if (!isSqlite && !isXlsx) {
+      setErr(`只接受 SQLite (.db / .sqlite / .sqlite3) 或 xlsx：${f.name}`);
       return;
     }
     setErr(null);
-    const displayName = f.name.replace(/\.(db|sqlite|sqlite3)$/i, "");
-    await runImport(f, displayName);
+    const displayName = f.name.replace(/\.(db|sqlite|sqlite3|xlsx)$/i, "");
+    if (isXlsx) {
+      await runImportXlsx(f, displayName);
+    } else {
+      await runImport(f, displayName);
+    }
   }
 
   async function runImport(f: File, displayName: string) {
@@ -63,6 +69,29 @@ function LibrariesImpl() {
         : `（你选了 ${platformLabel(res.platform)}）`;
       const dnaPart = res.dna_version ? ` · DNA v${res.dna_version}` : "";
       setInfo(`✓ 全部就绪 · ${res.lib_id} · ${res.notes_count.toLocaleString()} notes${dnaPart} ${platDetected}`);
+      await load();
+    } catch (e: any) { setErr(e.message); }
+    finally {
+      setImporting(false);
+      setImportStep("");
+    }
+  }
+
+  // v0.56: xlsx path — third-party scrape reports (Douyin, etc.) ship as
+  // xlsx, not SQLite. Backend column-maps into the canonical notes schema.
+  async function runImportXlsx(f: File, displayName: string) {
+    setImporting(true);
+    setImportStep("📤 解析 xlsx + 抽取 hashtags + 写库 + 建 FTS…");
+    setInfo(null);
+    try {
+      const plat = platform === "auto" ? "douyin" : platform;
+      const res = await api.importXlsxLibrary(f, displayName, plat);
+      const recognised = Object.keys(res.ingest.columns_recognised).length;
+      const ftsPart = res.fts ? ` · FTS ${res.fts.notes_indexed.toLocaleString()} 笔记入索引` : "";
+      setInfo(
+        `✓ xlsx 导入完成 · ${res.lib_id} · ${res.notes_count.toLocaleString()} 行` +
+        ` · 识别 ${recognised} 列 · 平台 ${platformLabel(res.platform)}${ftsPart}`
+      );
       await load();
     } catch (e: any) { setErr(e.message); }
     finally {
@@ -139,7 +168,7 @@ function LibrariesImpl() {
         onClick={() => !importing && fileRef.current?.click()}
         style={{ pointerEvents: importing ? "none" : "auto", opacity: importing ? 0.85 : 1 }}
       >
-        <input ref={fileRef} type="file" accept=".db,.sqlite,.sqlite3"
+        <input ref={fileRef} type="file" accept=".db,.sqlite,.sqlite3,.xlsx"
           style={{ display: "none" }}
           onChange={e => handleFile(e.target.files?.[0] ?? null)} />
         {importing ? (

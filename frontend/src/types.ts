@@ -186,6 +186,14 @@ export interface RagRef {
   comment_count: number;
   url?: string;
   body_excerpt: string;
+  // v0.57: video-platform fields (Douyin / BiliBili). 0 when ref is a
+  // photo carousel from xhs. ReferenceCard renders ▶︎{duration_sec}s when
+  // duration_sec > 0, else falls back to xhs's 🖼️ image-count.
+  duration_sec?: number;
+  share_count?: number;
+  image_count?: number;
+  author_nickname?: string;
+  tags?: string[];
 }
 
 export interface RagComment {

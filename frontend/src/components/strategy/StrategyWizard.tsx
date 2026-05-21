@@ -12,6 +12,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "../../api";
 import { fmtRelative, platformLabel, defaultCycleStartDate } from "../../format";
 import ProgressTimeline, { Stage as TimelineStage } from "../ProgressTimeline";
+import { useTargetPlatform } from "../PlatformPicker";
 import { humaniseError, humaniseErrorAsync } from "../../errors";
 import { isAborted, cancelBackendJob } from "../../api";
 import { startJob, getJob, cancelJob as cancelLocalJob, clearJob as clearLocalJob, useJob } from "../../lib/jobs";
@@ -448,7 +449,11 @@ export default function StrategyWizard({ onPackReady }: StrategyWizardProps) {
     }
   }
 
-  const platform = input.platform || activeLib?.platform || "xiaohongshu";
+  // v0.56: target platform — sidebar PlatformPicker (global default) →
+  // user's explicit form value → active library's platform → xhs fallback.
+  // The form value still wins (user can override the global picker per pack).
+  const [globalPlatform] = useTargetPlatform();
+  const platform = input.platform || globalPlatform || activeLib?.platform || "xiaohongshu";
 
   async function submitInput() {
     // No required-fields gate. positioning + target_audience are now optional

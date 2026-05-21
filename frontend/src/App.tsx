@@ -5,6 +5,7 @@ import { applyTheme } from "./theme";
 import ConnectionBanner from "./components/ConnectionBanner";
 import ErrorBoundary from "./components/ErrorBoundary";
 import ProjectPicker from "./components/ProjectPicker";
+import PlatformPicker from "./components/PlatformPicker";
 import RunningJobsIndicator from "./components/RunningJobsIndicator";
 import Dashboard from "./pages/Dashboard";
 import Analysis from "./pages/Analysis";
@@ -78,6 +79,7 @@ export default function App() {
           <div>EZAccountRise</div>
         </div>
         <ProjectPicker />
+        <PlatformPicker />
         <NavLink to="/reports" className={({isActive}) => isActive ? "active" : ""}>📊 分析报告 <span style={{fontSize: 10, color: "var(--muted)"}}>第 1 步</span></NavLink>
         {/* v0.62.6 ：板块顺序 = 分析报告 → 起号策略 → 出稿 → 复盘。
             起号策略 = 看时间线大纲 + 备选 picker。

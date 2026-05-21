@@ -72,11 +72,21 @@ def search_notes(
     """Return up to `k` notes ranked by FTS relevance × engagement."""
     fts_q = _fts_query(topic)
     with db.connect(read_only=True) as con:
+        # v0.57: also pull video_duration_ms + share_count + video_url so
+        # Douyin/BiliBili refs carry their key signals down to the UI.
+        # Older crawler DBs may not have those columns — feature-detect via
+        # PRAGMA so we don't 500 on legacy libs.
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(notes)")}
+        video_cols = [c for c in ("video_duration_ms", "share_count", "video_url")
+                      if c in cols]
+        extra_sql = (", " + ", ".join(f"n.{c}" for c in video_cols)) if video_cols else ""
+        extra_sql_no_prefix = (", " + ", ".join(video_cols)) if video_cols else ""
         if fts_q:
             cur = con.execute(
                 "SELECT n.note_id, n.title, n.body, n.liked_count,"
                 "       n.collected_count, n.comment_count, n.image_count,"
-                "       n.tags_json, n.author_nickname, n.url,"
+                "       n.tags_json, n.author_nickname, n.url"
+                f"{extra_sql},"
                 "       bm25(studio_fts_notes) AS bm"
                 " FROM studio_fts_notes"
                 " JOIN notes n ON n.note_id = studio_fts_notes.note_id"
@@ -90,7 +100,8 @@ def search_notes(
             like = f"%{topic}%"
             cur = con.execute(
                 "SELECT note_id, title, body, liked_count, collected_count,"
-                "       comment_count, image_count, tags_json, author_nickname, url,"
+                "       comment_count, image_count, tags_json, author_nickname, url"
+                f"{extra_sql_no_prefix},"
                 "       0 AS bm"
                 " FROM notes WHERE title LIKE ? OR body LIKE ?"
                 " ORDER BY liked_count DESC LIMIT ?",

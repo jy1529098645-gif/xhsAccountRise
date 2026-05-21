@@ -28,6 +28,13 @@ class CandidatePayload:
     self_score: float       # 0-10 confidence
     self_critique: str
     angle: str = ""         # v0.52: which angle this draft was written for
+    # v0.57: when generated via the Douyin pipeline, this carries the full
+    # structured payload (caption / hashtags / duration_sec_target / hook_3s /
+    # shots[] / cta_voice / cover_text / content_bucket_id / predicted_metrics
+    # / library_title_ids). xhs-shaped title/body/tags/cover_prompt are still
+    # populated for back-compat (UI rendering / DB persistence), but the
+    # Douyin Provenance panel reads from here. Always {} for xhs drafts.
+    douyin_meta: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "CandidatePayload":
@@ -41,6 +48,7 @@ class CandidatePayload:
             self_score=float(d.get("self_score") or 0),
             self_critique=str(d.get("self_critique", "")).strip(),
             angle=str(d.get("angle", "")).strip(),
+            douyin_meta=dict(d.get("douyin_meta") or {}),
         )
 
 
@@ -66,7 +74,8 @@ class GeneratedCandidate:
             llm=llm,
             payload=CandidatePayload(title="", body="", tags=[], cover_prompt="",
                                      hook_type="", predicted_likes=0,
-                                     self_score=0.0, self_critique=""),
+                                     self_score=0.0, self_critique="",
+                                     douyin_meta={}),
             latency_ms=latency_ms,
             error=error,
             raw_response=raw,

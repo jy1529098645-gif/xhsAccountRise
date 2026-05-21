@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { fmtLikes, roleName, coerceStringList } from "../format";
+import { useTargetPlatform } from "../components/PlatformPicker";
 import AgentConfigPanel, {
   AgentSelection, defaultSelection, selectionToSpecs,
 } from "../components/AgentConfigPanel";
@@ -102,7 +103,13 @@ export default function Composer() {
   const [cta, setCta] = useState<"none" | "soft" | "strong">(initialForm.cta);
   const [niche, setNiche] = useState(initialForm.niche);
   const [extra, setExtra] = useState(initialForm.extra);
-  const [platform, setPlatform] = useState<string>(initialForm.platform);
+  // v0.56: default platform follows the sidebar PlatformPicker (single source
+  // of truth). Falls back to saved form. User's explicit picks here still win.
+  const [globalPlatform] = useTargetPlatform();
+  const [platform, setPlatform] = useState<string>(initialForm.platform || globalPlatform);
+  useEffect(() => {
+    if (!initialForm.platform) setPlatform(globalPlatform);
+  }, [globalPlatform]);
   // v0.61.22 ：每角度专属 model spec。""/缺失 = auto = round-robin。
   const [angleModels, setAngleModels] = useState<Record<string, string>>(
     initialForm.angleModels ?? {}

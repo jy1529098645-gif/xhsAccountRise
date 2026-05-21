@@ -248,6 +248,16 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("lib_id")
     sp.add_argument("platform")
     sp.set_defaults(func=_cmd_lib_set_platform)
+    sp = lib_sub.add_parser(
+        "import-xlsx",
+        help="ingest an xlsx export (e.g. Douyin video dataset) → register as library",
+    )
+    sp.add_argument("path", help="path to the .xlsx file")
+    sp.add_argument("--name", default=None,
+                    help="display name (default: derived from filename)")
+    sp.add_argument("--platform", default="douyin",
+                    help="platform tag for this library (default: douyin)")
+    sp.set_defaults(func=_cmd_lib_import_xlsx)
     sp = lib_sub.add_parser("delete", help="delete a library")
     sp.add_argument("lib_id")
     sp.set_defaults(func=_cmd_lib_delete)
@@ -371,6 +381,36 @@ def _cmd_lib_set_platform(args: argparse.Namespace) -> int:
 def _cmd_lib_delete(args: argparse.Namespace) -> int:
     library.delete(args.lib_id)
     print(f"[library] deleted {args.lib_id}")
+    return 0
+
+
+def _cmd_lib_import_xlsx(args: argparse.Namespace) -> int:
+    from . import ingest_xlsx
+    src = Path(args.path)
+    if not src.exists():
+        print(f"[library] xlsx not found: {src}", file=sys.stderr)
+        return 2
+    display_name = args.name or src.stem
+    try:
+        meta, stats = ingest_xlsx.import_xlsx_library(
+            src, display_name=display_name, platform=args.platform,
+        )
+    except Exception as e:
+        print(f"[library] import failed: {e!r}", file=sys.stderr)
+        return 2
+    print(json.dumps({
+        "lib_id": meta.lib_id,
+        "display_name": meta.display_name,
+        "platform": meta.platform,
+        "notes_count": meta.notes_count,
+        "ingest": {
+            "rows_in": stats["rows_in"],
+            "rows_out": stats["rows_out"],
+            "dropped_duplicate": stats["dropped_duplicate"],
+            "extras_rows": stats["extras_rows"],
+            "columns_recognised": stats["columns_recognised"],
+        },
+    }, ensure_ascii=False, indent=2))
     return 0
 
 

@@ -185,6 +185,39 @@ export const api = {
       return res.json();
     } catch { return STATIC_PLATFORMS; }
   },
+  // v0.56: ingest an xlsx (e.g. Douyin video export with columns
+  // 标题/视频内容/点赞数/...) → a notes-shaped SQLite library. The platform
+  // defaults to douyin; the column mapper recognises the standard scraper
+  // export layout. xhs-style flows downstream consume the result unchanged.
+  importXlsxLibrary: async (
+    file: File, displayName: string, platform: string = "douyin",
+  ): Promise<{
+    lib_id: string; display_name: string; platform: string;
+    notes_count: number; size_bytes: number;
+    ingest: {
+      rows_in: number; rows_out: number; dropped_duplicate: number;
+      extras_rows: number;
+      columns_recognised: Record<string, string>;
+      source_columns: string[];
+    };
+    activated?: boolean;
+    fts?: { notes_indexed: number; comments_indexed: number; elapsed_s: number };
+  }> => {
+    const backend = backendUrl();
+    if (!backend) throw new HttpError(0, "xlsx 导入需要本地后端");
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("display_name", displayName);
+    fd.append("platform", platform);
+    const res = await fetch(`${backend}/api/libraries/import_xlsx`, {
+      method: "POST", body: fd,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new HttpError(res.status, `import_xlsx → ${res.status}: ${text.slice(0, 400)}`);
+    }
+    return res.json();
+  },
   uploadLibrary: async (file: File, displayName: string, platform: string | "auto" = "auto"): Promise<Library> => {
     const backend = backendUrl();
     if (!backend) throw new HttpError(0, "上传库需要本地后端");
