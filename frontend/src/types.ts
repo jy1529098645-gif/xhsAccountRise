@@ -194,6 +194,11 @@ export interface RagRef {
   image_count?: number;
   author_nickname?: string;
   tags?: string[];
+  // v0.63: actual image URLs extracted from crawler raw_json so the
+  // ProvenancePanel can show real thumbnails ("图文效果"). 0-4 URLs.
+  // cover_image = image_urls[0] (convenience).
+  image_urls?: string[];
+  cover_image?: string;
 }
 
 export interface RagComment {

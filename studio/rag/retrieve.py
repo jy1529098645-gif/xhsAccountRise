@@ -63,24 +63,86 @@ def _fts_query(topic: str) -> str:
     return " OR ".join(f'"{g}"' for g in grams)
 
 
+def _extract_image_urls_from_raw(raw_json_str: str, note_id: str) -> list[str]:
+    """Pull image URLs from a crawler's stashed raw JSON payload.
+
+    xhs crawler shape: raw_json["note"]["noteDetailMap"][note_id]["note"]
+        ["imageList"][i]["urlDefault"] (or ["infoList"][j]["url"] for
+    a smaller preview size). Returns up to 4 URLs, preferring the
+    smaller-size preview when available so the DraftDetail grid loads fast.
+
+    Wrapped in broad try so a non-xhs raw_json or schema variant just
+    silently returns []."""
+    if not raw_json_str:
+        return []
+    try:
+        d = json.loads(raw_json_str)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    try:
+        detail_map = (d.get("note") or {}).get("noteDetailMap") or {}
+        entry = detail_map.get(note_id)
+        if not entry:
+            # Some crawler dumps key by a different note_id (or just one entry).
+            entry = next(iter(detail_map.values()), None)
+        if not entry:
+            return []
+        inner = entry.get("note") or {}
+        images = inner.get("imageList") or inner.get("image_list") or []
+        if not isinstance(images, list):
+            return []
+    except Exception:
+        return []
+
+    urls: list[str] = []
+    for img in images[:6]:
+        if not isinstance(img, dict):
+            continue
+        # Prefer a preview-size URL from infoList when present (smaller =
+        # faster page load); fall back to urlDefault (full-size).
+        chosen = ""
+        for info in (img.get("infoList") or []):
+            if isinstance(info, dict) and info.get("imageScene") == "WB_PRV":
+                chosen = str(info.get("url") or "")
+                if chosen:
+                    break
+        if not chosen:
+            chosen = str(img.get("urlDefault") or img.get("url") or "")
+        if chosen and chosen.startswith("http"):
+            urls.append(chosen)
+        if len(urls) >= 4:
+            break
+    return urls
+
+
 def search_notes(
     topic: str,
     k: int = 8,
     candidate_pool: int = 200,
     likes_weight: float = 0.5,
+    include_images: bool = True,
 ) -> list[dict[str, Any]]:
-    """Return up to `k` notes ranked by FTS relevance × engagement."""
+    """Return up to `k` notes ranked by FTS relevance × engagement.
+
+    When include_images is True (default), also extracts up to 4 image URLs
+    per note from the crawler's raw_json payload so the frontend can show
+    a thumbnail strip. Adds an extra column to the SELECT — small cost for
+    the visual ROI of "AI 参考了这些真实的图文帖" in DraftDetail.
+    """
     fts_q = _fts_query(topic)
     with db.connect(read_only=True) as con:
         # v0.57: also pull video_duration_ms + share_count + video_url so
         # Douyin/BiliBili refs carry their key signals down to the UI.
-        # Older crawler DBs may not have those columns — feature-detect via
-        # PRAGMA so we don't 500 on legacy libs.
+        # v0.63: pull raw_json too so we can extract image URLs for xhs
+        # photo posts. Older crawler DBs may not have these columns —
+        # feature-detect via PRAGMA so we don't 500 on legacy libs.
         cols = {r["name"] for r in con.execute("PRAGMA table_info(notes)")}
-        video_cols = [c for c in ("video_duration_ms", "share_count", "video_url")
-                      if c in cols]
-        extra_sql = (", " + ", ".join(f"n.{c}" for c in video_cols)) if video_cols else ""
-        extra_sql_no_prefix = (", " + ", ".join(video_cols)) if video_cols else ""
+        extra_cols_wanted = ["video_duration_ms", "share_count", "video_url"]
+        if include_images and "raw_json" in cols:
+            extra_cols_wanted.append("raw_json")
+        extra_cols = [c for c in extra_cols_wanted if c in cols]
+        extra_sql = (", " + ", ".join(f"n.{c}" for c in extra_cols)) if extra_cols else ""
+        extra_sql_no_prefix = (", " + ", ".join(extra_cols)) if extra_cols else ""
         if fts_q:
             cur = con.execute(
                 "SELECT n.note_id, n.title, n.body, n.liked_count,"
@@ -111,6 +173,16 @@ def search_notes(
 
     if not rows:
         return []
+    # Extract image URLs from raw_json now so persistence/downstream sees them
+    # as a clean `image_urls` list. raw_json itself is dropped (too big).
+    for r in rows:
+        if "raw_json" in r:
+            r["image_urls"] = _extract_image_urls_from_raw(
+                r.get("raw_json") or "", r.get("note_id") or "",
+            )
+            r.pop("raw_json", None)
+        else:
+            r["image_urls"] = []
     bms = [r["bm"] for r in rows]
     bm_min, bm_max = min(bms), max(bms)
     bm_span = max(1e-6, bm_max - bm_min)

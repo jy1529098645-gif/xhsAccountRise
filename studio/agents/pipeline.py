@@ -230,6 +230,12 @@ def _persist(ctx: AgentContext, cfg: PipelineConfig,
                 "share_count": r.get("share_count") or 0,
                 "image_count": r.get("image_count") or 0,
                 "author_nickname": r.get("author_nickname") or "",
+                # v0.63: image URLs extracted from crawler raw_json — lets the
+                # DraftDetail panel show actual cover thumbnails of the xhs
+                # posts the AI referenced ("图文效果"). 0-4 URLs per ref.
+                "image_urls": r.get("image_urls") or [],
+                "cover_image": (r.get("image_urls") or [None])[0],
+                "tags": _safe_parse_tags(r.get("tags_json")),
             }
             for r in (ctx.refs or [])
         ],
@@ -436,6 +442,24 @@ def _persist(ctx: AgentContext, cfg: PipelineConfig,
         },
         "generated_at": now,
     }
+
+
+def _safe_parse_tags(raw: Any) -> list[str]:
+    """tags_json field may arrive as a JSON-encoded string OR an already-
+    parsed list. Defensive parse — empty list on any failure. Cap at 8 to
+    keep persisted rag_json reasonable."""
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [str(t) for t in raw][:8]
+    if isinstance(raw, str):
+        try:
+            v = json.loads(raw)
+            if isinstance(v, list):
+                return [str(t) for t in v][:8]
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return []
 
 
 def _insert_douyin_meta(con, draft_id: str, c, now: int) -> None:

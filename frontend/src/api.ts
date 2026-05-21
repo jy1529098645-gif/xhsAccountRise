@@ -599,6 +599,15 @@ export const api = {
   // v0.59: 起号目标分类（GoalPicker step 用）
   listStrategyGoals: () =>
     getJson<GoalTypeDTO[]>("/api/strategy/goals").catch(() => []),
+  // v0.63: 老 draft 没有 rag_json（pre-v0.55）或没有 image_urls（pre-v0.63）
+  // 时，用户点「刷新参考数据」按钮调这个 endpoint —— 后端按 draft 的
+  // topic 重跑 RAG 检索 + 抽取封面图，写回 rag_json。返回新 refs 数量。
+  backfillDraftRag: (draftId: string) =>
+    postJson<{
+      draft_id: string;
+      refs: number; comments: number; hooks: number;
+      with_images: number;
+    }>(`/api/drafts/${draftId}/backfill_rag`, {}),
   // v0.63: 用户在时间线上点占位 slot 的「✍️ 写这个」时调这个 endpoint —
   // 后端用 scheduler LLM 重生成 1 个 slot 替换占位，自动跨家 fallback。
   regenerateSlot: (packId: string, slotIdx: number, opts?: { scheduler_spec?: string }) =>

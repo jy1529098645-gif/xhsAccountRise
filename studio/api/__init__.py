@@ -1198,6 +1198,98 @@ def get_draft(draft_id: str) -> dict[str, Any]:
     }
 
 
+@app.post("/api/drafts/{draft_id}/backfill_rag")
+def backfill_draft_rag(draft_id: str) -> dict[str, Any]:
+    """v0.63: re-run RAG retrieval for an existing draft and update its
+    rag_json. Two reasons to call this：
+      (a) Old drafts (pre-v0.55) have empty rag_json — no refs persisted.
+      (b) Old drafts persisted before image-URL extraction (v0.63) lack
+          cover thumbnails. Re-running picks up the new image_urls.
+
+    Reads brief.topic from the draft, runs retrieve.retrieve_for_brief,
+    serializes via the same pipeline._serialize_rag-style block, and
+    writes studio_drafts.rag_json. Returns the new refs count.
+    """
+    project.ensure_bootstrap()
+    pid = project.active_project_id()
+    with db.connect(read_only=True) as con:
+        d = con.execute(
+            "SELECT brief_json FROM studio_drafts WHERE draft_id = ?"
+            " AND (project_id = ? OR project_id IS NULL)",
+            (draft_id, pid),
+        ).fetchone()
+    if not d:
+        raise HTTPException(404, "draft not found in current project")
+    try:
+        brief_data = json.loads(d["brief_json"])
+    except (json.JSONDecodeError, TypeError):
+        raise HTTPException(500, "draft brief_json is malformed")
+    topic = brief_data.get("topic") or ""
+    if not topic:
+        raise HTTPException(400, "draft has no topic — cannot retrieve refs")
+
+    from ..rag import retrieve
+    res = retrieve.retrieve_for_brief(topic, k_notes=8, n_comments=15)
+    # Same shape as agents.pipeline._serialize_rag for consistency.
+    rag_payload = {
+        "refs": [
+            {
+                "note_id": r.get("note_id"),
+                "title": r.get("title"),
+                "liked_count": r.get("liked_count"),
+                "collected_count": r.get("collected_count"),
+                "comment_count": r.get("comment_count"),
+                "url": r.get("url"),
+                "body_excerpt": (r.get("body") or "")[:400],
+                "duration_sec": int((r.get("video_duration_ms") or 0) / 1000),
+                "share_count": r.get("share_count") or 0,
+                "image_count": r.get("image_count") or 0,
+                "author_nickname": r.get("author_nickname") or "",
+                "image_urls": r.get("image_urls") or [],
+                "cover_image": (r.get("image_urls") or [None])[0],
+                "tags": (
+                    json.loads(r.get("tags_json")) if isinstance(r.get("tags_json"), str)
+                    and (r.get("tags_json") or "").startswith("[") else []
+                ),
+            }
+            for r in (res.get("refs") or [])
+        ],
+        "comments": [
+            {
+                "comment_id": c.get("comment_id"),
+                "content": (c.get("content") or "")[:300],
+                "like_count": c.get("like_count"),
+                "note_id": c.get("note_id"),
+            }
+            for c in (res.get("comments") or [])[:30]
+        ],
+        "hooks": [
+            {
+                "category": h.get("category"),
+                "count": h.get("count"),
+                "median_likes": h.get("median_likes"),
+                "examples": [
+                    {"title": e.get("title"), "liked_count": e.get("liked_count")}
+                    for e in (h.get("examples") or [])[:5]
+                ],
+            }
+            for h in (res.get("hooks") or [])
+        ],
+    }
+    with db.connect() as con:
+        con.execute(
+            "UPDATE studio_drafts SET rag_json = ? WHERE draft_id = ?",
+            (json.dumps(rag_payload, ensure_ascii=False), draft_id),
+        )
+    return {
+        "draft_id": draft_id,
+        "refs": len(rag_payload["refs"]),
+        "comments": len(rag_payload["comments"]),
+        "hooks": len(rag_payload["hooks"]),
+        "with_images": sum(1 for r in rag_payload["refs"] if r.get("image_urls")),
+    }
+
+
 class ScoreRequest(BaseModel):
     score: int = Field(ge=1, le=5)
 

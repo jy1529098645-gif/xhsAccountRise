@@ -192,7 +192,7 @@ export default function DraftDetail() {
         <DouyinProvenancePanel candidate={{...finalCand, douyin_struct: finalCand?.meta?.douyin_meta}} />
       )}
 
-      <ProvenancePanel rag={data.rag} />
+      <ProvenancePanel rag={data.rag} draftId={d.draft_id} onRefreshed={reload} />
 
       <div className="card">
         <h2>候选 ({cands.length})</h2>
@@ -1077,58 +1077,199 @@ function VariantFanOutCard({draftId, existing, published, onSpawned}: {
 }
 
 // ---------- Provenance ----------------------------------------
-function ProvenancePanel({rag}: {rag?: {refs: RagRef[]; comments: RagComment[]; hooks: RagHook[]}}) {
-  if (!rag) return null;
-  const hasAny = (rag.refs?.length ?? 0) > 0 || (rag.comments?.length ?? 0) > 0 || (rag.hooks?.length ?? 0) > 0;
-  if (!hasAny) return null;
+function ProvenancePanel({rag, draftId, onRefreshed}: {
+  rag?: {refs: RagRef[]; comments: RagComment[]; hooks: RagHook[]};
+  draftId?: string;
+  onRefreshed?: () => void;
+}) {
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshNote, setRefreshNote] = useState<string | null>(null);
+  const refs = rag?.refs ?? [];
+  const comments = rag?.comments ?? [];
+  const hooks = rag?.hooks ?? [];
+  const hasAny = refs.length > 0 || comments.length > 0 || hooks.length > 0;
+  const fmt = (n: number | undefined) =>
+    !n ? "0" : n >= 10000 ? (n / 10000).toFixed(1) + "w" : n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n);
+
+  async function refresh() {
+    if (!draftId) return;
+    setRefreshing(true); setRefreshNote(null);
+    try {
+      const r = await api.backfillDraftRag(draftId);
+      setRefreshNote(
+        `✓ 已加载 ${r.refs} 篇参考帖、${r.comments} 条评论、${r.hooks} 个 hook` +
+        (r.with_images > 0 ? ` ·${r.with_images} 篇有图文` : "")
+      );
+      onRefreshed?.();
+    } catch (e: any) {
+      setRefreshNote("✗ 加载失败 ：" + (e?.message || e));
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  // v0.63: 老 draft (pre-v0.55) 没持久化 rag → 显示一个邀请用户点 "刷新参考数据"
+  // 的占位卡片，而不是悄悄隐藏整个面板。
+  if (!hasAny) {
+    if (!draftId) return null;
+    return (
+      <div className="card" style={{marginTop: 12, borderLeft: "4px solid var(--warn, #f6c265)", background: "#fffbf2"}}>
+        <div className="spread" style={{alignItems: "center"}}>
+          <div>
+            <h2 style={{margin: 0, fontSize: 14}}>📚 这条稿子还没有持久化参考数据</h2>
+            <p className="muted" style={{fontSize: 12, margin: "4px 0 0"}}>
+              {refreshNote || "可能是 pre-v0.55 老稿。点右边按钮按当前 brief 主题重新跑 RAG 检索，加载真实爆款帖 + 封面图。"}
+            </p>
+          </div>
+          <button onClick={refresh} disabled={refreshing} style={{fontSize: 12, whiteSpace: "nowrap"}}>
+            {refreshing ? "🤖 检索中…" : "🔄 加载参考数据"}
+          </button>
+        </div>
+      </div>
+    );
+  }
   return (
-    <details className="card" style={{marginTop: 10}}>
-      <summary style={{cursor: "pointer", fontSize: 14, fontWeight: 600}}>
-        📚 这篇稿子参考了什么（{rag.refs.length} 篇爆款 · {rag.comments.length} 条评论 · {rag.hooks.length} 个 hook 模板）
-      </summary>
-      <div style={{marginTop: 10}}>
-        {rag.refs.length > 0 && (
-          <>
-            <h3 style={{margin: "8px 0 4px", fontSize: 13}}>🔥 参考爆款（Researcher 抓的 top-K）</h3>
-            <table className="table">
-              <thead><tr>
-                <th>标题</th>
-                <th className="num">👍</th>
-                <th className="num">⭐</th>
-                <th className="num">💬</th>
-                {/* v0.57: video platforms (Douyin / BiliBili) want share + duration */}
-                <th className="num">🔁/▶︎</th>
-              </tr></thead>
-              <tbody>
-                {rag.refs.map(r => (
-                  <tr key={r.note_id}>
-                    <td>
-                      {r.url
-                        ? <a href={r.url} target="_blank" rel="noreferrer">{r.title}</a>
-                        : r.title}
-                    </td>
-                    <td className="num">{r.liked_count?.toLocaleString?.() ?? "—"}</td>
-                    <td className="num">{r.collected_count?.toLocaleString?.() ?? "—"}</td>
-                    <td className="num">{r.comment_count?.toLocaleString?.() ?? "—"}</td>
-                    <td className="num" style={{fontSize: 11}}>
-                      {(r.share_count ?? 0) > 0 && <>🔁 {r.share_count!.toLocaleString()}</>}
-                      {(r.duration_sec ?? 0) > 0 && (
-                        <>{(r.share_count ?? 0) > 0 ? " · " : ""}▶︎ {r.duration_sec}s</>
-                      )}
-                      {!(r.share_count ?? 0) && !(r.duration_sec ?? 0) &&
-                        (r.image_count ?? 0) > 0 && <>🖼️ {r.image_count}</>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </>
+    // v0.63: 默认展开 (open) — 之前折叠 <details> 用户看不见就以为没做这个功能。
+    // 也加 borderLeft 高亮 + 头部统计，让位置更显眼。
+    <details className="card" open style={{marginTop: 12, borderLeft: "4px solid var(--primary)"}}>
+      <summary style={{cursor: "pointer", fontSize: 14.5, fontWeight: 700, color: "var(--primary)"}}>
+        📚 AI 这篇稿子参考的真实素材
+        <span style={{marginLeft: 8, fontSize: 12, color: "var(--muted)", fontWeight: 400}}>
+          {refs.length} 篇真实爆款 · {comments.length} 条用户原话 · {hooks.length} 个 hook 模板
+        </span>
+        {draftId && (
+          <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); refresh(); }}
+            disabled={refreshing}
+            className="ghost"
+            title="按当前 brief 主题重新检索 RAG，刷新封面图 + 数据"
+            style={{marginLeft: 12, fontSize: 11, padding: "2px 8px"}}>
+            {refreshing ? "刷新中…" : "🔄 刷新"}
+          </button>
         )}
-        {rag.comments.length > 0 && (
+      </summary>
+      {refreshNote && (
+        <div className="muted" style={{fontSize: 11.5, marginTop: 6}}>{refreshNote}</div>
+      )}
+      <p className="muted" style={{fontSize: 12, margin: "8px 0 12px"}}>
+        这一稿不是凭空写的 ——下面是 AI 起草时实际读到的真实贴文。点封面图或标题跳原帖看完整图文。
+      </p>
+      {refs.length > 0 && (
+        <div>
+          <h3 style={{margin: "0 0 8px", fontSize: 13}}>🔥 参考爆款（按相关度 × 互动量混合排序）</h3>
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
+            gap: 12,
+          }}>
+            {refs.map((r, idx) => {
+              const imgs = (r.image_urls && r.image_urls.length > 0)
+                ? r.image_urls : (r.cover_image ? [r.cover_image] : []);
+              const cover = imgs[0];
+              return (
+                <div key={r.note_id} style={{
+                  padding: 0, borderRadius: 8, overflow: "hidden",
+                  background: "#fff", border: "1px solid #ececec",
+                  display: "flex", flexDirection: "column",
+                }}>
+                  {/* Cover image — clickable, opens original post */}
+                  {cover ? (
+                    <a href={r.url} target="_blank" rel="noreferrer"
+                      style={{display: "block", background: "#f0f0f0", aspectRatio: "4 / 5", overflow: "hidden"}}>
+                      <img src={cover} alt={r.title}
+                        loading="lazy" referrerPolicy="no-referrer"
+                        style={{width: "100%", height: "100%", objectFit: "cover", display: "block"}}
+                        onError={(e) => {
+                          // CDN 防盗链时图挂了 → 退化为彩色 placeholder
+                          const el = e.currentTarget as HTMLImageElement;
+                          el.style.display = "none";
+                          (el.parentNode as HTMLElement).style.background =
+                            "linear-gradient(135deg, var(--primary-soft), #f8f8f8)";
+                        }}
+                      />
+                    </a>
+                  ) : (
+                    <div style={{
+                      aspectRatio: "4 / 5",
+                      background: "linear-gradient(135deg, var(--primary-soft) 0%, #fafafa 100%)",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      fontSize: 32, color: "var(--primary)", opacity: 0.4,
+                    }}>
+                      {(r.duration_sec ?? 0) > 0 ? "▶︎" : "📝"}
+                    </div>
+                  )}
+                  {/* Other thumbnails (1-3 small ones below cover) */}
+                  {imgs.length > 1 && (
+                    <div style={{display: "grid", gridTemplateColumns: `repeat(${Math.min(imgs.length - 1, 3)}, 1fr)`, gap: 1, background: "#eee"}}>
+                      {imgs.slice(1, 4).map((u, i) => (
+                        <a key={i} href={r.url} target="_blank" rel="noreferrer"
+                          style={{display: "block", aspectRatio: "1 / 1", overflow: "hidden", background: "#f5f5f5"}}>
+                          <img src={u} loading="lazy" referrerPolicy="no-referrer"
+                            style={{width: "100%", height: "100%", objectFit: "cover", display: "block"}}
+                            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                          />
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                  {/* Card body */}
+                  <div style={{padding: "10px 12px", display: "flex", flexDirection: "column", gap: 6}}>
+                    <div className="row" style={{gap: 6, flexWrap: "wrap"}}>
+                      <span className="tag-pill" style={{background: "var(--primary-soft)", color: "var(--primary)", fontSize: 10.5}}>
+                        #{idx + 1}
+                      </span>
+                      {(r.duration_sec ?? 0) > 0 ? (
+                        <span className="tag-pill" style={{fontSize: 10.5}}>▶︎ {r.duration_sec}s</span>
+                      ) : (r.image_count ?? 0) > 0 ? (
+                        <span className="tag-pill" style={{fontSize: 10.5}}>🖼️ {r.image_count} 图</span>
+                      ) : null}
+                      {r.author_nickname && (
+                        <span className="tag-pill" style={{fontSize: 10.5}}>@{r.author_nickname}</span>
+                      )}
+                    </div>
+                    <div style={{fontSize: 13, fontWeight: 600, lineHeight: 1.4}}>
+                      {r.url ? (
+                        <a href={r.url} target="_blank" rel="noreferrer" style={{color: "inherit"}}>
+                          {r.title || "（无标题）"}
+                        </a>
+                      ) : r.title || "（无标题）"}
+                    </div>
+                    {r.body_excerpt && (
+                      <div className="muted" style={{
+                        fontSize: 11.5, lineHeight: 1.55,
+                        display: "-webkit-box", WebkitLineClamp: 3,
+                        WebkitBoxOrient: "vertical", overflow: "hidden",
+                      }}>
+                        {r.body_excerpt}
+                      </div>
+                    )}
+                    {(r.tags?.length ?? 0) > 0 && (
+                      <div style={{fontSize: 10}}>
+                        {r.tags!.slice(0, 5).map((t, i) => (
+                          <span key={i} className="tag-pill" style={{fontSize: 10}}>#{t}</span>
+                        ))}
+                      </div>
+                    )}
+                    <div className="muted" style={{fontSize: 11}}>
+                      👍 {fmt(r.liked_count)}
+                      {(r.collected_count ?? 0) > 0 && <> · ⭐ {fmt(r.collected_count)}</>}
+                      {(r.comment_count ?? 0) > 0 && <> · 💬 {fmt(r.comment_count)}</>}
+                      {(r.share_count ?? 0) > 0 && <> · 🔁 {fmt(r.share_count)}</>}
+                      {r.url && (
+                        <>　·　<a href={r.url} target="_blank" rel="noreferrer">看原帖 →</a></>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+        {comments.length > 0 && (
           <>
             <h3 style={{margin: "12px 0 4px", fontSize: 13}}>💬 用户原话（高赞评论）</h3>
             <ul style={{marginLeft: 18, fontSize: 12, lineHeight: 1.7}}>
-              {rag.comments.slice(0, 12).map(c => (
+              {comments.slice(0, 12).map(c => (
                 <li key={c.comment_id}>
                   <span className="muted" style={{marginRight: 6}}>({c.like_count}👍)</span>
                   {c.content}
@@ -1137,7 +1278,7 @@ function ProvenancePanel({rag}: {rag?: {refs: RagRef[]; comments: RagComment[]; 
             </ul>
           </>
         )}
-        {rag.hooks.length > 0 && (
+        {hooks.length > 0 && (
           <>
             <h3 style={{margin: "12px 0 4px", fontSize: 13}}>🎣 Hook 模板</h3>
             <table className="table">
@@ -1145,7 +1286,7 @@ function ProvenancePanel({rag}: {rag?: {refs: RagRef[]; comments: RagComment[]; 
                 <th>类型</th><th className="num">样本数</th><th className="num">中位赞</th><th>示例</th>
               </tr></thead>
               <tbody>
-                {rag.hooks.map(h => (
+                {hooks.map(h => (
                   <tr key={h.category}>
                     <td><b>{h.category}</b></td>
                     <td className="num">{h.count}</td>
@@ -1159,7 +1300,6 @@ function ProvenancePanel({rag}: {rag?: {refs: RagRef[]; comments: RagComment[]; 
             </table>
           </>
         )}
-      </div>
     </details>
   );
 }
