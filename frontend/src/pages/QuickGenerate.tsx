@@ -28,6 +28,8 @@ interface FormState {
   target_length: number;
   extra: string;
   model_spec: string;
+  // v0.66 (item7) ：一次出几个不同方向版本对比（1-4）。
+  variants: number;
 }
 
 const DEFAULT_FORM: FormState = {
@@ -41,6 +43,7 @@ const DEFAULT_FORM: FormState = {
   // 省钱或换 claude:opus。bare "openai" 也能用（resolves to env default），
   // 但 UI 选中的 chip 模糊 — 用 "openai:gpt-5" 更明确。
   model_spec: "openai:gpt-5",
+  variants: 1,
 };
 
 function loadForm(): FormState {
@@ -60,6 +63,7 @@ interface ResultState {
   elapsed_s: number;
   cost_estimate_usd: number;
   used_report_context: boolean;
+  variant_label?: string;
 }
 
 export default function QuickGenerate() {
@@ -67,7 +71,8 @@ export default function QuickGenerate() {
   const [platforms, setPlatforms] = useState<Platform[]>([]);
   const [running, setRunning] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [result, setResult] = useState<ResultState | null>(null);
+  // v0.66 (item7) ：结果改成数组 — 单篇时 length=1，多方向时 length=variants。
+  const [results, setResults] = useState<ResultState[]>([]);
 
   useEffect(() => {
     api.platforms().then(setPlatforms).catch(e => console.error("[QuickGenerate] platforms", e));
@@ -93,7 +98,7 @@ export default function QuickGenerate() {
   }
 
   async function run() {
-    setErr(null); setResult(null); setRunning(true);
+    setErr(null); setResults([]); setRunning(true);
     try {
       const res = await api.quickGenerate({
         title: form.title.trim(),
@@ -103,17 +108,23 @@ export default function QuickGenerate() {
         target_length: Number(form.target_length) || 500,
         extra: form.extra.trim(),
         model_spec: form.model_spec,
+        variants: form.variants,
       });
-      setResult({
-        title: res.title,
-        body: res.body,
-        tags: res.tags,
-        cover_prompt: res.cover_prompt,
-        model_used: res.model_used,
-        elapsed_s: res.elapsed_s,
-        cost_estimate_usd: res.cost_estimate_usd,
-        used_report_context: res.used_report_context,
-      });
+      // v0.66 (item7) ：多方向返回 {results:[...]}，单篇返回顶层字段 — 统一成数组。
+      const list = Array.isArray(res.results) && res.results.length > 0
+        ? res.results
+        : [res];
+      setResults(list.map(r => ({
+        title: r.title,
+        body: r.body,
+        tags: r.tags,
+        cover_prompt: r.cover_prompt,
+        model_used: r.model_used,
+        elapsed_s: r.elapsed_s,
+        cost_estimate_usd: r.cost_estimate_usd,
+        used_report_context: r.used_report_context,
+        variant_label: r.variant_label,
+      })));
     } catch (e: any) {
       if (!isAborted(e)) setErr(await humaniseErrorAsync(e));
     } finally {
@@ -239,10 +250,37 @@ export default function QuickGenerate() {
           </div>
         </div>
 
+        {/* v0.66 (item7) ：一次出多个不同方向版本，横向对比挑选。 */}
+        <div style={{marginBottom: 10}}>
+          <label>出几个方向对比？</label>
+          <div style={{display: "flex", gap: 6, marginTop: 4}}>
+            {[1, 2, 3, 4].map(n => {
+              const on = form.variants === n;
+              return (
+                <button key={n} type="button" onClick={() => set("variants", n)}
+                  style={{
+                    padding: "5px 14px", borderRadius: 16, fontSize: 13,
+                    border: on ? "1.5px solid var(--primary)" : "1px solid var(--border)",
+                    background: on ? "var(--primary-soft)" : "#fff",
+                    color: on ? "var(--primary)" : "#333",
+                    cursor: "pointer", fontWeight: on ? 600 : 400,
+                  }}>
+                  {on ? "✓ " : ""}{n === 1 ? "单篇" : `${n} 个方向`}
+                </button>
+              );
+            })}
+          </div>
+          <div className="muted" style={{fontSize: 11, marginTop: 4}}>
+            选 ≥2 时，AI 会沿不同角度（教程 / 故事 / 数据 / 避坑）各写一篇供对比 — 成本 ×N、耗时相近（并发）。
+          </div>
+        </div>
+
         <div className="row" style={{gap: 8, marginTop: 16}}>
           <button onClick={run} disabled={!canRun}
             style={{flex: 1, fontSize: 15, padding: "10px 0"}}>
-            {running ? "🤖 AI 正在写...(15-40s)" : "🚀 生成"}
+            {running
+              ? (form.variants > 1 ? `🤖 AI 正在写 ${form.variants} 个方向...(20-50s)` : "🤖 AI 正在写...(15-40s)")
+              : (form.variants > 1 ? `🚀 生成 ${form.variants} 个方向对比` : "🚀 生成")}
           </button>
         </div>
 
@@ -253,63 +291,94 @@ export default function QuickGenerate() {
         )}
       </div>
 
-      {result && (
-        <div className="card" style={{borderLeft: "3px solid var(--primary)"}}>
-          <div className="spread" style={{alignItems: "flex-start", marginBottom: 10}}>
-            <div>
-              <h2 style={{margin: 0}}>📝 生成结果</h2>
-              <p className="muted" style={{fontSize: 12, margin: "4px 0 0"}}>
-                {result.model_used} · {result.elapsed_s.toFixed(1)}s ·
-                ${result.cost_estimate_usd.toFixed(4)} ·
-                {result.used_report_context ? " 用了报告上下文 ✓" : " ⚠️ 没有报告上下文"}
-              </p>
-            </div>
-            <button className="secondary"
-              onClick={() => copyToClipboard(`${result.title}\n\n${result.body}\n\n${result.tags.map(t => `#${t}`).join(" ")}`)}>
-              📋 复制全文
-            </button>
-          </div>
-
-          <div style={{marginBottom: 12}}>
-            <div className="muted" style={{fontSize: 11.5, fontWeight: 600, marginBottom: 4}}>标题</div>
-            <div style={{fontSize: 16, fontWeight: 600}}>{result.title}</div>
-          </div>
-
-          <div style={{marginBottom: 12}}>
-            <div className="muted" style={{fontSize: 11.5, fontWeight: 600, marginBottom: 4}}>
-              正文（{result.body.length} 字）
-            </div>
-            <div style={{
-              padding: "12px 14px", background: "#fafafa", borderRadius: 6,
-              fontSize: 14, lineHeight: 1.75, whiteSpace: "pre-wrap",
-              borderLeft: "3px solid var(--primary)",
-            }}>{result.body}</div>
-          </div>
-
-          {result.tags.length > 0 && (
-            <div style={{marginBottom: 12}}>
-              <div className="muted" style={{fontSize: 11.5, fontWeight: 600, marginBottom: 4}}>Tags</div>
-              <div style={{display: "flex", flexWrap: "wrap", gap: 6}}>
-                {result.tags.map((t, i) => (
-                  <span key={i} className="tag-pill">#{t}</span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {result.cover_prompt && (
-            <details>
-              <summary style={{cursor: "pointer", fontSize: 12.5, color: "var(--muted)"}}>
-                ▾ 封面图 prompt（英文）
-              </summary>
-              <div style={{
-                marginTop: 6, padding: "10px 12px", background: "#fafafa",
-                borderRadius: 6, fontSize: 12, fontFamily: "monospace",
-                whiteSpace: "pre-wrap",
-              }}>{result.cover_prompt}</div>
-            </details>
-          )}
+      {results.length > 1 && (
+        <div className="banner info" style={{marginTop: 12}}>
+          🆚 已生成 {results.length} 个不同方向 — 横向对比下面的标题 / 开头 / 结构，挑最合适的拿去发。
         </div>
+      )}
+      {/* v0.66 (item7) ：多方向时网格并排，单篇时单卡。 */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: results.length > 1 ? "repeat(auto-fit, minmax(320px, 1fr))" : "1fr",
+        gap: 12, marginTop: 12,
+      }}>
+        {results.map((r, i) => (
+          <ResultCard key={i} r={r} index={i} multi={results.length > 1}
+            onCopy={copyToClipboard} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ResultCard({r, index, multi, onCopy}: {
+  r: ResultState; index: number; multi: boolean;
+  onCopy: (text: string) => void;
+}) {
+  return (
+    <div className="card" style={{borderLeft: "3px solid var(--primary)", marginTop: 0}}>
+      <div className="spread" style={{alignItems: "flex-start", marginBottom: 10}}>
+        <div>
+          <h2 style={{margin: 0, fontSize: multi ? 15 : undefined}}>
+            {multi ? `📝 方向 ${index + 1}` : "📝 生成结果"}
+          </h2>
+          {r.variant_label && (
+            <span style={{
+              display: "inline-block", marginTop: 4, padding: "1px 8px",
+              fontSize: 11, fontWeight: 600, background: "var(--primary-soft)",
+              color: "var(--primary)", borderRadius: 8,
+            }}>{r.variant_label}</span>
+          )}
+          <p className="muted" style={{fontSize: 12, margin: "4px 0 0"}}>
+            {r.model_used} · {r.elapsed_s.toFixed(1)}s ·
+            ${r.cost_estimate_usd.toFixed(4)} ·
+            {r.used_report_context ? " 用了报告上下文 ✓" : " ⚠️ 没有报告上下文"}
+          </p>
+        </div>
+        <button className="secondary"
+          onClick={() => onCopy(`${r.title}\n\n${r.body}\n\n${r.tags.map(t => `#${t}`).join(" ")}`)}>
+          📋 复制全文
+        </button>
+      </div>
+
+      <div style={{marginBottom: 12}}>
+        <div className="muted" style={{fontSize: 11.5, fontWeight: 600, marginBottom: 4}}>标题</div>
+        <div style={{fontSize: 16, fontWeight: 600}}>{r.title}</div>
+      </div>
+
+      <div style={{marginBottom: 12}}>
+        <div className="muted" style={{fontSize: 11.5, fontWeight: 600, marginBottom: 4}}>
+          正文（{r.body.length} 字）
+        </div>
+        <div style={{
+          padding: "12px 14px", background: "#fafafa", borderRadius: 6,
+          fontSize: 14, lineHeight: 1.75, whiteSpace: "pre-wrap",
+          borderLeft: "3px solid var(--primary)",
+        }}>{r.body}</div>
+      </div>
+
+      {r.tags.length > 0 && (
+        <div style={{marginBottom: 12}}>
+          <div className="muted" style={{fontSize: 11.5, fontWeight: 600, marginBottom: 4}}>Tags</div>
+          <div style={{display: "flex", flexWrap: "wrap", gap: 6}}>
+            {r.tags.map((t, i) => (
+              <span key={i} className="tag-pill">#{t}</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {r.cover_prompt && (
+        <details>
+          <summary style={{cursor: "pointer", fontSize: 12.5, color: "var(--muted)"}}>
+            ▾ 封面图 prompt（英文）
+          </summary>
+          <div style={{
+            marginTop: 6, padding: "10px 12px", background: "#fafafa",
+            borderRadius: 6, fontSize: 12, fontFamily: "monospace",
+            whiteSpace: "pre-wrap",
+          }}>{r.cover_prompt}</div>
+        </details>
       )}
     </div>
   );

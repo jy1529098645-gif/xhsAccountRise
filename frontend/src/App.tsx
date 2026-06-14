@@ -29,9 +29,25 @@ function RouteErrorBoundary({children}: {children: ReactNode}) {
   return <ErrorBoundary key={loc.pathname}>{children}</ErrorBoundary>;
 }
 
+const MORE_ROUTES = ["/benchmarks", "/dashboard", "/analysis", "/drafts", "/settings"];
+
 export default function App() {
+  const location = useLocation();
   const [connected, setConnected] = useState<boolean>(api.isConnected());
   const [healthOk, setHealthOk] = useState<boolean | null>(null);
+  // 停在「更多」里的页面时自动展开，避免当前激活项被折叠藏起来。
+  const onMoreRoute = MORE_ROUTES.some(p => location.pathname.startsWith(p));
+  // v0.66 ：侧边栏凝练 — 主线 3 步常驻，次级入口收进可折叠「更多」。
+  const [moreOpen, setMoreOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem("studio.nav.moreOpen") === "1"; } catch { return false; }
+  });
+  function toggleMore() {
+    setMoreOpen(v => {
+      const next = !v;
+      try { localStorage.setItem("studio.nav.moreOpen", next ? "1" : "0"); } catch { /* quota */ }
+      return next;
+    });
+  }
 
   useEffect(() => {
     let cancel = false;
@@ -81,23 +97,35 @@ export default function App() {
         </div>
         <ProjectPicker />
         <PlatformPicker />
-        <NavLink to="/reports" className={({isActive}) => isActive ? "active" : ""}>📊 分析报告 <span style={{fontSize: 10, color: "var(--muted)"}}>第 1 步</span></NavLink>
-        {/* v0.62.6 ：板块顺序 = 分析报告 → 起号策略 → 出稿 → 复盘。
-            起号策略 = 看时间线大纲 + 备选 picker。
-            出稿 = 创建 pack（goal/input/directions/expand）+ 多 agent 写每篇。 */}
-        <NavLink to="/strategy" className={({isActive}) => isActive ? "active" : ""}>🚀 起号策略 <span style={{fontSize: 10, color: "var(--muted)"}}>第 2 步</span></NavLink>
-        <NavLink to="/composer" className={({isActive}) => isActive ? "active" : ""}>✍️ 出稿 <span style={{fontSize: 10, color: "var(--muted)"}}>第 3 步</span></NavLink>
-        {/* 快速生成 = 单 LLM 一键出稿，独立于主流程，仅依赖用户上传的报告 + DNA。
-            放在复盘前面 — 用户写完主流程后还想临时来一篇时最顺手。 */}
-        <NavLink to="/quick" className={({isActive}) => isActive ? "active" : ""}>⚡ 快速生成 <span style={{fontSize: 10, color: "var(--muted)"}}>可选</span></NavLink>
-        <NavLink to="/retrospective" className={({isActive}) => isActive ? "active" : ""}>📊 复盘 <span style={{fontSize: 10, color: "var(--muted)"}}>第 4 步</span></NavLink>
-        {/* v0.64 ：对标账号 — 从已上传 library 里挑账号 ，retrieve 时加权 */}
-        <NavLink to="/benchmarks" className={({isActive}) => isActive ? "active" : ""}>🎯 对标账号</NavLink>
-        <NavLink to="/dashboard" className={({isActive}) => isActive ? "active" : ""}>🗂️ 数据总览</NavLink>
+        {/* v0.66 ：工作流凝练为 3 条主线 ：① 分析 → ② 起号工作台（策略+出稿+
+            快速生成合一）→ ③ 复盘。其余次级入口收进「更多」折叠区，砍掉视觉长度。 */}
+        <NavLink to="/reports" className={({isActive}) => isActive ? "active" : ""}>📊 ① 分析报告</NavLink>
+
+        <div className="nav-group-label">② 起号工作台</div>
+        <NavLink to="/strategy" className={({isActive}) => (isActive ? "active nav-sub" : "nav-sub")}>🚀 起号策略</NavLink>
+        <NavLink to="/composer" className={({isActive}) => (isActive ? "active nav-sub" : "nav-sub")}>✍️ 出稿</NavLink>
+        <NavLink to="/quick" className={({isActive}) => (isActive ? "active nav-sub" : "nav-sub")}>⚡ 快速生成</NavLink>
+
+        <NavLink to="/retrospective" className={({isActive}) => isActive ? "active" : ""}>📊 ③ 复盘</NavLink>
         <RunningJobsIndicator />
-        <NavLink to="/analysis" className={({isActive}) => isActive ? "active" : ""}>🧬 爆款分析（粗粒度）</NavLink>
-        <NavLink to="/drafts" className={({isActive}) => isActive ? "active" : ""}>📝 历史出稿</NavLink>
-        <NavLink to="/settings" className={({isActive}) => isActive ? "active" : ""}>⚙️ 设置</NavLink>
+
+        <div className="nav-divider" />
+        <div className="nav-more-toggle" onClick={toggleMore}
+             role="button" tabIndex={0}
+             onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleMore(); } }}>
+          <span>⋯ 更多</span>
+          <span style={{fontSize: 11}}>{(moreOpen || onMoreRoute) ? "▴" : "▾"}</span>
+        </div>
+        {(moreOpen || onMoreRoute) && (
+          <>
+            {/* v0.64 ：对标账号 — 从已上传 library 里挑账号 ，retrieve 时加权 */}
+            <NavLink to="/benchmarks" className={({isActive}) => (isActive ? "active nav-sub" : "nav-sub")}>🎯 对标账号</NavLink>
+            <NavLink to="/dashboard" className={({isActive}) => (isActive ? "active nav-sub" : "nav-sub")}>🗂️ 数据总览</NavLink>
+            <NavLink to="/analysis" className={({isActive}) => (isActive ? "active nav-sub" : "nav-sub")}>🧬 爆款分析</NavLink>
+            <NavLink to="/drafts" className={({isActive}) => (isActive ? "active nav-sub" : "nav-sub")}>📝 历史出稿</NavLink>
+            <NavLink to="/settings" className={({isActive}) => (isActive ? "active nav-sub" : "nav-sub")}>⚙️ 设置</NavLink>
+          </>
+        )}
 
         <div className={connected && healthOk ? "conn ok" : "conn off"}>
           <span className="dot"></span>

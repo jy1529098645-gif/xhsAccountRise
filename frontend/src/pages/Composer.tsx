@@ -4,8 +4,9 @@ import { api } from "../api";
 import { fmtLikes, roleName, coerceStringList } from "../format";
 import { useTargetPlatform } from "../components/PlatformPicker";
 import RagReferenceGrid from "../components/RagReferenceGrid";
+import RagReferenceCompactList from "../components/RagReferenceCompactList";
 import AgentConfigPanel, {
-  AgentSelection, defaultSelection, selectionToSpecs,
+  AgentSelection, defaultSelection, selectionToSpecs, SelectionSummary,
 } from "../components/AgentConfigPanel";
 import ProgressTimeline, { Stage as TimelineStage } from "../components/ProgressTimeline";
 import NextStepCard from "../components/NextStepCard";
@@ -16,7 +17,7 @@ import { startJob, getJob, cancelJob, useJob } from "../lib/jobs";
 import { LLM_CATALOG } from "../catalog";
 import type {
   ComposeBundle, DraftCandidate, Library, Platform,
-  StrategyPackDTO, TopicSlotDTO,
+  StrategyPackDTO, StrategySeed, TopicSlotDTO,
 } from "../types";
 
 // v0.62.8 ：Composer = 后置阶段，消费起号策略板块出的 pack 来写每篇正文。
@@ -131,6 +132,9 @@ export default function Composer() {
     : -1;
   const altIdxFromUrl = parseInt(searchParams.get("alt") || "-1", 10);
   const [strategyPack, setStrategyPack] = useState<StrategyPackDTO | null>(null);
+  // v0.66 ：从起号策略 slot 带来的结构种子。run() 透传给后端 ，让正文按
+  // 起号策略为这条 slot 设计好的 hook/结构/内容形式写。null = 裸出稿（自由发挥）。
+  const [strategySeed, setStrategySeed] = useState<StrategySeed | null>(null);
   useEffect(() => {
     if (!packIdFromUrl) { setStrategyPack(null); return; }
     api.getStrategy(packIdFromUrl).then((d: any) => {
@@ -186,6 +190,20 @@ export default function Composer() {
       slot.materials_needed?.length ? "需要材料：" + (slot.materials_needed as string[]).join("、") : "",
       strategyPack?.chosen_direction?.target_audience ? `目标受众：${strategyPack.chosen_direction.target_audience}` : "",
     ].filter(Boolean).join("\n\n"));
+    // v0.66 ：机械填阶段先用 slot 字段组一份结构种子兜底；Phase 2 AI 会用
+    // 后端确定性种子覆盖（两者等价）。这样即便 AI prefill 失败，出稿仍带结构。
+    const mechOutline = Array.isArray(eff.outline) ? eff.outline.map(String) : [];
+    if (eff.hook_type || eff.content_format || mechOutline.length) {
+      setStrategySeed({
+        recommended_hook: eff.hook_type || "",
+        opening_hook: eff.title || "",
+        structure: mechOutline,
+        content_format: eff.content_format || "",
+        source: "strategy_slot",
+      });
+    } else {
+      setStrategySeed(null);
+    }
     return eff;
   }
 
@@ -222,6 +240,10 @@ export default function Composer() {
       }
       if (ai.niche) setNiche(ai.niche);
       if (ai.extra_constraints) setExtra(ai.extra_constraints);
+      // v0.66 ：后端确定性结构种子覆盖机械版（非空时）。
+      if (ai.strategy_seed && Object.keys(ai.strategy_seed).length > 0) {
+        setStrategySeed(ai.strategy_seed);
+      }
       setPrefillNote(
         ai._fallback
           ? `已带入 ：${ai.topic?.slice(0, 30) || ""}（AI 优化失败，用了机械填）`
@@ -327,6 +349,10 @@ export default function Composer() {
       if (bf.niche) setNiche(String(bf.niche));
       if (bf.extra_constraints) setExtra(String(bf.extra_constraints));
       if (bf.platform) setPlatform(String(bf.platform));
+      // v0.66 (item4) ：从收藏库「用这个写」带过来的结构种子也要接上。
+      if (bf.strategy_seed && typeof bf.strategy_seed === "object") {
+        setStrategySeed(bf.strategy_seed);
+      }
       setPrefillNote(`已从「起号策略」一键带入：「${String(bf.topic || "").slice(0, 40) || "无标题"}」`);
     } catch (e) {
       console.error("prefill failed", e);
@@ -387,6 +413,8 @@ export default function Composer() {
         target_length: length, cta_strength: cta,
         niche, extra_constraints: extra,
         platform: platform || undefined,
+        // v0.66 ：起号策略结构种子透传 ─ 让正文按 slot 设计的结构写。
+        ...(strategySeed ? { strategy_seed: strategySeed } : {}),
         // v0.61.22 ：只发已选角度的非 auto 映射，省 payload。
         angle_models: Object.fromEntries(
           Object.entries(angleModels).filter(([a, s]) => angles.includes(a) && s && s !== "auto")
@@ -572,6 +600,23 @@ export default function Composer() {
             <span className="muted">详细约束</span>
             <span style={{whiteSpace: "pre-wrap", fontSize: 11.5}}>{extra || "(空)"}</span>
           </div>
+          {/* v0.66 ：显式展示起号策略为这条 slot 设计好的结构骨架 ─ 让用户确信
+              出稿会按策略结构走，而不是 AI 另起一套。 */}
+          {strategySeed && (strategySeed.structure?.length || strategySeed.recommended_hook) && (
+            <div style={{marginTop: 8, padding: "8px 10px", background: "var(--primary-soft)",
+                         borderRadius: 6, fontSize: 11.5, lineHeight: 1.7}}>
+              <div style={{fontWeight: 700, color: "var(--primary)", marginBottom: 3}}>
+                🎯 将按起号策略设计的结构出稿（硬约束）
+              </div>
+              {strategySeed.recommended_hook && (
+                <div><span className="muted">hook：</span>{strategySeed.recommended_hook}
+                  {strategySeed.content_format ? ` · 形式：${strategySeed.content_format}` : ""}</div>
+              )}
+              {strategySeed.structure?.length ? (
+                <div><span className="muted">结构：</span>{strategySeed.structure.join(" → ")}</div>
+              ) : null}
+            </div>
+          )}
         </div>
       )}
 
@@ -689,9 +734,12 @@ export default function Composer() {
             </span>
           </h2>
           {!showAgentConfig ? (
-            <div className="muted" style={{fontSize: 12, padding: 8, background: "#fafafa", borderRadius: 6}}>
-              当前用默认配置：6 个 AI 角色（策略师 / 起草团 ×3 / 审稿团 ×2 / 改稿师 / 融合师 / 计划师）。
-              想换便宜/最强阵容点上面「▾ 自定义」。
+            <div>
+              {/* v0.66 (item6) ：折叠态也回显实时阵容 — 不点开也能确认用了哪些 AI。 */}
+              <SelectionSummary selection={agentConfig} />
+              <div className="muted" style={{fontSize: 11.5, marginTop: 6}}>
+                想换便宜/最强阵容点上面「▾ 自定义」。
+              </div>
             </div>
           ) : (
             <AgentConfigPanel selection={agentConfig} onChange={setAgentConfig} />
@@ -844,18 +892,15 @@ function ComposeResult({bundle}: {bundle: ComposeBundle}) {
         </div>
       )}
 
-      {/* v0.63 ：AI 参考的真实素材 — 用户专门提的需求。出稿当下就要看到
-          (不只是历史出稿)。位置在候选稿之上 — 用户拿到候选时第一眼就看到
-          AI 真的读了哪些原帖，验证没瞎编。
-          替换了 v0.61.25 的纯文本小卡片 + 下面 final 稿 section 里折叠的
-          ReferenceSourcesPanel。 */}
+      {/* v0.65.3 ：起号策略页已经显示「真实爆款 + 图卡片」 ，出稿这里只补充
+          用户原话维度 ：评论原文 + 来源原贴链接 + 原贴互动数据（赞 / 收藏 /
+          评论 / 分享）。Strategy 那侧负责选题 / 方向参考 ，Composer 这侧负责
+          「写稿时听到的真实用户声音」。 */}
       {bundle.rag && (
-        <RagReferenceGrid
-          refs={(bundle.rag.refs as any) || []}
+        <RagReferenceCompactList
           comments={(bundle.rag as any).comments || []}
-          hooks={(bundle.rag.hooks as any) || []}
-          title="📚 AI 写这条稿时参考的真实素材"
-          subtitle="下面是 AI 起草时实际读到的真实贴文 + 用户原话 + hook 模板。点封面图或标题跳原帖看完整图文，验证 AI 没瞎编。"
+          title="📚 AI 写这条稿时听到的真实用户原话"
+          subtitle="AI 起草时读到的高赞评论 ─ 每条都标了来源原贴的链接 + 真实互动数据。点链接验证原贴。"
         />
       )}
 

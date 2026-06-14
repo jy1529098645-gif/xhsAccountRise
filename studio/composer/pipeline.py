@@ -48,6 +48,193 @@ def _latest_dna_payload() -> dict[str, Any]:
         return {}
 
 
+# v0.65 ：composer 自己跑 RAG ─ 之前 schedule + body_drafter 都没用 RAG ，
+# 全凭 LLM 据 DNA 摘要瞎写。下面这些 helper 让每个 slot 都拿到真实 refs，
+# 同时把 「用了哪几个 DNA 数据点」 显式写回 slot.decision_anchors 让 UI 可追溯。
+
+def _slim_ref(r: dict[str, Any]) -> dict[str, Any]:
+    """Trim a notes row → compact ref dict (跟 studio_drafts.rag_json 同形状)."""
+    return {
+        "note_id": r.get("note_id"),
+        "title": r.get("title") or "",
+        "liked_count": r.get("liked_count") or 0,
+        "collected_count": r.get("collected_count") or 0,
+        "comment_count": r.get("comment_count") or 0,
+        "share_count": r.get("share_count") or 0,
+        "url": r.get("url") or "",
+        "body_excerpt": (r.get("body") or "")[:400],
+        "duration_sec": int((r.get("video_duration_ms") or 0) / 1000),
+        "image_urls": r.get("image_urls") or [],
+        "cover_image": (r.get("image_urls") or [None])[0],
+        "author_nickname": r.get("author_nickname") or "",
+        "tags": _safe_tags(r.get("tags_json")),
+    }
+
+
+def _top_benchmark_examples(
+    rag_by_slot: dict[int, dict[str, Any]], limit: int = 5,
+) -> list[dict[str, Any]]:
+    """v0.66 (item1) ：聚合所有 slot 已检索的 RAG refs ，按 note_id 去重、按赞数
+    降序取 top-N ，作为「材料清单旁的图文对标帖」。复用已有检索结果 ，零额外成本。
+    返回的就是 _slim_ref 形状 ，前端 RagReferenceGrid 可直接渲染。"""
+    by_id: dict[str, dict[str, Any]] = {}
+    for payload in (rag_by_slot or {}).values():
+        for r in (payload.get("refs") or []):
+            nid = r.get("note_id")
+            if not nid or nid in by_id:
+                continue
+            by_id[nid] = r
+    ranked = sorted(by_id.values(), key=lambda r: r.get("liked_count") or 0, reverse=True)
+    return ranked[:max(0, limit)]
+
+
+def _safe_tags(raw: Any) -> list[str]:
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [str(t) for t in raw][:8]
+    try:
+        v = json.loads(raw)
+        if isinstance(v, list):
+            return [str(t) for t in v][:8]
+    except Exception:
+        pass
+    return []
+
+
+def _slim_comment(c: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "comment_id": c.get("comment_id"),
+        "content": (c.get("content") or "")[:240],
+        "like_count": c.get("like_count") or 0,
+        "note_id": c.get("note_id"),
+        # v0.65.3 ：来源原贴信息（出稿页用） ─ retrieve.search_comments 已经把
+        # title / url / 互动数据 / cover_image 拼好 ，这里直接透传。
+        "source_note": c.get("source_note"),
+    }
+
+
+def _slim_hook(h: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "category": h.get("category") or "",
+        "count": h.get("count") or 0,
+        "median_likes": h.get("median_likes") or 0,
+        "examples": [
+            {"title": e.get("title") or "", "liked_count": e.get("liked_count") or 0}
+            for e in (h.get("examples") or [])[:3]
+        ],
+    }
+
+
+def _retrieve_for_slot(query: str, k_refs: int = 4, n_comments: int = 5) -> dict[str, Any]:
+    """Run FTS retrieval for one slot. Empty / no-match → returns empty payload
+    (caller still wants the dict shape, just empty)."""
+    if not query or len(query.strip()) < 3:
+        return {"refs": [], "comments": [], "hooks": []}
+    try:
+        from ..rag import retrieve as _retrieve
+        out = _retrieve.retrieve_for_brief(query, k_notes=k_refs, n_comments=n_comments)
+    except Exception:
+        return {"refs": [], "comments": [], "hooks": []}
+    return {
+        "refs": [_slim_ref(r) for r in (out.get("refs") or [])],
+        "comments": [_slim_comment(c) for c in (out.get("comments") or [])],
+        "hooks": [_slim_hook(h) for h in (out.get("hooks") or [])],
+    }
+
+
+def _format_refs_for_prompt(refs: list[dict[str, Any]], comments: list[dict[str, Any]],
+                            hooks: list[dict[str, Any]]) -> str:
+    """Render the slot's RAG payload as a prompt-context block.
+    Keeps the note_id visible so drafter can quote `[ref:<note_id>]` inline."""
+    if not refs and not comments and not hooks:
+        return ""
+    parts: list[str] = ["【⭐ 本 slot 的真实参考素材（必须引用 ：body 里出现的"
+                        "数字/工具名/案例/句式 → 必须从这里来 ，且加 [ref:<note_id>] 标记）】"]
+    if refs:
+        parts.append("\n  ▸ 同主题真实爆款（按相关度 × 互动量）：")
+        for r in refs[:8]:
+            tags = "/".join(r.get("tags") or [])
+            tag_block = f" [tags: {tags}]" if tags else ""
+            body_block = ""
+            if r.get("body_excerpt"):
+                body_block = f"\n      正文片段 ：{r['body_excerpt'][:160]}"
+            parts.append(
+                f"    · [ref:{r['note_id']}] @{r.get('author_nickname','?')} "
+                f"👍{r['liked_count']:,} ⭐{r['collected_count']:,} 💬{r['comment_count']:,}"
+                f"{tag_block}\n      标题 ：{r.get('title','')[:80]}"
+                f"{body_block}"
+            )
+    if comments:
+        parts.append("\n  ▸ 真实用户原话（高赞评论 ：写作时尽量复用其情绪/痛点表达 ，不抄字）：")
+        for c in comments[:8]:
+            parts.append(f"    · ({c.get('like_count',0)}👍) {(c.get('content') or '')[:120]}")
+    if hooks:
+        parts.append("\n  ▸ 可借鉴的 hook 模板：")
+        for h in hooks[:5]:
+            ex = " / ".join(e.get("title","")[:30] for e in (h.get("examples") or [])[:2])
+            parts.append(
+                f"    · {h.get('category')} (n={h.get('count')}, "
+                f"中位赞 {int(h.get('median_likes', 0))}){' — ' + ex if ex else ''}"
+            )
+    parts.append(
+        "\n💡 写正文时 ：每出现一个具体数字 / 工具名 / 真实案例 ，"
+        "**必须在该句末尾打 [ref:<note_id>] marker**（note_id 取上面 ref 的 id）。"
+        "评论原话用「<」「>」尖括号包起来。"
+        "未引用过任何 ref 的稿件视作未完成。"
+    )
+    return "\n".join(parts)
+
+
+def _compute_kpi_baseline(slot: TopicSlot, dna: dict[str, Any]) -> dict[str, Any]:
+    """v0.65 (P3) ：从 DNA artifact 里挑出跟本 slot (hook_type, content_format)
+    匹配的样本，算出 median / p90 互动量作为该 slot predicted_likes 的对照基线。
+    返回 {median, p90, n, source}；查不到就空 dict。"""
+    titles_sec = (dna.get("sections", {}) or {}).get("titles", {}) or {}
+    by_cat = titles_sec.get("by_category", {}) or {}
+    hk = slot.hook_type or slot.angle
+    if not hk:
+        return {}
+    # Try exact match first, then fuzzy contains.
+    cat = by_cat.get(hk)
+    if not cat:
+        for k, v in by_cat.items():
+            if hk and (hk in k or k in hk):
+                cat = v; break
+    if not cat:
+        return {}
+    likes = cat.get("likes") or {}
+    return {
+        "median": int(likes.get("median") or 0),
+        "p90": int(likes.get("p90") or 0),
+        "p75": int(likes.get("p75") or 0),
+        "n": int(cat.get("count") or 0),
+        "source": f"DNA · hook_type={hk}",
+    }
+
+
+def _compute_grounding(body: str, refs: list[dict[str, Any]],
+                        bo_keywords: list[str]) -> tuple[float, dict[str, Any]]:
+    """v0.65 (P4) ：算 grounding score。
+    分子 ：body 里 [ref:xxx] marker 出现次数 + 蓝海词 verbatim 命中次数
+    分母 ：段落数（按 \n\n 切，最少 1）
+    返回 (score, breakdown_dict)。
+    """
+    if not body:
+        return 0.0, {"ref_markers": 0, "keyword_hits": 0, "segments": 0}
+    import re as _re
+    ref_markers = len(_re.findall(r"\[ref:[A-Za-z0-9_\-]+\]", body))
+    kw_hits = sum(1 for k in (bo_keywords or []) if k and k in body)
+    segments = max(1, len([p for p in body.split("\n\n") if p.strip()]))
+    score = round((ref_markers + kw_hits) / segments, 2)
+    return score, {
+        "ref_markers": ref_markers,
+        "keyword_hits": kw_hits,
+        "segments": segments,
+        "keywords_matched": [k for k in (bo_keywords or []) if k and k in body][:10],
+    }
+
+
 # ---- Phase 1: propose ----------------------------------------------------
 
 # All LLM JSON calls now go through the shared utility, which handles OpenAI
@@ -439,6 +626,12 @@ _BODY_DRAFT_BATCH_SCHEMA = {
                 "properties": {
                     "idx": {"type": "integer"},
                     "body_draft": {"type": "string"},
+                    # v0.65 (P0+P1) ：drafter 必须声明本条 body 用到的真实 ref note_id。
+                    # 跟 body 里的 [ref:<note_id>] inline marker 一一对应。
+                    "references_used": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
                 },
             },
         },
@@ -480,6 +673,18 @@ _SCHEDULE_SCHEMA = {
                         "type": "array",
                         "items": {"type": "object"},
                     },
+                    # v0.65 (P1) ：结构化锚点。让 publish_rationale / decision_rationale
+                    # 不只是自由文本 ，而是带 DNA 数据点引用（蓝海词 / heatmap cell / hook
+                    # 类别 / tag / 评论原话）。前端把每个 anchor 渲染成可点 chip ，hover
+                    # 显示 n / median / source ，用户能看出 AI 不是凭感觉决定的。
+                    "decision_anchors": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                    },
+                    "publish_anchors": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                    },
                 },
             },
         },
@@ -491,9 +696,53 @@ _RESOURCES_SCHEMA = {
     "properties": {
         "materials_checklist": {"type": "array", "items": {"type": "string"}},
         "risks_and_mitigations": {"type": "array", "items": {"type": "string"}},
+        # v0.66 (item5) ：两套可对比成功指标方案（稳健 / 进取）。
+        "metrics_plans": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "label": {"type": "string"},
+                    "metrics": {"type": "array", "items": {"type": "string"}},
+                    "rationale": {"type": "string"},
+                },
+            },
+        },
+        # 兼容字段 ：旧模型/旧 prompt 仍可能只回 success_metrics。
         "success_metrics": {"type": "array", "items": {"type": "string"}},
     },
 }
+
+
+def _normalise_metrics_plans(raw: Any) -> list[dict]:
+    """v0.66 (item5) ：把 LLM 回的 metrics_plans 规整成
+    [{"label": str, "metrics": [str], "rationale": str}]。容错各种走形 ：
+    - 不是 list → []
+    - item 是 str → 包成单指标方案
+    - metrics 是 str → 拆成单元素 list
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for i, item in enumerate(raw):
+        if isinstance(item, str):
+            if item.strip():
+                out.append({"label": f"方案{i + 1}", "metrics": [item.strip()], "rationale": ""})
+            continue
+        if not isinstance(item, dict):
+            continue
+        metrics = item.get("metrics")
+        if isinstance(metrics, str):
+            metrics = [metrics]
+        metrics = [str(m).strip() for m in (metrics or []) if str(m).strip()]
+        if not metrics:
+            continue
+        out.append({
+            "label": str(item.get("label") or f"方案{i + 1}"),
+            "metrics": metrics,
+            "rationale": str(item.get("rationale") or ""),
+        })
+    return out[:3]  # 最多 3 套，避免 UI 拥挤
 
 
 async def expand(
@@ -942,11 +1191,29 @@ async def _expand_inner(
         + multi_dir_directive
     )
     scheduler_gen = registry.build(scheduler_spec)[0]
-    # Default max_tokens scaled to topic_count : ~280 tokens per slot for the
-    # heavy detail (title + outline + materials + 2 alternative_versions +
-    # rationale), plus ~500 token JSON envelope + weekly_themes. Floor at
-    # 6000 for small counts, ceiling at 14000 (gpt-4o output limit is 16K).
-    _default_sched_tokens = max(6000, min(14000, topic_count * 280 + 500))
+    # v0.65 ：大计数时 ，告诉 LLM **跳过 alternative_versions / decision_anchors /
+    # publish_anchors** 让 schedule 数组减肥到 ~150 tokens / slot ，避免在 12+ 篇
+    # 时 schedule[] 中段被 16K 输出上限截断 ─ 这是 「大量 AI 漏排」 的根因。
+    # 之前没 hint 时 LLM 老老实实给每个 slot 写 2 个 alternatives + 锚点 array ，
+    # 一个 slot 就 280-400 tokens ，28 slots = 11-14K 已经卡输出上限 + 还要塞
+    # weekly_themes / series_thesis → 必然截断。
+    if topic_count > 10:
+        sched_user += (
+            "\n\n⚡ **大计数减肥指令** ：本次有 " + str(topic_count) + " 篇 schedule slot ，"
+            "为避免输出 token 超限被截断 ，请 ：\n"
+            "  · `alternative_versions` 留空 [] （后续可单独再生成）\n"
+            "  · `decision_anchors / publish_anchors` 留空 []（用户能从 publish_rationale "
+            "里读到判断逻辑就够）\n"
+            "  · `outline` 每篇 3-4 条（不是 5-6 条）\n"
+            "  · `weekly_themes` 每周一句话 notes 即可\n"
+            "  ▶ 主目标 ：保证 schedule 数组长度 = " + str(topic_count) + " ，每篇 title + outline + angle + "
+            "publish_slot 完整 ，其它字段可以简洁。"
+        )
+    # Default max_tokens scaled to topic_count : reduced from 280 → 200 per slot
+    # since we now ask LLM to skip the heavy alternative_versions / anchors when
+    # topic_count > 10. Cap at 14000 (gpt-4o output limit is 16K, leave headroom).
+    _per_slot = 200 if topic_count > 10 else 280
+    _default_sched_tokens = max(6000, min(14000, topic_count * _per_slot + 800))
     async def _try_scheduler(user_payload: str, max_tokens: int = _default_sched_tokens):
         return await _call_json(
             scheduler_gen, prompts.SCHEDULER_SYSTEM, user_payload,
@@ -1086,6 +1353,15 @@ async def _expand_inner(
                 dict(a) for a in (s.get("alternative_versions") or [])
                 if isinstance(a, dict)
             ],
+            # v0.65 (P1) ：结构化锚点 ─ 透传 LLM 输出的 anchors 数组到 slot。
+            decision_anchors=[
+                dict(a) for a in (s.get("decision_anchors") or [])
+                if isinstance(a, dict)
+            ],
+            publish_anchors=[
+                dict(a) for a in (s.get("publish_anchors") or [])
+                if isinstance(a, dict)
+            ],
         )
         for _raw in schedule_raw
         for s in [_to_slot_dict(_raw)]
@@ -1139,50 +1415,169 @@ async def _expand_inner(
         )
 
         async def _gap_fill_with_fallback(user_payload: str) -> list[Any]:
-            """v0.63 ：3-level gap-fill so 'AI 漏排' placeholder is RARELY seen.
-            L1 = primary scheduler retry. L2 = same scheduler with shorter
-            prompt (often token-pressure related). L3 = cross-family LLM
-            (DeepSeek if primary was OpenAI, OpenAI if primary was DeepSeek).
-            Returns the first non-empty schedule list."""
-            # L1: primary
-            try:
-                r = await _try_scheduler(user_payload, max_tokens=10000)
-                if r.get("schedule"):
-                    return r["schedule"]
-            except Exception:
-                pass
-            # L2: minimal prompt (less context, less token pressure)
-            try:
-                minimal = (
-                    f"【方向】{chosen.name}\n"
-                    f"【已有 {len(schedule)} 篇标题】\n" +
-                    "\n".join(f"  - {s.title}" for s in schedule[-8:]) + "\n\n"
-                    f"请补出 **正好 {missing} 篇** 不同角度的标题 + 大纲。"
-                    f"weekly_themes 可空。"
-                )
-                r = await _try_scheduler(minimal, max_tokens=8000)
-                if r.get("schedule"):
-                    return r["schedule"]
-            except Exception:
-                pass
-            # L3: cross-family fallback
+            """v0.65.2 ：终极 gap-fill ─ 两阶段。
+            阶段 A ：用 _SCHEDULE_SCHEMA 跑 chunk-of-4。schema 重 ，会截断但有概率成。
+            阶段 B ：上面没填够时 ，**切换到 _TOPICS_SCHEMA**（极轻量 ：只要 title/
+                      title_variants/angle/hook_type/outline/materials_needed/intent，
+                      完全没 alternative_versions / anchors），按需要的剩余数量整批 拉一次。
+                      _TOPICS_SCHEMA 体积是 _SCHEDULE_SCHEMA 的 ~1/3 ，single-call 出
+                      20+ 条都不会截断。这一步几乎 100% 命中。
+            阶段 C ：要还有零星缺口 → per-slot 单条 _TOPICS_SCHEMA 调用 ，每次只要 1 条。
+
+            日志输出 ：每个阶段把命中数 / 失败原因打 stderr ，用户终端可见。
+
+            Returns ：合并所有阶段的 schedule items 列表。
+            """
+            import sys as _sys
+            CHUNK = 4
+            collected: list[Any] = []
+            existing_titles_running = [s.title for s in schedule if s.title]
+            target = missing
+
             primary = scheduler_spec.lower()
             fb_spec = ("deepseek" if ("openai" in primary or "gpt" in primary)
                        else "openai:gpt-4o")
+            fb_gen = None
             try:
                 fb_gen = registry.build(fb_spec)[0]
-                r = await _call_json(
-                    fb_gen, prompts.SCHEDULER_SYSTEM, user_payload,
-                    max_tokens=10000, tool_name="submit_schedule",
-                    schema=_SCHEDULE_SCHEMA,
-                )
-                if r.get("schedule"):
-                    return r["schedule"]
             except Exception:
-                pass
-            return []
+                fb_gen = None
+
+            # ---- 阶段 A ：chunked _SCHEDULE_SCHEMA ----
+            attempts_left = max(2, (target + CHUNK - 1) // CHUNK)
+            while len(collected) < target and attempts_left > 0:
+                attempts_left -= 1
+                want_now = min(CHUNK, target - len(collected))
+                avoid = "\n".join(f"  - {t}" for t in existing_titles_running[-30:]) or "  - （无）"
+                chunk_user = (
+                    f"【方向】{chosen.name} — {chosen.positioning_statement}\n"
+                    f"【受众】{chosen.target_audience}\n"
+                    f"【周期】{inp.cycle_weeks} 周 × {inp.posts_per_week} 篇/周\n\n"
+                    f"【已经写过的标题（请勿重复 / 角度也别撞）】\n{avoid}\n\n"
+                    f"请只补 **正好 {want_now} 篇** 新的 schedule slot ，跟上面任何标题"
+                    f"都明显不同。weekly_themes / alternative_versions / decision_anchors / "
+                    f"publish_anchors **全部留空 []**（这是减肥 ，不是偷懒 ，避免输出 token 上限被吃光）。\n"
+                    f"严格按 schema 输出 schedule 数组（长度 = {want_now}）。"
+                )
+                added_this_round = 0
+                for gen, label in [(scheduler_gen, "primary"), (fb_gen, "fallback")]:
+                    if gen is None:
+                        continue
+                    try:
+                        r = await _call_json(
+                            gen, prompts.SCHEDULER_SYSTEM, chunk_user,
+                            max_tokens=max(3500, want_now * 800 + 800),
+                            tool_name="submit_schedule",
+                            schema=_SCHEDULE_SCHEMA,
+                        )
+                        items = (r.get("schedule") or [])[:want_now]
+                        for it in items:
+                            if isinstance(it, dict):
+                                title = str(it.get("title") or "").strip()
+                                if not title:
+                                    continue
+                                if title in existing_titles_running:
+                                    continue
+                                collected.append(it)
+                                existing_titles_running.append(title)
+                                added_this_round += 1
+                        if added_this_round > 0:
+                            break
+                    except Exception as e:
+                        print(f"[expand.gap_A] {label} {gen.model} 失败 ：{e!r}", file=_sys.stderr)
+                        continue
+                print(f"[expand.gap_A] +{added_this_round} (collected={len(collected)}/{target})",
+                      file=_sys.stderr)
+                if added_this_round == 0:
+                    # _SCHEDULE_SCHEMA 这一轮拿不出来 → 跳到阶段 B（轻 schema） ，
+                    # 不要在 A 死循环。
+                    break
+
+            # ---- 阶段 B ：用 _TOPICS_SCHEMA 一次性补齐剩余 ----
+            still_missing = target - len(collected)
+            if still_missing > 0:
+                avoid = "\n".join(f"  - {t}" for t in existing_titles_running[-40:]) or "  - （无）"
+                topics_user = (
+                    f"【方向】{chosen.name} — {chosen.positioning_statement}\n"
+                    f"【受众】{chosen.target_audience}\n"
+                    f"【周期】共需 {still_missing} 篇选题 ，跟下面已有标题完全不同。\n\n"
+                    f"【已用过的标题】\n{avoid}\n\n"
+                    f"请按 system schema 输出 topics 数组（长度 = {still_missing}）。"
+                    f"每条 ：title + 1-2 个 variants + angle + hook_type + 3-4 条 outline + "
+                    f"materials_needed + intent。"
+                )
+                for gen, label in [(scheduler_gen, "primary"), (fb_gen, "fallback")]:
+                    if gen is None:
+                        continue
+                    try:
+                        r = await _call_json(
+                            gen, prompts.TOPICGEN_SYSTEM, topics_user,
+                            max_tokens=max(2500, still_missing * 280 + 600),
+                            tool_name="submit_topics",
+                            schema=_TOPICS_SCHEMA,
+                        )
+                        items = (r.get("topics") or [])[:still_missing]
+                        for it in items:
+                            if isinstance(it, dict):
+                                title = str(it.get("title") or "").strip()
+                                if not title or title in existing_titles_running:
+                                    continue
+                                collected.append(it)
+                                existing_titles_running.append(title)
+                        print(f"[expand.gap_B] {label} {gen.model} ：+{len(items)} topics "
+                              f"(collected={len(collected)}/{target})", file=_sys.stderr)
+                        if len(collected) >= target:
+                            break
+                    except Exception as e:
+                        print(f"[expand.gap_B] {label} {gen.model} 失败 ：{e!r}", file=_sys.stderr)
+                        continue
+
+            # ---- 阶段 C ：per-slot 1-by-1 兜底 ----
+            # 阶段 B 也没填够 → 每个缺口单独要 1 条 topic。轻 schema + 单条调用 = 几乎不会失败。
+            still_missing = target - len(collected)
+            per_slot_attempts = still_missing * 2
+            while len(collected) < target and per_slot_attempts > 0:
+                per_slot_attempts -= 1
+                avoid = "\n".join(f"  - {t}" for t in existing_titles_running[-25:]) or "  - （无）"
+                one_user = (
+                    f"【方向】{chosen.name} — {chosen.positioning_statement}\n"
+                    f"【受众】{chosen.target_audience}\n\n"
+                    f"【已用过】\n{avoid}\n\n"
+                    f"请只出 **1 条** 跟上面完全不同的选题。按 schema 输出 topics 数组（长度 = 1）。"
+                )
+                got_one = False
+                for gen, label in [(scheduler_gen, "primary"), (fb_gen, "fallback")]:
+                    if gen is None:
+                        continue
+                    try:
+                        r = await _call_json(
+                            gen, prompts.TOPICGEN_SYSTEM, one_user,
+                            max_tokens=1200, tool_name="submit_topics",
+                            schema=_TOPICS_SCHEMA,
+                        )
+                        items = r.get("topics") or []
+                        for it in items[:1]:
+                            if isinstance(it, dict):
+                                title = str(it.get("title") or "").strip()
+                                if not title or title in existing_titles_running:
+                                    continue
+                                collected.append(it)
+                                existing_titles_running.append(title)
+                                got_one = True
+                                break
+                        if got_one:
+                            break
+                    except Exception as e:
+                        print(f"[expand.gap_C] {label} {gen.model} 失败 ：{e!r}", file=_sys.stderr)
+                        continue
+                if not got_one:
+                    print(f"[expand.gap_C] 一轮 per-slot 没拿到新条目 ，剩余预算 {per_slot_attempts}",
+                          file=_sys.stderr)
+            print(f"[expand.gap] 总命中 ：{len(collected)}/{target}", file=_sys.stderr)
+            return collected
 
         try:
+            # gap_user 不再被 _gap_fill_with_fallback 用 ，但保留参数避免破坏调用签名。
             new_raw = await _gap_fill_with_fallback(gap_user)
             gap_resp = {"schedule": new_raw}
             for _raw in new_raw[:missing]:
@@ -1207,6 +1602,14 @@ async def _expand_inner(
                         dict(a) for a in (s.get("alternative_versions") or [])
                         if isinstance(a, dict)
                     ],
+                    decision_anchors=[
+                        dict(a) for a in (s.get("decision_anchors") or [])
+                        if isinstance(a, dict)
+                    ],
+                    publish_anchors=[
+                        dict(a) for a in (s.get("publish_anchors") or [])
+                        if isinstance(a, dict)
+                    ],
                 ))
             _save_checkpoint("scheduler_gap", gap_resp)
             existing_warn = sched_parsed.get("_warning")
@@ -1224,68 +1627,118 @@ async def _expand_inner(
                 if existing_warn else f"gap-fill error: {e!r}"
             )
 
-    # Final safety net ：if still short after gap-fill (rare) → pad with
-    # placeholder stubs so the count is always exact.
+    # v0.65.2 ：之前在这里给缺口塞「待补 #N (AI 漏排) 」 占位 stub —— 用户体感差，
+    # 看见就疑似产品坏掉。彻底删除占位逻辑 ，改为 ：
+    #   1. 极端情况（gap_A + gap_B + gap_C 全失败）这里只剩缺口
+    #   2. 不塞假 stub ，转而调用 TOPICGEN_SYSTEM 做一次 LAST-RESORT 整批补齐
+    #      （3 家 LLM 轮流试 ：scheduler primary / cross-family / claude:sonnet）
+    #   3. 第 2 步也救不回来才接受 schedule 比 topic_count 短 ，但**绝不**塞占位标题
     if len(schedule) < topic_count:
-        # Coverage map of (week, day_of_week) positions already used, so the
-        # padding doesn't collide with existing slots — it slots into gaps.
+        import sys as _sys
+        still_missing = topic_count - len(schedule)
+        print(f"[expand] last-resort fill 启动 ，缺口 {still_missing}", file=_sys.stderr)
+        existing_titles_running = [s.title for s in schedule if s.title]
         used_positions = {(s.week, s.day_of_week) for s in schedule}
-        missing = topic_count - len(schedule)
-        ppw = max(1, inp.posts_per_week)
-        cw = max(1, inp.cycle_weeks)
-        # Even spread across cycle: each missing slot gets its own (week, day)
-        # by walking through every (week, day_of_week) and picking unused ones.
-        candidate_positions: list[tuple[int, int]] = []
-        for w in range(1, cw + 1):
-            for d in range(7):
-                if (w, d) not in used_positions:
-                    candidate_positions.append((w, d))
-                    if len(candidate_positions) >= missing:
-                        break
-            if len(candidate_positions) >= missing:
-                break
-        # If somehow we still don't have enough (shouldn't happen — cw×7 ≥
-        # cw×ppw for ppw ≤ 7), just stack on the last week.
-        while len(candidate_positions) < missing:
-            candidate_positions.append((cw, 0))
+        # 第 3 路 last-resort 备援家 ：claude:sonnet（前面 primary / cross-family
+        # 都已经试过 ，这里换一家新的 ，避免「同 1 家 LLM 反复失败导致全程空转」）。
+        try:
+            claude_fb_gen = registry.build("claude:sonnet")[0]
+        except Exception:
+            claude_fb_gen = None
+        primary_lc = scheduler_spec.lower()
+        cross_spec = ("deepseek" if ("openai" in primary_lc or "gpt" in primary_lc)
+                       else "openai:gpt-4o")
+        try:
+            cross_gen = registry.build(cross_spec)[0]
+        except Exception:
+            cross_gen = None
 
-        # Borrow angle/intent from the existing slots when possible to keep
-        # the pad slots visually consistent with the rest of the pack.
-        fallback_angle = (
-            schedule[0].angle if schedule and schedule[0].angle else ""
+        last_resort_user = (
+            f"【方向】{chosen.name} — {chosen.positioning_statement}\n"
+            f"【受众】{chosen.target_audience}\n"
+            f"【缺口】用户原本要 {topic_count} 篇 ，目前只有 {len(schedule)} 篇 ，"
+            f"请只补 **正好 {still_missing} 篇** 跟下面已用标题完全不同的选题。\n\n"
+            f"【已用标题】\n" + (
+                "\n".join(f"  - {t}" for t in existing_titles_running[-40:]) or "  - （无）"
+            ) + "\n\n"
+            f"严格按 schema 输出 topics 数组（长度 = {still_missing}）。每条 ：title + "
+            f"1-2 variants + angle + hook_type + 3-4 条 outline + materials_needed + intent。"
         )
-        fallback_intent = (
-            schedule[0].intent if schedule and schedule[0].intent else ""
-        )
-        fallback_format = (
-            schedule[0].content_format if schedule and schedule[0].content_format
-            else ("图文" if platform == "xiaohongshu"
-                  else "短视频" if platform in ("douyin", "kuaishou")
-                  else "图文")
-        )
-        for i, (w, d) in enumerate(candidate_positions[:missing], 1):
-            schedule.append(TopicSlot(
-                week=w, day_of_week=d, publish_slot="",
-                title=f"待补 #{len(schedule) + 1}（AI 漏排 — 请用 ✍️ 写这个 重生成）",
-                angle=fallback_angle,
-                intent=fallback_intent,
-                content_format=fallback_format,
-                outline=[],
-                materials_needed=[],
-                publish_rationale="",
-                decision_rationale=(
-                    "AI 实际只排出了 "
-                    f"{len(schedule)} 篇 / 用户要求 {topic_count} 篇，"
-                    "这一篇是占位 — 点 ✍️ 写这个 让 AI 重新出标题 + 大纲。"
-                ),
-            ))
-        # Re-sort by (week, day_of_week) so padded slots merge into the
-        # natural timeline order instead of sticking at the bottom.
+        for try_gen, label in [
+            (scheduler_gen, "primary"),
+            (cross_gen, f"cross={cross_spec}"),
+            (claude_fb_gen, "claude:sonnet"),
+        ]:
+            if try_gen is None or len(existing_titles_running) - len(schedule) >= still_missing:
+                continue
+            if len(schedule) + (len(existing_titles_running) - len([s for s in schedule if s.title])) >= topic_count:
+                break
+            try:
+                r = await _call_json(
+                    try_gen, prompts.TOPICGEN_SYSTEM, last_resort_user,
+                    max_tokens=max(2500, still_missing * 280 + 600),
+                    tool_name="submit_topics",
+                    schema=_TOPICS_SCHEMA,
+                )
+                items = r.get("topics") or []
+                appended = 0
+                for it in items[:still_missing - appended]:
+                    if not isinstance(it, dict):
+                        continue
+                    title = str(it.get("title") or "").strip()
+                    if not title or title in existing_titles_running:
+                        continue
+                    # 给这条 last-resort topic 排一个 (week, day_of_week)
+                    next_pos = None
+                    for w in range(1, max(1, inp.cycle_weeks) + 1):
+                        for d in range(7):
+                            if (w, d) not in used_positions:
+                                next_pos = (w, d); break
+                        if next_pos: break
+                    if next_pos is None:
+                        # 落到最后一周补
+                        next_pos = (max(1, inp.cycle_weeks), 0)
+                    w, d = next_pos
+                    used_positions.add((w, d))
+                    schedule.append(TopicSlot(
+                        week=w, day_of_week=d, publish_slot="",
+                        title=title,
+                        title_variants=[str(x) for x in (it.get("title_variants") or [])],
+                        angle=str(it.get("angle", "")),
+                        hook_type=str(it.get("hook_type", "")),
+                        outline=[str(x) for x in (it.get("outline") or [])],
+                        materials_needed=[str(x) for x in (it.get("materials_needed") or [])],
+                        intent=str(it.get("intent", "")),
+                        content_format=(
+                            "图文" if platform == "xiaohongshu"
+                            else "短视频" if platform in ("douyin", "kuaishou")
+                            else "图文"
+                        ),
+                        # 没 publish_rationale / decision_rationale ─ 用户看到的就是
+                        # 「正常 AI 出的选题」，不再有占位文案。
+                    ))
+                    existing_titles_running.append(title)
+                    appended += 1
+                print(f"[expand] last-resort {label} {try_gen.model} ：+{appended}", file=_sys.stderr)
+                if len(schedule) >= topic_count:
+                    break
+            except Exception as e:
+                print(f"[expand] last-resort {label} 失败 ：{e!r}", file=_sys.stderr)
+                continue
+
+        # 排好序方便前端按时间渲染
         schedule.sort(key=lambda s: (s.week, s.day_of_week))
-        schedule_short_warning = (
-            f"scheduler returned {len(schedule) - missing}/{topic_count} slots; "
-            f"padded {missing} placeholder slot(s)"
-        )
+
+        # 如果**所有 LLM 路径都跑完还是不够** ─ 接受短缺 ，前端会显示「实际 N 篇」。
+        # 不再塞 「待补 #N (AI 漏排)」 占位 stub。
+        if len(schedule) < topic_count:
+            schedule_short_warning = (
+                f"final schedule {len(schedule)}/{topic_count} ：所有 AI 路径都尝试过 ，"
+                f"短缺 {topic_count - len(schedule)} 篇。可能是 API 配额耗尽或库主题"
+                f"过窄。点 「重新生成」 重试 ，或缩小目标 cycle_weeks×posts_per_week。"
+            )
+        else:
+            schedule_short_warning = None
 
     if schedule_short_warning:
         # Surface in the saved checkpoint warning slot so the response can
@@ -1386,21 +1839,46 @@ async def _expand_inner(
     except Exception:
         drafter_fallback = None
 
+    # v0.65 (P0) ：每个 slot 预先跑一次 RAG ，结果同时
+    #   (a) 喂给 body drafter 作 prompt context（=「AI 真看了哪几篇」）
+    #   (b) 持久化到 schedule[i].rag_refs / rag_comments / rag_hooks（=「UI 可追溯」）
+    rag_by_slot: dict[int, dict[str, Any]] = {}
+    for i, s in enumerate(schedule):
+        query = " ".join(p for p in [s.title, s.angle, s.hook_type] if p)
+        rag_by_slot[i] = _retrieve_for_slot(query, k_refs=4, n_comments=5)
+
+    def _refs_block_for_slot(slot_idx: int) -> str:
+        rag = rag_by_slot.get(slot_idx) or {}
+        return _format_refs_for_prompt(
+            rag.get("refs") or [], rag.get("comments") or [], rag.get("hooks") or [],
+        )
+
     async def _draft_batch(slots_with_idx: list[tuple[int, TopicSlot]],
                             avoid_openings: list[str] | None = None,
                             avoid_titles: list[str] | None = None,
-                           ) -> list[tuple[int, str, str | None]]:
+                           ) -> list[tuple[int, str, list[str], str | None]]:
         if not slots_with_idx:
             return []
-        slot_blocks = "\n\n".join(_slot_block(i, s) for i, s in slots_with_idx)
+        # v0.65 (P0) ：把 RAG refs 拼到每个 slot block 后面 ，让 drafter 看到
+        # 「这一篇的真实素材就这几条」 ─ 引用必须从这里来 + 标 [ref:<note_id>]。
+        slot_blocks_parts: list[str] = []
+        for i, s in slots_with_idx:
+            block = _slot_block(i, s)
+            refs_block = _refs_block_for_slot(i)
+            if refs_block:
+                block += "\n" + refs_block
+            slot_blocks_parts.append(block)
+        slot_blocks = "\n\n".join(slot_blocks_parts)
         avoid = _avoid_block(avoid_openings or [], avoid_titles or [])
         batch_prompt = (
             f"{direction_block}\n\n"
             f"【一次性给你 {len(slots_with_idx)} 个 slot，请同时为每个写 body_draft】\n\n"
             f"{slot_blocks}\n\n"
-            f"按 schema 输出 ：drafts 数组，每项 {{ idx: <对应 slot 编号>, body_draft: <完整正文> }}。"
+            f"按 schema 输出 ：drafts 数组，每项 {{ idx: <对应 slot 编号>, body_draft: <完整正文>, "
+            f"references_used: [<本条用到的 note_id 列表>] }}。"
             f" 每个 body_draft 必须按它自己的 content_format 写（图文 vs 短视频脚本 vs 长视频章节差别很大）。"
             f" 不同 slot 之间的开头 hook、具体例子、数字、案例都要明显不同 — 不要换个词复述同一段。"
+            f" **强制 ：每条 body 至少出现 1 个 [ref:<note_id>] inline marker；references_used 必须列出对应 note_id。**"
             f"{avoid}"
         )
         last_err: str | None = None
@@ -1416,35 +1894,50 @@ async def _expand_inner(
                     timeout=180,
                 )
                 drafts = r.get("drafts") or []
-                out: list[tuple[int, str, str | None]] = []
-                returned = {int(d.get("idx", -1)): str(d.get("body_draft", "")).strip()
-                            for d in drafts if isinstance(d, dict)}
+                out: list[tuple[int, str, list[str], str | None]] = []
+                returned: dict[int, tuple[str, list[str]]] = {}
+                for d in drafts:
+                    if not isinstance(d, dict):
+                        continue
+                    idx_v = d.get("idx", -1)
+                    try:
+                        idx_i = int(idx_v)
+                    except (TypeError, ValueError):
+                        continue
+                    body_s = str(d.get("body_draft", "")).strip()
+                    refs_used = [str(x) for x in (d.get("references_used") or []) if x]
+                    returned[idx_i] = (body_s, refs_used)
                 for i, _ in slots_with_idx:
-                    body = returned.get(i, "")
-                    out.append((i, body, None if body else "empty body_draft in batch"))
-                if any(b for _, b, _ in out):
+                    body, refs_used = returned.get(i, ("", []))
+                    out.append((i, body, refs_used,
+                                None if body else "empty body_draft in batch"))
+                if any(b for _, b, _, _ in out):
                     return out
                 last_err = "all drafts in batch were empty"
             except Exception as e:
                 last_err = repr(e)
             await asyncio.sleep(2)
         # Both attempts failed/empty — return empty per-slot with the error.
-        return [(i, "", last_err) for i, _ in slots_with_idx]
+        return [(i, "", [], last_err) for i, _ in slots_with_idx]
 
     async def _draft_single(slot_idx: int, slot: TopicSlot,
                              avoid_openings: list[str],
                              avoid_titles: list[str],
-                             use_fallback: bool = False) -> tuple[int, str, str | None]:
+                             use_fallback: bool = False) -> tuple[int, str, list[str], str | None]:
         """v0.63: single-slot retry — used when batch left a slot empty OR
         when a duplicate hook needs re-drafting. Carries the avoid-list so
         it can't repeat what was already written."""
         gen = drafter_fallback if (use_fallback and drafter_fallback) else drafter_chosen
         avoid = _avoid_block(avoid_openings, avoid_titles)
+        refs_block = _refs_block_for_slot(slot_idx)
         prompt = (
             f"{direction_block}\n\n"
             f"【请为下面这 1 个 slot 写完整 body_draft】\n\n"
             f"{_slot_block(slot_idx, slot)}\n"
-            f"按 schema 输出 ：drafts 数组（长度 1）格式 {{ idx: {slot_idx}, body_draft: <完整正文> }}。"
+            + (refs_block + "\n" if refs_block else "")
+            + f"按 schema 输出 ：drafts 数组（长度 1）格式 {{ idx: {slot_idx}, body_draft: <完整正文>, "
+            f"references_used: [<note_id 列表>] }}。"
+            f" 至少 1 个 [ref:<note_id>] inline marker。"
             f"{avoid}"
         )
         try:
@@ -1461,11 +1954,12 @@ async def _expand_inner(
             for d in drafts:
                 if isinstance(d, dict):
                     body = str(d.get("body_draft", "")).strip()
+                    refs_used = [str(x) for x in (d.get("references_used") or []) if x]
                     if body:
-                        return (slot_idx, body, None)
-            return (slot_idx, "", "empty body_draft in single retry")
+                        return (slot_idx, body, refs_used, None)
+            return (slot_idx, "", [], "empty body_draft in single retry")
         except Exception as e:
-            return (slot_idx, "", repr(e))
+            return (slot_idx, "", [], repr(e))
 
     # --- Body-drafter pool + Resourcer in parallel ---
     # Resourcer only reads titles/materials from the schedule, NOT body_drafts,
@@ -1490,7 +1984,8 @@ async def _expand_inner(
         if not generate_body_drafts:
             return []
         if "drafter" in saved and isinstance(saved["drafter"], list):
-            return [(item.get("idx"), item.get("body") or "", item.get("err"))
+            return [(item.get("idx"), item.get("body") or "",
+                     item.get("refs_used") or [], item.get("err"))
                     for item in saved["drafter"] if isinstance(item, dict)]
         if not schedule:
             return []
@@ -1503,10 +1998,10 @@ async def _expand_inner(
                 batches.append(cur); cur = []
         if cur: batches.append(cur)
         batch_results = await asyncio.gather(*[_draft_batch(b) for b in batches])
-        results: dict[int, tuple[str, str | None]] = {}
+        results: dict[int, tuple[str, list[str], str | None]] = {}
         for br in batch_results:
-            for idx, body, err in br:
-                results[idx] = (body, err)
+            for idx, body, refs_used, err in br:
+                results[idx] = (body, refs_used, err)
 
         # v0.63 Phase B: recover empty slots + de-duplicate similar openings.
         # Two failure modes patched here:
@@ -1520,7 +2015,7 @@ async def _expand_inner(
         seen_sig_to_idx: dict[str, int] = {}
         to_redraft: list[int] = []
         for idx in sorted(results.keys()):
-            body, err = results[idx]
+            body, _refs_used, err = results[idx]
             slot = schedule[idx] if 0 <= idx < len(schedule) else None
             if slot and slot.title:
                 used_titles.append(slot.title)
@@ -1550,20 +2045,22 @@ async def _expand_inner(
                 continue
             _check_cancel()
             slot = schedule[idx]
-            _, body, err = await _draft_single(
+            _, body, refs_used, err = await _draft_single(
                 idx, slot, used_openings, used_titles, use_fallback=False,
             )
             if not body and drafter_fallback is not None:
-                _, body, err = await _draft_single(
+                _, body, refs_used, err = await _draft_single(
                     idx, slot, used_openings, used_titles, use_fallback=True,
                 )
-            results[idx] = (body, err)
+            results[idx] = (body, refs_used, err)
             if body:
                 used_openings.append(_opening(body))
 
-        out_list = [(idx, body, err) for idx, (body, err) in sorted(results.items())]
+        out_list = [(idx, body, refs_used, err)
+                    for idx, (body, refs_used, err) in sorted(results.items())]
         _save_checkpoint("drafter", [
-            {"idx": idx, "body": d, "err": e} for idx, d, e in out_list
+            {"idx": idx, "body": d, "refs_used": ru, "err": e}
+            for idx, d, ru, e in out_list
         ])
         return out_list
 
@@ -1585,13 +2082,45 @@ async def _expand_inner(
     _check_cancel()
 
     drafter_errors: list[str] = []
-    for idx, draft, err in draft_results:
+    # v0.65 (P4) ：grounding score 用的蓝海词列表（DNA blue_ocean rankings 前 20）。
+    bo_keywords_for_grounding = [
+        b.get("keyword") or ""
+        for b in ((dna.get("sections", {}).get("keyword_blueocean", {}) or {}).get("rankings") or [])[:20]
+        if (b.get("keyword") or "")
+    ]
+    for idx, draft, refs_used, err in draft_results:
         if idx is None or idx >= len(schedule):
             continue
+        slot = schedule[idx]
+        rag = rag_by_slot.get(idx) or {}
+        # v0.65 (P0) ：把 RAG 数据 + drafter 声明的 references_used 写进 slot ，
+        # UI 渲染时不再需要重查。
+        slot.rag_refs = rag.get("refs") or []
+        slot.rag_comments = rag.get("comments") or []
+        slot.rag_hooks = rag.get("hooks") or []
+        slot.references_used = refs_used or []
+        # v0.65 (P3) ：KPI 基线（同 hook_type 中位 / P90）
+        slot.kpi_baseline = _compute_kpi_baseline(slot, dna)
         if draft:
-            schedule[idx].body_draft = draft
+            slot.body_draft = draft
+            # v0.65 (P4) ：grounding score
+            slot.grounding_score, slot.grounding_breakdown = _compute_grounding(
+                draft, slot.rag_refs, bo_keywords_for_grounding,
+            )
         if err:
-            drafter_errors.append(f"slot #{idx + 1} ({schedule[idx].title[:40]}): {err}")
+            drafter_errors.append(f"slot #{idx + 1} ({slot.title[:40]}): {err}")
+
+    # v0.65 (P0) ：即使没跑 body drafter（generate_body_drafts=False，默认 ）
+    # 也要把每个 slot 的 RAG payload + KPI 基线持久化 ，UI 才能稳定展示。
+    drafted_indices = {idx for idx, _b, _r, _e in draft_results if idx is not None}
+    for i, slot in enumerate(schedule):
+        if i in drafted_indices:
+            continue
+        rag = rag_by_slot.get(i) or {}
+        slot.rag_refs = rag.get("refs") or []
+        slot.rag_comments = rag.get("comments") or []
+        slot.rag_hooks = rag.get("hooks") or []
+        slot.kpi_baseline = _compute_kpi_baseline(slot, dna)
 
     # Defensive coercion. Sonnet's tool_use occasionally returns these
     # list fields as a single JSON-encoded string (e.g. '["a","b"]'). If we
@@ -1616,12 +2145,24 @@ async def _expand_inner(
         return []
 
     pack = StrategyPack.new(library_id=lib_id, platform=platform, input=inp, chosen=chosen)
+    # v0.66 (bugfix) ：复用 propose 创建的行 pack_id，而不是 StrategyPack.new()
+    # 新生成的随机 id。否则 pack_json.pack_id ≠ DB 行 pack_id，前端拿到内部 id
+    # 后 regenerate_slot / IterateCard / 各种按 pack_id 的调用全部 404。
+    pack.pack_id = pack_id
     pack.series_thesis = str(sched_parsed.get("series_thesis", ""))
     pack.weekly_themes = weekly_themes
     pack.schedule = schedule
     pack.materials_checklist = _coerce_list(res_parsed.get("materials_checklist"))
     pack.risks_and_mitigations = _coerce_list(res_parsed.get("risks_and_mitigations"))
-    pack.success_metrics = _coerce_list(res_parsed.get("success_metrics"))
+    # v0.66 (item5) ：解析两套可对比指标方案。normalise 成 [{label, metrics[], rationale}]。
+    pack.metrics_plans = _normalise_metrics_plans(res_parsed.get("metrics_plans"))
+    # success_metrics 保留兼容 ：优先取「稳健」方案的 metrics，否则回退旧字段。
+    if pack.metrics_plans:
+        pack.success_metrics = list(pack.metrics_plans[0].get("metrics") or [])
+    else:
+        pack.success_metrics = _coerce_list(res_parsed.get("success_metrics"))
+    # v0.66 (item1) ：材料清单旁的 1-5 篇图文对标帖（聚合 slot RAG refs，取 top-5）。
+    pack.benchmark_examples = _top_benchmark_examples(rag_by_slot, limit=5)
     # v0.59: persist ALL chosen directions for multi-direction packs.
     # Legacy clients can still read pack.chosen_direction (=first one).
     pack.chosen_directions = chosen_directions
@@ -1655,6 +2196,7 @@ async def regenerate_slot(
     pack_id: str,
     slot_idx: int,
     scheduler_spec: str = "openai:gpt-4o",
+    instruction: str = "",
 ) -> dict[str, Any]:
     """v0.63 ：用户在 UI 上点「✍️ 写这个」时调这个 endpoint 替换占位 slot。
 
@@ -1694,14 +2236,30 @@ async def regenerate_slot(
         if avoid_titles else ""
     )
 
+    # v0.66 (item3) ：用户的调整指令 ─ 让单条重生成能「按我的话改」，而不是
+    # 每次都随机出一条。例 ：「太拖沓，压缩到 3 段」「换更冲突的 hook」「这周改成测评角度」。
+    instruction = (instruction or "").strip()
+    instruction_block = (
+        f"\n【⭐ 用户的调整指令（最高优先，必须照做）】\n{instruction}\n"
+        if instruction else ""
+    )
+    cur_block = (
+        f"\n【当前这条（仅供参考你要改的对象）】\n"
+        f"  标题 ：{target_slot.get('title','')}\n"
+        f"  角度 ：{target_slot.get('angle','')}\n"
+        f"  大纲 ：{' / '.join(str(x) for x in (target_slot.get('outline') or []))}\n"
+        if instruction else ""
+    )
     user_prompt = (
         f"【账号方向】{chosen.get('name','')} — {chosen.get('positioning_statement','')}\n"
         f"【目标受众】{chosen.get('target_audience','')}\n"
         f"【平台】{platform}\n"
-        f"【周期】{cycle_weeks} 周 × {posts_per_week} 篇/周\n\n"
+        f"【周期】{cycle_weeks} 周 × {posts_per_week} 篇/周\n"
+        f"{cur_block}{instruction_block}\n"
         f"【缺口】请重新出 **1 篇** 排期 slot 替换原来的占位 — "
         f"目标 week={target_slot.get('week') or 1}, "
         f"day_of_week={target_slot.get('day_of_week') or 0}。"
+        f"{'务必体现上面的用户调整指令。' if instruction else ''}"
         f"{avoid_block}\n\n"
         f"严格按 system schema 输出 ：schedule 数组长度 = 1，"
         f"weekly_themes 可留空 []。"
@@ -1752,11 +2310,15 @@ async def regenerate_slot(
             f"可能 ：API 限速 / 余额 / 服务暂时不可用。稍等再试或换 LLM 预设。"
         )
 
+    # v0.66 (item3) ：regenerate_slot 永远是用户主动重生成 1 条，不是「补缺口」，
+    # 所以 scheduler 按 prompt 给标题尾部加的「[自补]」标记在这里是误导，去掉。
+    _new_title = str(new_slot_raw.get("title") or "").replace(" [自补]", "").replace("[自补]", "").strip()
+
     # Preserve original (week, day_of_week, content_format) so the schedule
     # grid doesn't shuffle — replace only the topical content.
     new_slot = {
         **target_slot,
-        "title": str(new_slot_raw.get("title") or ""),
+        "title": _new_title,
         "title_variants": [str(x) for x in (new_slot_raw.get("title_variants") or [])],
         "angle": str(new_slot_raw.get("angle") or target_slot.get("angle") or ""),
         "hook_type": str(new_slot_raw.get("hook_type") or ""),
@@ -1770,9 +2332,44 @@ async def regenerate_slot(
             dict(a) for a in (new_slot_raw.get("alternative_versions") or [])
             if isinstance(a, dict)
         ],
+        # v0.65 ：propagate anchors + 重拉 RAG + 算 baseline 给新 slot
+        "decision_anchors": [
+            dict(a) for a in (new_slot_raw.get("decision_anchors") or [])
+            if isinstance(a, dict)
+        ],
+        "publish_anchors": [
+            dict(a) for a in (new_slot_raw.get("publish_anchors") or [])
+            if isinstance(a, dict)
+        ],
         # Clear any prior body_draft — user will regenerate via Composer.
         "body_draft": "",
+        # Body 没了 ─ grounding 重置；rag_refs 按新 title 拉一次 + KPI 基线
+        "references_used": [],
+        "grounding_score": 0.0,
+        "grounding_breakdown": {},
     }
+    try:
+        _new_rag = _retrieve_for_slot(
+            " ".join(x for x in [new_slot["title"], new_slot["angle"], new_slot["hook_type"]] if x),
+            k_refs=4, n_comments=5,
+        )
+        new_slot["rag_refs"] = _new_rag.get("refs") or []
+        new_slot["rag_comments"] = _new_rag.get("comments") or []
+        new_slot["rag_hooks"] = _new_rag.get("hooks") or []
+    except Exception:
+        new_slot.setdefault("rag_refs", [])
+        new_slot.setdefault("rag_comments", [])
+        new_slot.setdefault("rag_hooks", [])
+    try:
+        from .models import TopicSlot as _TS
+        new_slot["kpi_baseline"] = _compute_kpi_baseline(
+            _TS(week=int(new_slot.get("week") or 1),
+                hook_type=new_slot.get("hook_type") or "",
+                angle=new_slot.get("angle") or ""),
+            _latest_dna_payload(),
+        )
+    except Exception:
+        new_slot["kpi_baseline"] = {}
     schedule[slot_idx] = new_slot
     pack_data["schedule"] = schedule
     with db.connect() as con:

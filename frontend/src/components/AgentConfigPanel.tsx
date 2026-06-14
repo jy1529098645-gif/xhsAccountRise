@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import { AgentRoleId, AGENT_ROLES, COST_PRESETS, LLM_CATALOG } from "../catalog";
 
 export interface AgentSelection {
@@ -55,6 +56,49 @@ export function selectionToSpecs(sel: AgentSelection) {
     skip_synthesizer: sel.skip.synthesizer,
     skip_planner: sel.skip.planner,
   };
+}
+
+// v0.66 (item6) ：把 selection 渲染成明文阵容，让用户 double-check 自己选了哪些
+// AI（之前选完没有任何文字回显，用户不确定是否生效）。每角色一行 ：角色 = 模型。
+export function selectionSummary(
+  sel: AgentSelection,
+): { role: string; text: string; skipped: boolean }[] {
+  const llmLabel = (id: string) => LLM_CATALOG.find(o => o.id === id)?.label || id;
+  return ROLE_KEYS.map(role => {
+    const spec = AGENT_ROLES.find(r => r.id === role)!;
+    const skipped = !!sel.skip[role];
+    const models = sel[role];
+    const text = skipped
+      ? "已跳过"
+      : (models.length ? models.map(llmLabel).join(" + ") : "默认");
+    return { role: spec.label, text, skipped };
+  });
+}
+
+export function SelectionSummary({ selection }: { selection: AgentSelection }) {
+  const rows = selectionSummary(selection);
+  const preset = matchPresetName(selection);
+  return (
+    <div style={{ fontSize: 12, padding: "8px 10px", background: "#fafafa", borderRadius: 6 }}>
+      <div style={{ fontWeight: 600, marginBottom: 6 }}>
+        🤖 你的 AI 阵容
+        <span style={{ marginLeft: 6, color: "var(--primary)", fontWeight: 600 }}>
+          · {preset || "自定义组合"}
+        </span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "3px 10px", lineHeight: 1.6 }}>
+        {rows.map(r => (
+          <Fragment key={r.role}>
+            <span className="muted">{r.role}</span>
+            <span style={{ color: r.skipped ? "var(--muted)" : "var(--text)",
+                           fontStyle: r.skipped ? "italic" : "normal" }}>
+              {r.text}
+            </span>
+          </Fragment>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export default function AgentConfigPanel({
@@ -117,6 +161,11 @@ export default function AgentConfigPanel({
           </select>
           <button className="ghost" onClick={reset} style={{ fontSize: 12 }}>↺ 恢复默认</button>
         </div>
+      </div>
+
+      {/* v0.66 (item6) ：明文阵容回显 — 选完一眼确认每个角色用了哪个 AI。 */}
+      <div style={{ margin: "8px 0 4px" }}>
+        <SelectionSummary selection={selection} />
       </div>
 
       {AGENT_ROLES.map(role => {

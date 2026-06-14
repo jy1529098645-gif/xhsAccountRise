@@ -114,6 +114,19 @@ textarea { resize: vertical; min-height: 100px; font-size: 14px; }
 }
 .sidebar a:hover { background: #f7f7f7; text-decoration: none; }
 .sidebar a.active { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+/* v0.66 ：导航分组 — 主线步骤更紧凑 + 「更多」可折叠次级入口 */
+.sidebar .nav-group-label {
+  font-size: 11px; font-weight: 700; color: var(--muted);
+  padding: 10px 12px 2px; letter-spacing: .3px;
+}
+.sidebar a.nav-sub { padding-left: 24px; font-size: 13.5px; }
+.sidebar .nav-more-toggle {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px; border-radius: 6px; cursor: pointer; color: var(--muted);
+  font-size: 13px; user-select: none;
+}
+.sidebar .nav-more-toggle:hover { background: #f7f7f7; }
+.sidebar .nav-divider { height: 1px; background: var(--border); margin: 8px 4px; }
 .sidebar .footer {
   margin-top: auto; padding: 10px 12px; font-size: 11px; color: var(--muted);
   border-top: 1px solid var(--border);

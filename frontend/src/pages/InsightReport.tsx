@@ -195,7 +195,7 @@ export default function InsightReport() {
       <div className="card">
         <h2>🟢 OpenAI 独立报告</h2>
         <p className="muted" style={{fontSize: 12, marginBottom: 12}}>
-          GPT-5 / GPT-4o 独立看到同一份数据，给出自己的判断。
+          OpenAI gpt-4o 独立看到同一份数据，给出自己的判断。出空白时已自动 retry 1 次。
         </p>
         <AIReportBlock report={openaiAna} accentColor="#10a37f" />
       </div>
@@ -235,6 +235,49 @@ function AIReportBlock({report, accentColor}: {report: any; accentColor: string}
         </div>
         <div style={{fontSize: 12, marginTop: 8}}>
           → 回 <Link to="/reports">分析报告页</Link> 重新跑一次试试；如果还是失败，看顶部黄条确认本地后端 / API key 是否正常。
+        </div>
+      </div>
+    );
+  }
+  // v0.65 ：兜底 ─ 后端旧报告（修复前生成）+ 偶发的 LLM 截断都会落到「report 是
+  // 个对象但所有关键字段全空」状态。原来这里直接 return 空白 ─ UI 上「OpenAI 独立
+  // 报告」标题底下啥都没有 ，用户体感 = 没产出。现在显式给一个 actionable hint。
+  // v0.65.1 ：也把 "-" / "（空）" 这种占位文本视作空。
+  const _trim = (s: any) => typeof s === "string" ? s.trim() : s;
+  const _meaningful = (s: any) => {
+    const v = _trim(s);
+    return v && v !== "-" && v !== "—" && v !== "（空）" && v !== "(empty)";
+  };
+  const isEmpty = (
+    !_meaningful(report.executive_summary)
+    && !(report.key_findings ?? []).length
+    && !(report.content_opportunities ?? []).length
+    && !_meaningful(report.audience_insight)
+    && !_meaningful(report.launch_mode?.recommendation)
+    && !(report.risks_and_blind_spots ?? []).length
+    && !(report.recommended_next_steps ?? []).length
+  );
+  if (isEmpty) {
+    const rawKeys: string[] = report._raw_keys ?? [];
+    return (
+      <div className="banner" style={{
+        margin: 0, background: "#fff8e6", borderLeft: "4px solid #f6c265",
+        color: "#8a5a00", padding: "10px 14px", borderRadius: 6,
+      }}>
+        <b>这一份报告里这家 AI 没有可用产出。</b>
+        <div style={{fontSize: 12.5, marginTop: 6, lineHeight: 1.6}}>
+          这通常是 ：(a) 这份报告是 <b>v0.65 修复前生成</b> 的老数据（v0.65 之后跑的会自动 retry 1 次 + 硬切 gpt-4o）；
+          (b) API key 余额不足 / 配额耗尽 / 模型暂时不可用。
+          <br />
+          <b>修复办法</b> ：回 <Link to="/reports">分析报告页</Link> 点 <b>重新生成分析</b>。
+          {rawKeys.length > 0 && (
+            <>
+              <br />
+              <span style={{fontSize: 11.5, opacity: 0.8}}>
+                调试 ：LLM 返回了这些 keys 但 value 都空 ：[{rawKeys.join(", ")}]
+              </span>
+            </>
+          )}
         </div>
       </div>
     );

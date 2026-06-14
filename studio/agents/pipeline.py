@@ -106,6 +106,15 @@ async def run_pipeline(
         brief = replace(brief, platform=lib_meta.platform)
     ctx = AgentContext(brief=brief, library_id=lib_id)
 
+    # v0.66 ：起号策略种子 → 直接作为 ctx.strategy，并跳过出稿阶段的 Strategist
+    # 重算。否则 Strategist（全模式）会另生成一套 hook/结构，覆盖起号策略为这条
+    # slot 设计好的骨架 —— 这正是「出的稿子不是按起号策略设计的结构来」的根因。
+    # drafter._seed_block 会把它作为硬约束置顶；UI strategy 卡 / planner 也读它。
+    if getattr(brief, "strategy_seed", None):
+        from dataclasses import replace as _replace
+        ctx.strategy = dict(brief.strategy_seed)
+        cfg = _replace(cfg, skip_strategist=True)
+
     # Build agents
     drafters = registry.build(cfg.drafter_spec)
     if not drafters:
@@ -245,6 +254,9 @@ def _persist(ctx: AgentContext, cfg: PipelineConfig,
                 "content": (c.get("content") or "")[:300],
                 "like_count": c.get("like_count"),
                 "note_id": c.get("note_id"),
+                # v0.65.3 ：来源原贴的链接 + 互动数据 ─ 让出稿页能直接显示
+                # 「这条评论来自哪个原贴 / 原贴的赞 / 评论 / 收藏 / 分享数」。
+                "source_note": c.get("source_note"),
             }
             for c in (ctx.comments or [])[:30]
         ],
@@ -493,6 +505,36 @@ def _insert_douyin_meta(con, draft_id: str, c, now: int) -> None:
         pass
 
 
+def _kpi_baseline_for_hook(hook_type: str) -> dict[str, Any]:
+    """v0.65 (P3) ：根据最新 DNA artifact 里 titles.by_category 拿出同 hook_type
+    的 median / p25 / p75 / p90 likes。返回 {median, p75, p90, n, source}。
+    用于 DraftDetail 在 predicted_likes 旁边显示「该 hook 类型在本库的真实分布」
+    色块，让用户判断 AI 的预估是否合理。"""
+    if not hook_type:
+        return {}
+    try:
+        from ..composer.pipeline import _latest_dna_payload as _dna_get
+        dna = _dna_get()
+    except Exception:
+        return {}
+    by_cat = ((dna.get("sections", {}) or {}).get("titles", {}) or {}).get("by_category", {}) or {}
+    cat = by_cat.get(hook_type)
+    if not cat:
+        for k, v in by_cat.items():
+            if hook_type in k or k in hook_type:
+                cat = v; break
+    if not cat:
+        return {}
+    likes = cat.get("likes") or {}
+    return {
+        "median": int(likes.get("median") or 0),
+        "p75": int(likes.get("p75") or 0),
+        "p90": int(likes.get("p90") or 0),
+        "n": int(cat.get("count") or 0),
+        "source": f"DNA · hook_type={hook_type}",
+    }
+
+
 def _insert_candidate(con, draft_id: str, c, now: int, chosen: bool) -> None:
     meta = {
         "latency_ms": c.latency_ms,
@@ -507,6 +549,32 @@ def _insert_candidate(con, draft_id: str, c, now: int, chosen: bool) -> None:
     dy_meta = getattr(c.payload, "douyin_meta", None)
     if dy_meta:
         meta["douyin_meta"] = dy_meta
+
+    # v0.65 (P3) ：非抖音平台也给 predicted_likes 一个对照基线 ─ 按本 candidate
+    # 的 hook_type 在当前库找同 hook 的 likes 分布。让 DraftDetail 像 Douyin 那样
+    # 渲染 weak / good / strong 色块。Douyin 自己有 predicted_metrics，跳过。
+    if not dy_meta:
+        try:
+            baseline = _kpi_baseline_for_hook(c.payload.hook_type)
+            if baseline:
+                meta["kpi_baseline"] = baseline
+        except Exception:
+            pass
+    # v0.65 (P4) ：grounding score。从 ctx.rag 拿 refs + 蓝海词算 [ref:xxx] 命中。
+    try:
+        from ..composer.pipeline import _compute_grounding, _latest_dna_payload
+        _dna = _latest_dna_payload()
+        _bo = [
+            b.get("keyword") or ""
+            for b in ((_dna.get("sections", {}).get("keyword_blueocean", {}) or {})
+                      .get("rankings") or [])[:20]
+            if (b.get("keyword") or "")
+        ]
+        gscore, gbreak = _compute_grounding(c.payload.body or "", [], _bo)
+        meta["grounding_score"] = gscore
+        meta["grounding_breakdown"] = gbreak
+    except Exception:
+        pass
     con.execute(
         "INSERT INTO studio_draft_candidates"
         " (candidate_id, draft_id, llm, title, body, tags_json,"

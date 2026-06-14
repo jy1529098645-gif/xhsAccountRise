@@ -290,6 +290,18 @@ SCHEDULER_SYSTEM = """\
      - 「DNA 笑点 lift 1.17，这周混 1 篇沙雕反差」
    不要写空话「为了拉新」，要说清这一篇的具体策略意图。
 
+5. **decision_anchors / publish_anchors（v0.65 新增 · 反黑盒）**：
+   不能只写自由文本 ，必须**把你引用的具体 DNA 数据点列进 anchors 数组**。
+   - decision_anchors → 解释「为什么这一周 + 这个角度」 ：列出你用到的蓝海词 /
+     hook 类别 / tag / 评论关键词 ，每条带 n（样本数）+ median（中位互动）。
+     例 ：[{"type":"blue_ocean","label":"蓝海词 一站式写论文 score 7.44",
+            "value":"一站式写论文","n":124,"median":35000}]
+   - publish_anchors → 解释「为什么这个时段」 ：列出 DNA heatmap 的 (dow, hour)
+     cell 引用。例 ：[{"type":"heatmap","label":"周三 21:00 n=64 median 4500",
+                       "dow":2,"hour":21,"n":64,"median":4500}]
+   - 没有数据支撑就写空数组 [] ，**不要编造**。anchors 是用户验证「AI 不是凭感觉」
+     的唯一证据。
+
 5. weekly_themes 也给每周一个 main theme + intent。
 
 6. **alternative_versions（v0.62 新增 · 关键字段）**：为每个 slot 输出 **2 个次选方案**。
@@ -329,6 +341,20 @@ SCHEDULER_SYSTEM = """\
       "flexible_window": "<推荐发布窗口，例如 '周三-周五任一晚 / 21:00-23:00'>",
       "decision_rationale": "<≤40 字 为什么排这一周 + 这个角度>",
       "direction_idx": <整数, 0-indexed, 指向用户选的 direction; 单方向场景填 0>,
+      "decision_anchors": [
+        {"type": "blue_ocean"|"hook"|"tag"|"comment"|"keyword",
+         "label": "<人类可读引用，例如 '蓝海词 一站式写论文 score 7.44'>",
+         "value": "<对应数据点 ：keyword 文本 / hook 类别名 / tag 文本>",
+         "n": <样本数 ，整数>,
+         "median": <中位互动 ，整数 ，可空>}
+      ],
+      "publish_anchors": [
+        {"type": "heatmap"|"timing_rule",
+         "label": "<人类可读引用 ，例如 'DNA heatmap 周三21点 n=64 median=4500'>",
+         "dow": <0-6 ，可空>, "hour": <0-23 ，可空>,
+         "n": <样本数 ，整数 ，可空>,
+         "median": <中位互动 ，整数 ，可空>}
+      ],
       "alternative_versions": [
         {
           "label": "次选 A · 不同时段",
@@ -573,10 +599,32 @@ BODY_DRAFTER_BATCH_SYSTEM = """\
 - 写完整段 / 完整脚本，不要省略号 / 不要"待补"
 - **N 个 slot 之间要差异化** — 即使同源同方向，标题 hook 不能两两相似，正文金句不能跨 slot 重复
 
+═══════════════════════════════════════════════════════════
+🧭 **强制引用规则（v0.65 ：把"凭感觉编"改成"按数据写"）**
+═══════════════════════════════════════════════════════════
+每个 slot 的描述里都跟着 **【⭐ 本 slot 的真实参考素材】** 块（refs / 评论 / hook 模板）。
+正文里 ：
+
+1. **每条 body 至少 1 个 [ref:<note_id>] inline marker**，写在引用句的末尾。
+   note_id 取自参考素材块里 `[ref:xxxxx]` 标注里的那串 ID。
+   例 ：「用 DeepSeek 三步降 AI 率，亲测从 78% 砍到 22% [ref:6635a1b2c3]」
+2. **每个数字 / 工具名 / 真实案例 / 用户原话** ，必须能在 refs 里找到来源 ，
+   不能凭空生成。生成虚构数字 = 不合格。
+3. **评论原话**用「<」「>」尖括号包起来（不抄字、转写情绪也行 ，但要让读者
+   看出是来自评论区）。例 ：「<我连 reference 一个都没写完就要交了>」。
+4. **引用的 note_id 必须列入 references_used 字段**（drafts[i].references_used）。
+   marker 跟 references_used 必须对齐。
+5. 没有真实 ref 可引用时 ，写「本条 ：refs 不足 ，请补素材后重写」一句 ，
+   不要为了凑 marker 编 ID。
+
 输出 JSON：
 {
   "drafts": [
-    {"idx": <对应输入的 slot 编号>, "body_draft": "<完整正文>"}
+    {
+      "idx": <对应输入的 slot 编号>,
+      "body_draft": "<完整正文 ，含 [ref:xxx] inline markers>",
+      "references_used": ["<note_id1>", "<note_id2>", ...]
+    }
   ]
 }
 
@@ -591,12 +639,19 @@ RESOURCER_SYSTEM = """\
 
 1. **materials_checklist**: 把所有 slots 的 materials_needed 合并、去重、按类别归类（工具账号 / 拍摄设备 / 素材资产 / 数据资产 / 真人体验）的一份采购清单。
 2. **risks_and_mitigations**: 这套排期最容易翻车的 3-5 个点 + 怎么提前规避。
-3. **success_metrics**: 3-5 个可量化的成功指标（粉丝数 / 互动率 / 私信数 / 转化率…）。
+3. **metrics_plans**: **两套**可对比的成功指标方案，让用户按自己的风险偏好选 ：
+   - 方案一 label="稳健"：强调可持续、低风险的指标（如完播率 / 收藏率 / 评论质量 / 粉丝稳定增长），适合长期养号。每套 3-5 个可量化指标，每个指标尽量带一个具体目标数值或区间。
+   - 方案二 label="进取"：强调爆发、转化的激进指标（如单条破万赞 / 私信转化数 / 涨粉速度 / GMV），适合快速起量。同样 3-5 个带目标值的指标。
+   - 每套配一句 rationale 说明这套适合什么阶段/什么人。
+   两套要**真的不同**（不是换措辞），稳健偏防守、进取偏进攻。
 
 输出 JSON：
 {
   "materials_checklist": ["..."],
   "risks_and_mitigations": ["..."],
-  "success_metrics": ["..."]
+  "metrics_plans": [
+    {"label": "稳健", "metrics": ["完播率 ≥ 35%", "..."], "rationale": "适合..."},
+    {"label": "进取", "metrics": ["首月涨粉 ≥ 2000", "..."], "rationale": "适合..."}
+  ]
 }
 """

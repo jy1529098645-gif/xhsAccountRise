@@ -107,17 +107,23 @@ def _extract_image_urls_from_raw(raw_json_str: str, note_id: str) -> list[str]:
     for img in images[:6]:
         if not isinstance(img, dict):
             continue
-        # Prefer a preview-size URL from infoList when present (smaller =
-        # faster page load); fall back to urlDefault (full-size).
-        chosen = ""
-        for info in (img.get("infoList") or []):
-            if isinstance(info, dict) and info.get("imageScene") == "WB_PRV":
-                chosen = str(info.get("url") or "")
-                if chosen:
-                    break
+        # v0.65 ：偏好顺序反过来 ─ 之前先挑 WB_PRV preview URL ，但 xhs 的 preview
+        # 经常是 http:// 协议 ，被 https 页面 mixed content 拦掉。urlDefault 一般
+        # https + 全尺寸 ，更稳。还是没有就回退 WB_PRV / WB_DFT。
+        chosen = str(img.get("urlDefault") or img.get("url") or "")
         if not chosen:
-            chosen = str(img.get("urlDefault") or img.get("url") or "")
-        if chosen and chosen.startswith("http"):
+            for info in (img.get("infoList") or []):
+                if isinstance(info, dict) and info.get("imageScene") in ("WB_DFT", "WB_PRV"):
+                    chosen = str(info.get("url") or "")
+                    if chosen:
+                        break
+        if not chosen:
+            continue
+        # v0.65 ：强制 https ─ 否则 mixed content 时浏览器静默拦截，
+        # 用户只看到占位渐变 + 空白卡片。
+        if chosen.startswith("http://"):
+            chosen = "https://" + chosen[len("http://"):]
+        if chosen.startswith("https://"):
             urls.append(chosen)
         if len(urls) >= 4:
             break
@@ -128,8 +134,16 @@ def search_notes(
     topic: str,
     k: int = 8,
     candidate_pool: int = 200,
-    likes_weight: float = 0.5,
+    # v0.65 ：boosted from 0.5 → 1.5。原值导致一篇 6 赞但高相关的笔记打败一篇
+    # 10000 赞中等相关的笔记 — 用户看到 「AI 参考的真实素材」 全是 1-6 赞的小帖 ，
+    # 一脸黑盒。1.5 让 10000 赞的引擎力压相关度 +0.45，明显倾向 「爆款 + 还算相关」。
+    likes_weight: float = 1.5,
     include_images: bool = True,
+    # v0.65 ：相对池中位数的最低互动闸门。pool 里取中位赞数 ，把低于 median/2 + 绝对
+    # 阈值 10 的笔记筛掉（避免「6 赞」「3 赞」当 ref）。pool 不足时自动放宽 ─
+    # 小库 / 冷门主题 不会因此空结果。
+    min_likes_floor_pct: float = 0.5,
+    min_likes_abs: int = 10,
 ) -> list[dict[str, Any]]:
     """Return up to `k` notes ranked by FTS relevance × engagement.
 
@@ -224,33 +238,141 @@ def search_notes(
         r["hybrid_score"] = relevance + likes_weight * engagement + (
             benchmark_bonus if is_bench else 0.0
         )
-    rows.sort(key=lambda r: r["hybrid_score"], reverse=True)
-    return rows[:k]
+
+    # v0.65 ：池内相对互动闸门 ─ 过滤掉「相关但根本不是爆款」的低赞 ref ，
+    # 避免「AI 参考的真实素材」面板里出现 1/3/6 赞这种明显不是爆款的笔记。
+    # 1) 算池中位赞 ；2) floor = max(median * 0.5 , 10) ；3) 若过滤后还有
+    #    >= max(k, 8) 篇就用过滤结果 ，否则放弃过滤（避免小库/冷门主题清空）。
+    pool_likes = sorted([(r.get("liked_count") or 0) for r in rows])
+    pool_median = pool_likes[len(pool_likes) // 2] if pool_likes else 0
+    floor = max(int(pool_median * min_likes_floor_pct), min_likes_abs)
+    survivors = [r for r in rows if (r.get("liked_count") or 0) >= floor or r["is_benchmark"]]
+    use_filtered = len(survivors) >= max(k, 8)
+    ranked = (survivors if use_filtered else rows)
+    ranked.sort(key=lambda r: r["hybrid_score"], reverse=True)
+    # 把决策信息塞进每条 ref（前端可调试 / 渲染）：哪条是经过 floor 过滤的、池中位多少。
+    final = ranked[:k]
+    for r in final:
+        r["pool_median_likes"] = pool_median
+        r["likes_floor_applied"] = floor if use_filtered else 0
+    return final
 
 
 def search_comments(topic: str, n: int = 15) -> list[dict[str, Any]]:
+    """v0.65.3 ：之前只走 FTS，2 字中文（"论文 / 教程 / 写作 / 标题"）被 `_split_topic`
+    扔掉 → fts_q 为空 → 返回 []。这是用户在出稿页看到「0 条用户原话」的根因。
+
+    新策略 ：
+      1) 先跑 FTS（如果 fts_q 非空）
+      2) FTS 返回 < n / 2 → 追加 LIKE 模糊匹配补齐（每个 2-3 char piece 在 content 里 LIKE）
+      3) 按 like_count 降序排
+    """
     fts_q = _fts_query(topic)
-    if not fts_q:
+    fts_rows: list[dict[str, Any]] = []
+    like_rows: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    if fts_q:
+        try:
+            with db.connect(read_only=True) as con:
+                cur = con.execute(
+                    "SELECT c.comment_id, c.note_id, c.content, c.like_count,"
+                    "       bm25(studio_fts_comments) AS bm"
+                    " FROM studio_fts_comments"
+                    " JOIN comments c ON c.comment_id = studio_fts_comments.comment_id"
+                    " WHERE studio_fts_comments MATCH ?"
+                    " ORDER BY bm LIMIT ?",
+                    (fts_q, n * 3),
+                )
+                fts_rows = [dict(r) for r in cur]
+                seen_ids.update(r["comment_id"] for r in fts_rows if r.get("comment_id"))
+        except sqlite3.OperationalError as exc:
+            _log.warning("search_comments FTS unavailable: %s", exc)
+
+    # LIKE fallback for short / no-token topics OR when FTS underperforms。
+    # 把 topic 切成 2+ 字 pieces ，每个跟 content LIKE 一下。短 topic 也可用（如 "论文"）。
+    if len(fts_rows) < n // 2:
+        pieces = [
+            _FTS_SCRUB.sub("", p)
+            for p in _NON_TOKEN.split(topic)
+            if p and len(p.strip()) >= 2
+        ]
+        pieces = [p for p in pieces if len(p) >= 2][:6]   # cap to keep WHERE manageable
+        if pieces:
+            try:
+                with db.connect(read_only=True) as con:
+                    or_clauses = " OR ".join("content LIKE ?" for _ in pieces)
+                    sql = (
+                        f"SELECT comment_id, note_id, content, like_count, 0 AS bm"
+                        f" FROM comments WHERE ({or_clauses})"
+                        f" AND content IS NOT NULL AND content != ''"
+                        f" ORDER BY like_count DESC LIMIT ?"
+                    )
+                    args = [f"%{p}%" for p in pieces] + [n * 3]
+                    cur = con.execute(sql, args)
+                    for r in cur:
+                        d = dict(r)
+                        cid = d.get("comment_id")
+                        if cid and cid not in seen_ids:
+                            like_rows.append(d)
+                            seen_ids.add(cid)
+            except sqlite3.OperationalError as exc:
+                _log.warning("search_comments LIKE fallback failed: %s", exc)
+
+    rows = fts_rows + like_rows
+    if not rows:
         return []
-    try:
-        with db.connect(read_only=True) as con:
-            cur = con.execute(
-                "SELECT c.comment_id, c.note_id, c.content, c.like_count,"
-                "       bm25(studio_fts_comments) AS bm"
-                " FROM studio_fts_comments"
-                " JOIN comments c ON c.comment_id = studio_fts_comments.comment_id"
-                " WHERE studio_fts_comments MATCH ?"
-                " ORDER BY bm LIMIT ?",
-                (fts_q, n * 3),
-            )
-            rows = [dict(r) for r in cur]
-    except sqlite3.OperationalError as exc:
-        # FTS or comments table missing for this lib — degrade gracefully.
-        _log.warning("search_comments unavailable: %s", exc)
-        return []
-    # Prefer comments with higher likes.
-    rows.sort(key=lambda r: (r["like_count"] or 0), reverse=True)
-    return rows[:n]
+    # Prefer comments with higher likes（FTS 已有相关度 ，再按互动 fine-tune）。
+    rows.sort(key=lambda r: (r.get("like_count") or 0), reverse=True)
+    rows = rows[:n]
+
+    # v0.65.3 ：用户在出稿页要看「参考的原话 + 原贴链接 + 原贴数据」 ─ 给每条
+    # comment 补一个 source_note 子对象 ，包含来源 note 的 title / url / 互动数。
+    # 一次性 IN 查询补齐 ，避免 N+1。
+    note_ids = sorted({r.get("note_id") for r in rows if r.get("note_id")})
+    note_map: dict[str, dict[str, Any]] = {}
+    if note_ids:
+        try:
+            with db.connect(read_only=True) as con:
+                # feature-detect columns the way search_notes does
+                cols = {c["name"] for c in con.execute("PRAGMA table_info(notes)")}
+                wanted_extra = ["share_count", "video_duration_ms", "raw_json"]
+                extras = [c for c in wanted_extra if c in cols]
+                extras_sql = (", " + ", ".join(extras)) if extras else ""
+                placeholders = ",".join("?" for _ in note_ids)
+                cur = con.execute(
+                    f"SELECT note_id, title, url, liked_count, collected_count,"
+                    f"       comment_count, author_nickname, image_count{extras_sql}"
+                    f" FROM notes WHERE note_id IN ({placeholders})",
+                    note_ids,
+                )
+                for r in cur:
+                    d = dict(r)
+                    d["image_urls"] = _extract_image_urls_from_raw(
+                        d.get("raw_json") or "", d.get("note_id") or "",
+                    ) if "raw_json" in d else []
+                    d.pop("raw_json", None)
+                    d["duration_sec"] = int((d.pop("video_duration_ms", 0) or 0) / 1000)
+                    note_map[d["note_id"]] = d
+        except sqlite3.OperationalError as exc:
+            _log.warning("search_comments source-note enrich failed: %s", exc)
+
+    for r in rows:
+        src = note_map.get(r.get("note_id"))
+        if src:
+            r["source_note"] = {
+                "note_id": src.get("note_id"),
+                "title": src.get("title") or "",
+                "url": src.get("url") or "",
+                "liked_count": src.get("liked_count") or 0,
+                "collected_count": src.get("collected_count") or 0,
+                "comment_count": src.get("comment_count") or 0,
+                "share_count": src.get("share_count") or 0,
+                "author_nickname": src.get("author_nickname") or "",
+                "duration_sec": src.get("duration_sec") or 0,
+                "image_count": src.get("image_count") or 0,
+                "cover_image": (src.get("image_urls") or [None])[0],
+            }
+    return rows
 
 
 def fetch_hook_summaries(top_n: int = 5) -> list[dict[str, Any]]:

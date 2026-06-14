@@ -4,6 +4,9 @@ import { api } from "../api";
 import { fmtTime, roleName, coerceStringList } from "../format";
 import PlatformPill from "../components/PlatformPill";
 import DouyinProvenancePanel from "../components/DouyinProvenancePanel";
+import GroundedBody from "../components/GroundedBody";
+import GroundingChip from "../components/GroundingChip";
+import KpiBaselineChip from "../components/KpiBaselineChip";
 import type { ComplianceHit, RagRef, RagComment, RagHook, VariantChild } from "../types";
 
 export default function DraftDetail() {
@@ -200,16 +203,64 @@ export default function DraftDetail() {
 
       <div className="card">
         <h2>候选 ({cands.length})</h2>
+        {/* v0.65 ：反黑盒图例 ─ 让用户第一眼就知道这些 chip 是什么 */}
+        <div style={{
+          fontSize: 11.5, color: "var(--muted)", marginTop: -4, marginBottom: 10,
+          padding: "6px 10px", background: "var(--primary-soft)", borderRadius: 6,
+          borderLeft: "3px solid var(--primary)",
+        }}>
+          💡 每条候选下都标了 <b>🟢/🟡/🔴 锚定度</b>（这条正文里有几处真实数据引用） +
+          <b> vs 中位 ... 弱/良/强</b>（AI 预估互动 vs 本库同 hook 真实分布）。
+          正文里的 <span style={{
+            display: "inline-block", padding: "0 4px", borderRadius: 3,
+            background: "var(--primary-soft)", color: "var(--primary)", fontWeight: 600, fontSize: 10.5,
+          }}>#N</span> 小角标点开就跳来源贴 ─ AI 没瞎编。
+        </div>
         <div className="candidate-grid">
-          {cands.map((c: any) => (
+          {cands.map((c: any) => {
+            // Pre-compute how many [ref:xxx] markers we found in body.
+            const refMarkerCount = (c.body?.match(/\[ref:[A-Za-z0-9_\-]+\]/g) || []).length;
+            const hasRefs = (data.rag?.refs?.length ?? 0) > 0 && refMarkerCount > 0;
+            return (
             <div key={c.candidate_id} className={`cand ${c.chosen ? "final" : ""} ${c.meta?.error ? "failed" : ""}`}>
               <div className="llm">{c.llm}{c.chosen ? " ★" : ""}</div>
               <div className="muted" style={{fontSize: 11}}>
                 self {c.self_score?.toFixed?.(1) ?? "—"} ·
                 ${c.meta?.cost_estimate_usd?.toFixed?.(4) ?? "0"} · {c.meta?.latency_ms ?? 0}ms
               </div>
+              {/* v0.65 ：锚定度 + KPI 基线 chips ─ 反黑盒最直接的体感入口 */}
+              <div style={{display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6, alignItems: "center"}}>
+                <GroundingChip score={c.meta?.grounding_score} breakdown={c.meta?.grounding_breakdown} compact />
+                {c.meta?.kpi_baseline && (c.predicted_likes ?? 0) > 0 && (
+                  <KpiBaselineChip predicted={c.predicted_likes ?? 0} baseline={c.meta.kpi_baseline} />
+                )}
+                {refMarkerCount > 0 && (
+                  <span title="正文里 [ref:xxx] inline marker 出现次数 ─ AI 声明引用了这么多次真实数据"
+                    style={{
+                      fontSize: 10.5, color: "#15803d", fontWeight: 600,
+                      padding: "0 6px", borderRadius: 3, background: "#dcfce7",
+                      cursor: "help",
+                    }}>
+                    🔗 {refMarkerCount} 处数据引用
+                  </span>
+                )}
+              </div>
               <div className="title">{c.title}</div>
               <div className="body">{renderWithHits(c.body, (c.compliance?.hits ?? []).filter((h: ComplianceHit) => h.where === "body"))}</div>
+              {/* v0.65 (P1) ：「数据锚定视图」 ─ 同一段正文，把 [ref:xxx] inline marker
+                  渲染成 chip 让用户点开看来源帖。compliance 高亮版照样保留在上面。
+                  默认展开 ─ 有引用就直接展示，不再藏在 ▸ 后面。 */}
+              {hasRefs && (
+                <details style={{marginTop: 6}} open>
+                  <summary style={{cursor: "pointer", fontSize: 11.5, color: "var(--primary)", fontWeight: 600}}>
+                    🔗 数据锚定视图（{refMarkerCount} 处引用 · 点 chip 跳来源帖）
+                  </summary>
+                  <GroundedBody text={c.body || ""} refs={data.rag.refs}
+                    style={{fontSize: 13, marginTop: 6, padding: "8px 10px",
+                            background: "#fafafa", borderRadius: 4,
+                            border: "1px dashed var(--primary)"}} />
+                </details>
+              )}
               <CandidateComplianceLine compliance={c.compliance} />
               <div style={{marginTop: 8}}>
                 {(c.tags ?? []).map((t: string) => <span key={t} className="tag-pill">#{t}</span>)}
@@ -244,7 +295,8 @@ export default function DraftDetail() {
                 )}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
@@ -1152,19 +1204,19 @@ function ProvenancePanel({rag, draftId, onRefreshed}: {
     );
   }
   return (
-    // v0.63: 默认展开 (open) — 之前折叠 <details> 用户看不见就以为没做这个功能。
-    // 也加 borderLeft 高亮 + 头部统计，让位置更显眼。
+    // v0.65.3: 跟 Composer.tsx 对齐 ─ 起号策略页已显示「真实爆款 + 图卡片」，
+    // 这里只保留 「评论原话 + 来源原贴链接 + 原贴互动数据」，refs grid 改成折叠区供需要时翻看。
     <details className="card" open style={{marginTop: 12, borderLeft: "4px solid var(--primary)"}}>
       <summary style={{cursor: "pointer", fontSize: 14.5, fontWeight: 700, color: "var(--primary)"}}>
-        📚 AI 这篇稿子参考的真实素材
+        📚 AI 这篇稿子听到的真实用户原话
         <span style={{marginLeft: 8, fontSize: 12, color: "var(--muted)", fontWeight: 400}}>
-          {refs.length} 篇真实爆款 · {comments.length} 条用户原话 · {hooks.length} 个 hook 模板
+          {comments.length} 条评论（含原贴链接 + 数据） · {refs.length} 篇爆款参考折叠 · {hooks.length} 个 hook 模板
         </span>
         {draftId && (
           <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); refresh(); }}
             disabled={refreshing}
             className="ghost"
-            title="按当前 brief 主题重新检索 RAG，刷新封面图 + 数据"
+            title="按当前 brief 主题重新检索 RAG，刷新数据"
             style={{marginLeft: 12, fontSize: 11, padding: "2px 8px"}}>
             {refreshing ? "刷新中…" : "🔄 刷新"}
           </button>
@@ -1174,133 +1226,100 @@ function ProvenancePanel({rag, draftId, onRefreshed}: {
         <div className="muted" style={{fontSize: 11.5, marginTop: 6}}>{refreshNote}</div>
       )}
       <p className="muted" style={{fontSize: 12, margin: "8px 0 12px"}}>
-        这一稿不是凭空写的 ——下面是 AI 起草时实际读到的真实贴文。点封面图或标题跳原帖看完整图文。
+        这一稿不是凭空写的 ──下面是 AI 起草时实际读到的高赞评论 + 每条来源原贴的真实数据。
       </p>
-      {refs.length > 0 && (
-        <div>
-          <h3 style={{margin: "0 0 8px", fontSize: 13}}>🔥 参考爆款（按相关度 × 互动量混合排序）</h3>
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
-            gap: 12,
-          }}>
-            {refs.map((r, idx) => {
-              const imgs = (r.image_urls && r.image_urls.length > 0)
-                ? r.image_urls : (r.cover_image ? [r.cover_image] : []);
-              const cover = imgs[0];
-              return (
-                <div key={r.note_id} style={{
-                  padding: 0, borderRadius: 8, overflow: "hidden",
-                  background: "#fff", border: "1px solid #ececec",
-                  display: "flex", flexDirection: "column",
-                }}>
-                  {/* Cover image — clickable, opens original post */}
-                  {cover ? (
-                    <a href={r.url} target="_blank" rel="noreferrer"
-                      style={{display: "block", background: "#f0f0f0", aspectRatio: "4 / 5", overflow: "hidden"}}>
-                      <img src={cover} alt={r.title}
-                        loading="lazy" referrerPolicy="no-referrer"
-                        style={{width: "100%", height: "100%", objectFit: "cover", display: "block"}}
-                        onError={(e) => {
-                          // CDN 防盗链时图挂了 → 退化为彩色 placeholder
-                          const el = e.currentTarget as HTMLImageElement;
-                          el.style.display = "none";
-                          (el.parentNode as HTMLElement).style.background =
-                            "linear-gradient(135deg, var(--primary-soft), #f8f8f8)";
-                        }}
-                      />
-                    </a>
-                  ) : (
-                    <div style={{
-                      aspectRatio: "4 / 5",
-                      background: "linear-gradient(135deg, var(--primary-soft) 0%, #fafafa 100%)",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 32, color: "var(--primary)", opacity: 0.4,
-                    }}>
-                      {(r.duration_sec ?? 0) > 0 ? "▶︎" : "📝"}
-                    </div>
-                  )}
-                  {/* Other thumbnails (1-3 small ones below cover) */}
-                  {imgs.length > 1 && (
-                    <div style={{display: "grid", gridTemplateColumns: `repeat(${Math.min(imgs.length - 1, 3)}, 1fr)`, gap: 1, background: "#eee"}}>
-                      {imgs.slice(1, 4).map((u, i) => (
-                        <a key={i} href={r.url} target="_blank" rel="noreferrer"
-                          style={{display: "block", aspectRatio: "1 / 1", overflow: "hidden", background: "#f5f5f5"}}>
-                          <img src={u} loading="lazy" referrerPolicy="no-referrer"
-                            style={{width: "100%", height: "100%", objectFit: "cover", display: "block"}}
-                            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
-                          />
-                        </a>
-                      ))}
-                    </div>
-                  )}
-                  {/* Card body */}
-                  <div style={{padding: "10px 12px", display: "flex", flexDirection: "column", gap: 6}}>
-                    <div className="row" style={{gap: 6, flexWrap: "wrap"}}>
-                      <span className="tag-pill" style={{background: "var(--primary-soft)", color: "var(--primary)", fontSize: 10.5}}>
-                        #{idx + 1}
-                      </span>
-                      {(r.duration_sec ?? 0) > 0 ? (
-                        <span className="tag-pill" style={{fontSize: 10.5}}>▶︎ {r.duration_sec}s</span>
-                      ) : (r.image_count ?? 0) > 0 ? (
-                        <span className="tag-pill" style={{fontSize: 10.5}}>🖼️ {r.image_count} 图</span>
-                      ) : null}
-                      {r.author_nickname && (
-                        <span className="tag-pill" style={{fontSize: 10.5}}>@{r.author_nickname}</span>
-                      )}
-                    </div>
-                    <div style={{fontSize: 13, fontWeight: 600, lineHeight: 1.4}}>
-                      {r.url ? (
-                        <a href={r.url} target="_blank" rel="noreferrer" style={{color: "inherit"}}>
-                          {r.title || "（无标题）"}
-                        </a>
-                      ) : r.title || "（无标题）"}
-                    </div>
-                    {r.body_excerpt && (
-                      <div className="muted" style={{
-                        fontSize: 11.5, lineHeight: 1.55,
-                        display: "-webkit-box", WebkitLineClamp: 3,
-                        WebkitBoxOrient: "vertical", overflow: "hidden",
-                      }}>
-                        {r.body_excerpt}
-                      </div>
-                    )}
-                    {(r.tags?.length ?? 0) > 0 && (
-                      <div style={{fontSize: 10}}>
-                        {r.tags!.slice(0, 5).map((t, i) => (
-                          <span key={i} className="tag-pill" style={{fontSize: 10}}>#{t}</span>
-                        ))}
-                      </div>
-                    )}
-                    <div className="muted" style={{fontSize: 11}}>
-                      👍 {fmt(r.liked_count)}
-                      {(r.collected_count ?? 0) > 0 && <> · ⭐ {fmt(r.collected_count)}</>}
-                      {(r.comment_count ?? 0) > 0 && <> · 💬 {fmt(r.comment_count)}</>}
-                      {(r.share_count ?? 0) > 0 && <> · 🔁 {fmt(r.share_count)}</>}
-                      {r.url && (
-                        <>　·　<a href={r.url} target="_blank" rel="noreferrer">看原帖 →</a></>
-                      )}
-                    </div>
-                  </div>
+      {comments.length > 0 ? (
+        <ul style={{margin: 0, paddingLeft: 0, listStyle: "none"}}>
+          {comments.slice(0, 15).map((c, idx) => {
+            const src = c.source_note;
+            return (
+              <li key={c.comment_id || idx} style={{
+                padding: "8px 10px", marginBottom: 6,
+                background: "#fafafa", borderRadius: 6,
+                borderLeft: "3px solid var(--primary)",
+              }}>
+                <div style={{fontSize: 13, lineHeight: 1.65}}>
+                  <span style={{
+                    fontSize: 10.5, padding: "0 5px", borderRadius: 3,
+                    background: "var(--primary-soft)", color: "var(--primary)",
+                    fontWeight: 600, marginRight: 6,
+                  }}>{c.like_count}👍</span>
+                  {c.content}
                 </div>
-              );
-            })}
-          </div>
+                {src && (
+                  <div style={{
+                    marginTop: 6, paddingTop: 6, borderTop: "1px dashed #ddd",
+                    fontSize: 11.5, color: "#555",
+                    display: "flex", flexWrap: "wrap", gap: 8, alignItems: "baseline",
+                  }}>
+                    <span className="muted" style={{fontSize: 10.5, flexShrink: 0}}>📎 来源原贴：</span>
+                    {src.url ? (
+                      <a href={src.url} target="_blank" rel="noreferrer"
+                        style={{flex: 1, minWidth: 0, fontWeight: 600, color: "var(--primary)",
+                                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"}}>
+                        {src.title || "（无标题）"}
+                      </a>
+                    ) : (
+                      <span style={{flex: 1, minWidth: 0, fontWeight: 600,
+                                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"}}>
+                        {src.title || "（无标题）"}
+                      </span>
+                    )}
+                    <span className="muted" style={{fontSize: 10.5, whiteSpace: "nowrap"}}>
+                      👍 {fmt(src.liked_count)}
+                      {(src.collected_count ?? 0) > 0 && <> · ⭐ {fmt(src.collected_count)}</>}
+                      {(src.comment_count ?? 0) > 0 && <> · 💬 {fmt(src.comment_count)}</>}
+                      {(src.share_count ?? 0) > 0 && <> · 🔁 {fmt(src.share_count)}</>}
+                      {(src.duration_sec ?? 0) > 0 && <> · ▶︎ {src.duration_sec}s</>}
+                      {src.author_nickname && <> · @{src.author_nickname}</>}
+                    </span>
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <div className="muted" style={{
+          fontSize: 12, padding: "6px 10px", background: "#fff8e6", borderRadius: 4,
+          borderLeft: "3px solid #f6c265",
+        }}>
+          这次 brief 主题在本库评论里没匹配到 ─ 可能 ：(a) xlsx 导入库没评论 ，
+          (b) 主题词太冷门。可点上方 「🔄 刷新」 重试。
         </div>
       )}
-        {comments.length > 0 && (
-          <>
-            <h3 style={{margin: "12px 0 4px", fontSize: 13}}>💬 用户原话（高赞评论）</h3>
-            <ul style={{marginLeft: 18, fontSize: 12, lineHeight: 1.7}}>
-              {comments.slice(0, 12).map(c => (
-                <li key={c.comment_id}>
-                  <span className="muted" style={{marginRight: 6}}>({c.like_count}👍)</span>
-                  {c.content}
-                </li>
-              ))}
-            </ul>
-          </>
-        )}
+      {/* refs 仍然保留 ，但折叠 ─ 用户主要看评论 ，需要看爆款时展开。 */}
+      {refs.length > 0 && (
+        <details style={{marginTop: 12}}>
+          <summary style={{cursor: "pointer", fontSize: 12.5, color: "var(--muted)"}}>
+            ▸ 看 {refs.length} 篇爆款参考（起号策略页已有详细图卡 ，这里只列表）
+          </summary>
+          <ul style={{margin: "6px 0 0", paddingLeft: 0, listStyle: "none", fontSize: 12, lineHeight: 1.65}}>
+            {refs.map((r, idx) => (
+              <li key={r.note_id} style={{
+                padding: "4px 8px", borderBottom: "1px solid #f3f3f3",
+                background: r.is_benchmark ? "#fff8e1" : undefined,
+              }}>
+                <div style={{display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap"}}>
+                  <span style={{fontSize: 10.5, color: "var(--muted)", flexShrink: 0}}>#{idx + 1}</span>
+                  {r.is_benchmark && <span style={{fontSize: 10.5, flexShrink: 0}} title="对标账号">🎯</span>}
+                  <span style={{flex: 1, minWidth: 0, fontWeight: 600,
+                                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"}}>
+                    {r.url ? <a href={r.url} target="_blank" rel="noreferrer" style={{color: "inherit"}}>{r.title || "（无标题）"}</a>
+                          : (r.title || "（无标题）")}
+                  </span>
+                  <span className="muted" style={{fontSize: 10.5, flexShrink: 0, whiteSpace: "nowrap"}}>
+                    👍 {fmt(r.liked_count)}
+                    {(r.collected_count ?? 0) > 0 && <> · ⭐ {fmt(r.collected_count)}</>}
+                    {(r.comment_count ?? 0) > 0 && <> · 💬 {fmt(r.comment_count)}</>}
+                    {(r.share_count ?? 0) > 0 && <> · 🔁 {fmt(r.share_count)}</>}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
         {hooks.length > 0 && (
           <>
             <h3 style={{margin: "12px 0 4px", fontSize: 13}}>🎣 Hook 模板</h3>

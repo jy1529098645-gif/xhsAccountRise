@@ -8,6 +8,9 @@ import PlatformPill from "../PlatformPill";
 import { humaniseError } from "../../errors";
 import { useRagFetch } from "../../hooks/useRagFetch";
 import RagReferenceGrid from "../RagReferenceGrid";
+import AnchorChips from "../AnchorChips";
+import GroundingChip from "../GroundingChip";
+import GroundedBody from "../GroundedBody";
 import type { StrategyPackDTO } from "../../types";
 
 const DIRECTION_COLORS = ["#2E5C8A", "#a36df0", "#10a37f", "#e0a800", "#c4429a", "#5BC0EB", "#FCB97D", "#7a6fc8"];
@@ -86,9 +89,104 @@ export default function StrategyPackView({pack, onWriteClick, compact = false, o
   return (
     <div>
       <StrategyOverview pack={pack} />
+      <FavoritesPanel pack={pack} navigate={navigate} />
       <StrategyRefsPanel pack={pack} />
       <SchedulePanel pack={pack} onWrite={goWrite} onPackReload={onPackReload} />
       <IterateCard pack={pack} />
+    </div>
+  );
+}
+
+// v0.66 (item4) ：星标收藏库面板。列出当前 project 收藏的方向 / slot，可删除、
+// 可「用这个写」（带结构种子跳出稿）。解决「方向是一次性的，返回上层调整就
+// 拿不到相同结果」—— 现在满意的就收藏，随时复用。
+function FavoritesPanel({pack, navigate}: {pack: StrategyPackDTO; navigate: (to: string) => void}) {
+  const [favs, setFavs] = useState<any[]>([]);
+  const [open, setOpen] = useState(false);
+
+  async function reload() {
+    try { setFavs(await api.listFavorites()); } catch { setFavs([]); }
+  }
+  useEffect(() => {
+    reload();
+    const h = () => reload();
+    window.addEventListener("favorites:changed", h);
+    return () => window.removeEventListener("favorites:changed", h);
+  }, []);
+
+  async function remove(favId: string) {
+    try {
+      await api.deleteFavorite(favId);
+      setFavs(prev => prev.filter(f => f.fav_id !== favId));
+    } catch { /* ignore */ }
+  }
+
+  // 用收藏的 slot 写一篇 ：把它的结构组成 strategy_seed，经 sessionStorage 带到
+  // 出稿页（Composer 读 composer.briefPrefill）。换 pack / 换 cycle 也能复用。
+  function writeFromFav(fav: any) {
+    const p = fav.payload || {};
+    const outline = Array.isArray(p.outline) ? p.outline.map(String) : [];
+    const seed = {
+      recommended_hook: String(p.hook_type || ""),
+      opening_hook: String(p.title || ""),
+      structure: outline,
+      content_format: String(p.content_format || ""),
+      source: "favorite",
+    };
+    const prefill = {
+      topic: String(p.title || fav.label || ""),
+      angle: String(p.angle || ""),
+      angles: p.angle ? [String(p.angle)] : [],
+      extra_constraints: [
+        "⭐ 从收藏库带入",
+        p.content_format ? `内容形式 ：${p.content_format}` : "",
+        outline.length ? `大纲 ：${outline.join(" / ")}` : "",
+      ].filter(Boolean).join("\n"),
+      strategy_seed: seed,
+    };
+    try { sessionStorage.setItem("composer.briefPrefill", JSON.stringify(prefill)); } catch { /* quota */ }
+    navigate("/composer");
+  }
+
+  if (favs.length === 0) return null;
+  return (
+    <div className="card">
+      <div className="row" style={{justifyContent: "space-between", alignItems: "center", cursor: "pointer"}}
+        onClick={() => setOpen(o => !o)}>
+        <h2 style={{margin: 0}}>⭐ 我的收藏库 <span className="muted" style={{fontSize: 12}}>({favs.length})</span></h2>
+        <span style={{fontSize: 12, color: "var(--muted)"}}>{open ? "▴ 收起" : "▾ 展开"}</span>
+      </div>
+      {open && (
+        <div style={{display: "grid", gap: 8, marginTop: 10}}>
+          {favs.map(f => (
+            <div key={f.fav_id} className="row" style={{
+              justifyContent: "space-between", alignItems: "center", gap: 8,
+              padding: "8px 10px", background: "#fffdf5", borderRadius: 6,
+              border: "1px solid #f0e0a8",
+            }}>
+              <div style={{flex: 1, minWidth: 0}}>
+                <span style={{
+                  fontSize: 10.5, padding: "1px 6px", borderRadius: 3, marginRight: 6,
+                  background: f.kind === "direction" ? "#e8eefc" : "#fdf0e0",
+                  color: f.kind === "direction" ? "#1e40af" : "#b06200", fontWeight: 600,
+                }}>{f.kind === "direction" ? "方向" : "选题"}</span>
+                <b style={{fontSize: 13}}>{f.label || "(未命名)"}</b>
+              </div>
+              <div className="row" style={{gap: 6, flexShrink: 0}}>
+                {f.kind === "slot" && (
+                  <button onClick={() => writeFromFav(f)}
+                    style={{fontSize: 11.5, padding: "3px 10px", background: "#fff",
+                            border: "1px solid var(--primary)", color: "var(--primary)", fontWeight: 600}}>
+                    ✍️ 用这个写
+                  </button>
+                )}
+                <button className="ghost" onClick={() => remove(f.fav_id)}
+                  style={{fontSize: 11.5, padding: "3px 8px", color: "var(--muted)"}}>✕</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -188,6 +286,15 @@ function SlotRagPanel({slot, slotIdx, packId, altIdx = -1}: {
   // when alts are expanded under the same slot).
   altIdx?: number;
 }) {
+  // v0.65 (P0) ：优先用 slot 持久化的 rag_refs / rag_comments / rag_hooks ─
+  // 这些是 body drafter 实际看的内容。altIdx 走 alt 时 fall back 到 live 查询。
+  const persistedRefs = Array.isArray(slot?.rag_refs) ? slot.rag_refs : [];
+  const persistedComments = Array.isArray(slot?.rag_comments) ? slot.rag_comments : [];
+  const persistedHooks = Array.isArray(slot?.rag_hooks) ? slot.rag_hooks : [];
+  const hasPersisted = altIdx === -1 && (
+    persistedRefs.length > 0 || persistedComments.length > 0 || persistedHooks.length > 0
+  );
+
   const rawParts: string[] = [];
   if (slot?.title) rawParts.push(String(slot.title));
   if (slot?.angle) rawParts.push(String(slot.angle));
@@ -196,8 +303,24 @@ function SlotRagPanel({slot, slotIdx, packId, altIdx = -1}: {
   for (const o of outline.slice(0, 2)) if (o) rawParts.push(String(o));
   const { query, usable: queryUsable } = sanitizeRagQuery(rawParts.join(" "));
   const { data, loading, err, retry } = useRagFetch(
-    query, queryUsable, 6, 8, [packId, slotIdx, altIdx], "SlotRagPanel",
+    query, hasPersisted ? false : queryUsable, 6, 8, [packId, slotIdx, altIdx], "SlotRagPanel",
   );
+
+  if (hasPersisted) {
+    return (
+      <div style={{marginTop: 8}}>
+        <RagReferenceGrid
+          refs={persistedRefs}
+          comments={persistedComments}
+          hooks={persistedHooks}
+          title="📚 AI 写这条时实际看的真实参考（持久化）"
+          subtitle="这些就是 body drafter 当时喂进 prompt 的真实贴文 + 评论 + hook 模板。点封面 / 标题跳原帖验证。"
+          defaultOpen={true}
+          className="card"
+        />
+      </div>
+    );
+  }
 
   if (!queryUsable) return null;
 
@@ -265,6 +388,19 @@ function SlotRagPanel({slot, slotIdx, packId, altIdx = -1}: {
 }
 
 function StrategyOverview({pack}: {pack: StrategyPackDTO}) {
+  // v0.66 (item4) ：收藏方向到「我的收藏库」。
+  const [dirFaved, setDirFaved] = useState(false);
+  async function favoriteDirection(dir: any) {
+    try {
+      await api.addFavorite("direction", dir, String(dir?.name || ""));
+      setDirFaved(true);
+      setTimeout(() => setDirFaved(false), 1800);
+      window.dispatchEvent(new CustomEvent("favorites:changed"));
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("addFavorite(direction) failed", e);
+    }
+  }
   function toArr(x: any): string[] {
     if (Array.isArray(x)) return x.map(String);
     if (typeof x === "string") {
@@ -313,7 +449,18 @@ function StrategyOverview({pack}: {pack: StrategyPackDTO}) {
           </>
         ) : (
           <>
-            <h2 style={{marginTop: 0}}>方向 · {pack.chosen_direction.name}</h2>
+            <div className="row" style={{justifyContent: "space-between", alignItems: "flex-start", gap: 8}}>
+              <h2 style={{marginTop: 0}}>方向 · {pack.chosen_direction.name}</h2>
+              <button onClick={() => favoriteDirection(pack.chosen_direction)}
+                title="收藏这个方向到「我的收藏库」，返回上层调整后也能拿回来"
+                style={{
+                  fontSize: 11.5, padding: "3px 10px", whiteSpace: "nowrap", flexShrink: 0,
+                  background: dirFaved ? "var(--primary-soft)" : "#fff",
+                  border: "1px solid #e0a800", color: "#b06200", fontWeight: 600,
+                }}>
+                {dirFaved ? "✓ 已收藏" : "⭐ 收藏方向"}
+              </button>
+            </div>
             <p style={{margin: "4px 0", fontSize: 14}}>{pack.chosen_direction.positioning_statement}</p>
             <p className="muted" style={{fontSize: 12}}>受众：{pack.chosen_direction.target_audience}</p>
           </>
@@ -390,12 +537,26 @@ function StrategyOverview({pack}: {pack: StrategyPackDTO}) {
 
       <TopPublishingSlotsCard />
 
-      {materials.length > 0 && (
+      {(materials.length > 0 || (pack.benchmark_examples?.length ?? 0) > 0) && (
         <div className="card">
           <h2 style={{marginTop: 0}}>🎒 启动前要准备的材料</h2>
-          <ul style={{marginLeft: 20, lineHeight: 1.9}}>
-            {materials.map((m, i) => <li key={i}>{m}</li>)}
-          </ul>
+          {materials.length > 0 && (
+            <ul style={{marginLeft: 20, lineHeight: 1.9}}>
+              {materials.map((m, i) => <li key={i}>{m}</li>)}
+            </ul>
+          )}
+          {/* v0.66 (item1) ：材料清单旁挂 1-5 篇真实图文对标帖 ─ 让用户照着图文
+              效果准备素材，比纯文字「需要 X 图」直观得多。复用 RagReferenceGrid。 */}
+          {(pack.benchmark_examples?.length ?? 0) > 0 && (
+            <div style={{marginTop: 12}}>
+              <RagReferenceGrid
+                refs={pack.benchmark_examples || []}
+                title="🎯 对标这几篇的图文效果来准备素材"
+                subtitle="按这轮方向从你资源库里筛出的高赞真实帖（封面 / 排版 / 配图都可参照）。点封面或标题跳原帖看完整图文。"
+                defaultOpen={true}
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -408,15 +569,60 @@ function StrategyOverview({pack}: {pack: StrategyPackDTO}) {
         </div>
       )}
 
-      {metrics.length > 0 && (
+      {/* v0.66 (item5) ：成功指标 — 有两套方案时并排对比让用户选，
+          否则回退旧的单列渲染（向后兼容旧 pack）。 */}
+      {Array.isArray(pack.metrics_plans) && pack.metrics_plans.length > 0 ? (
+        <MetricsPlansCard plans={pack.metrics_plans} />
+      ) : metrics.length > 0 ? (
         <div className="card">
           <h2 style={{marginTop: 0}}>📈 成功指标</h2>
           <ul style={{marginLeft: 20, lineHeight: 1.9}}>
             {metrics.map((m, i) => <li key={i}>{m}</li>)}
           </ul>
         </div>
-      )}
+      ) : null}
     </>
+  );
+}
+
+// v0.66 (item5) ：两套成功指标方案并排对比 + 选择。解决「每次 expand 出的指标
+// 都不一样、没法对比」的痛点 —— 现在一次给两套（稳健/进取），用户点选一套高亮。
+function MetricsPlansCard({plans}: {plans: { label: string; metrics: string[]; rationale?: string }[]}) {
+  const [picked, setPicked] = useState(0);
+  return (
+    <div className="card">
+      <h2 style={{marginTop: 0}}>📈 成功指标 · {plans.length} 套方案对比</h2>
+      <p className="muted" style={{fontSize: 12, marginTop: -4, marginBottom: 10}}>
+        按你的风险偏好选一套作为这轮起号的衡量标准 — 点卡片切换。
+      </p>
+      <div style={{display: "grid", gridTemplateColumns: `repeat(${Math.min(plans.length, 2)}, 1fr)`, gap: 12}}>
+        {plans.map((p, i) => {
+          const on = i === picked;
+          return (
+            <div key={i} onClick={() => setPicked(i)} role="button" tabIndex={0}
+              onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setPicked(i); } }}
+              style={{
+                cursor: "pointer", padding: "12px 14px", borderRadius: 8,
+                border: on ? "2px solid var(--primary)" : "1px solid var(--border)",
+                background: on ? "var(--primary-soft)" : "#fff",
+              }}>
+              <div className="row" style={{justifyContent: "space-between", alignItems: "center", marginBottom: 6}}>
+                <span style={{fontWeight: 700, fontSize: 14, color: on ? "var(--primary)" : "var(--text)"}}>
+                  {i === 0 ? "🛡️ " : i === 1 ? "🚀 " : "📌 "}{p.label}
+                </span>
+                {on && <span style={{fontSize: 11, fontWeight: 700, color: "var(--primary)"}}>✓ 已选</span>}
+              </div>
+              {p.rationale && (
+                <div className="muted" style={{fontSize: 11.5, marginBottom: 8, fontStyle: "italic"}}>{p.rationale}</div>
+              )}
+              <ul style={{marginLeft: 18, lineHeight: 1.8, fontSize: 13}}>
+                {p.metrics.map((m, j) => <li key={j}>{m}</li>)}
+              </ul>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -434,16 +640,33 @@ function SchedulePanel({pack, onWrite, onPackReload}: {
   useEffect(() => { setSchedule(Array.isArray(pack.schedule) ? pack.schedule : []); }, [pack]);
   const [regenIdx, setRegenIdx] = useState<number | null>(null);
   const [regenErr, setRegenErr] = useState<string | null>(null);
+  // v0.66 (item3) ：每条 slot 的「按指令重出」输入框内容（按 slotIdx 存）。
+  const [regenInstr, setRegenInstr] = useState<Record<number, string>>({});
+  // v0.66 (item4) ：刚收藏的 slot idx（短暂显示「✓ 已收藏」反馈）。
+  const [favedIdx, setFavedIdx] = useState<number | null>(null);
+
+  async function favoriteSlot(i: number, slot: any) {
+    try {
+      await api.addFavorite("slot", slot, String(slot?.title || ""));
+      setFavedIdx(i);
+      setTimeout(() => setFavedIdx(p => (p === i ? null : p)), 1800);
+      window.dispatchEvent(new CustomEvent("favorites:changed"));
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("addFavorite failed", e);
+    }
+  }
 
   function isPlaceholder(s: any): boolean {
     const t = String(s?.title || "");
     return t.includes("AI 漏排") || t.startsWith("待补 #") || t.includes("请用 ✍️");
   }
 
-  async function regen(i: number) {
+  async function regen(i: number, instruction?: string) {
     setRegenIdx(i); setRegenErr(null);
     try {
-      const r = await api.regenerateSlot(pack.pack_id, i);
+      const r = await api.regenerateSlot(pack.pack_id, i,
+        instruction ? { instruction } : undefined);
       setSchedule(prev => {
         const next = [...prev];
         next[i] = r.slot;
@@ -474,6 +697,25 @@ function SchedulePanel({pack, onWrite, onPackReload}: {
             策略包 #{pack.pack_id.slice(0, 8)} · 方向「{dirName}」
             · 点任一条选 「主推荐」 或 「次选」 → 跳到出稿板块多 agent 写
           </p>
+          {/* v0.65 ：反黑盒图例 ─ 让用户看见 chip 含义 */}
+          <div style={{
+            fontSize: 11, color: "var(--muted)", marginTop: 6,
+            padding: "4px 8px", background: "var(--primary-soft)", borderRadius: 4,
+            display: "inline-block",
+          }}>
+            💡 每条 slot 旁边的
+            <span style={{
+              fontSize: 10.5, padding: "0 4px", margin: "0 3px",
+              background: "var(--primary-soft)", color: "var(--primary)",
+              fontWeight: 600, border: "1px solid var(--primary)", borderRadius: 3,
+            }}>📚 N 篇参考</span>
+            =「AI 写这条时实际看了 N 篇真实贴文」 ；
+            <span style={{
+              fontSize: 10.5, padding: "0 4px", margin: "0 3px",
+              background: "#ecfdf5", color: "#15803d", fontWeight: 600, borderRadius: 3,
+            }}>📍 N 锚点</span>
+            =「AI 引用了 N 个 DNA 数据点（蓝海词 / hook / 时段 ...）」 ─ 全部可点验证。
+          </div>
         </div>
         <button className="ghost" onClick={() => setCollapsed(v => !v)}
           style={{fontSize: 12}}>
@@ -544,6 +786,28 @@ function SchedulePanel({pack, onWrite, onPackReload}: {
                       + {alts.length} 备选
                     </span>
                   )}
+                  {/* v0.65 ：collapsed 状态也能看到「AI 看了 N 篇」+「引用 N 处」chip，
+                      让用户在 schedule 顶层就感知到哪些 slot 有数据锚定。 */}
+                  {!placeholder && Array.isArray(s.rag_refs) && s.rag_refs.length > 0 && (
+                    <span title={`AI 写这条时实际看了 ${s.rag_refs.length} 篇真实贴文`}
+                      style={{
+                        fontSize: 10.5, padding: "1px 6px", borderRadius: 3,
+                        background: "var(--primary-soft)", color: "var(--primary)",
+                        fontWeight: 600, flexShrink: 0, cursor: "help",
+                      }}>
+                      📚 {s.rag_refs.length} 篇参考
+                    </span>
+                  )}
+                  {!placeholder && Array.isArray(s.decision_anchors) && s.decision_anchors.length > 0 && (
+                    <span title="决策锚点 ：AI 引用的 DNA 数据点（蓝海词/hook/tag/评论）"
+                      style={{
+                        fontSize: 10.5, padding: "1px 6px", borderRadius: 3,
+                        background: "#ecfdf5", color: "#15803d", fontWeight: 600,
+                        flexShrink: 0, cursor: "help",
+                      }}>
+                      📍 {s.decision_anchors.length} 锚点
+                    </span>
+                  )}
                   {placeholder && (
                     <button onClick={(e) => { e.stopPropagation(); regen(i); }}
                       disabled={isRegenerating}
@@ -559,6 +823,37 @@ function SchedulePanel({pack, onWrite, onPackReload}: {
                 </div>
                 {isExp && (
                   <div style={{padding: "0 10px 10px"}}>
+                    {/* v0.66 (item3) ：按指令单独调这一条 — 解决「这条太重叠/太拖沓，
+                        我想只改它」。留空 = 换一条；填指令 = 按我的话改。 */}
+                    <div onClick={(e) => e.stopPropagation()}
+                      className="row" style={{gap: 6, alignItems: "center", margin: "6px 0 4px"}}>
+                      <input
+                        value={regenInstr[i] || ""}
+                        onChange={(e) => setRegenInstr(prev => ({...prev, [i]: e.target.value}))}
+                        placeholder="想怎么改这一条？例：太拖沓压缩成3段 / 换更冲突的hook / 改成测评角度（留空=换一条）"
+                        style={{flex: 1, fontSize: 12, padding: "5px 8px"}}
+                      />
+                      <button onClick={() => regen(i, (regenInstr[i] || "").trim() || undefined)}
+                        disabled={isRegenerating}
+                        style={{
+                          fontSize: 11.5, padding: "5px 10px", whiteSpace: "nowrap",
+                          background: "#fff", border: "1px solid var(--primary)",
+                          color: "var(--primary)", fontWeight: 600, flexShrink: 0,
+                        }}>
+                        {isRegenerating ? "🤖 重出中…" : "🔁 按指令重出"}
+                      </button>
+                      {/* v0.66 (item4) ：收藏这条 slot 到「我的收藏库」供之后复用。 */}
+                      <button onClick={() => favoriteSlot(i, s)}
+                        title="收藏这条选题到「我的收藏库」，之后可复用"
+                        style={{
+                          fontSize: 11.5, padding: "5px 10px", whiteSpace: "nowrap",
+                          background: favedIdx === i ? "var(--primary-soft)" : "#fff",
+                          border: "1px solid #e0a800", color: "#b06200",
+                          fontWeight: 600, flexShrink: 0,
+                        }}>
+                        {favedIdx === i ? "✓ 已收藏" : "⭐ 收藏"}
+                      </button>
+                    </div>
                     {/* Main option */}
                     <div style={{padding: 8, background: "#fff", borderRadius: 4, marginTop: 4,
                                   border: "1px solid #ffd0d8"}}>
@@ -583,16 +878,38 @@ function SchedulePanel({pack, onWrite, onPackReload}: {
                               🧠 {s.decision_rationale}
                             </div>
                           )}
-                          {s.publish_rationale && (
-                            <div className="muted" style={{fontSize: 11, marginTop: 2, fontStyle: "italic"}}>
-                              ⏰ {s.publish_rationale}
+                          {Array.isArray(s.decision_anchors) && s.decision_anchors.length > 0 && (
+                            <AnchorChips anchors={s.decision_anchors} prefix="📍 引用" />
+                          )}
+                          {/* v0.65 ：删除 per-slot publish_rationale + publish_anchors，
+                              用户嫌每条都写一行时段太冗余 ─ 这些只放 ⬆ 顶部 TopPublishingSlotsCard
+                              （全库 Top 5 时段表）一处。per-slot 不再显示。 */}
+                          {/* v0.65 (P4) ：slot 锚定度 + body_draft 数据锚定视图 */}
+                          {(s.grounding_score != null || s.body_draft) && (
+                            <div style={{marginTop: 6, display: "flex", gap: 6, alignItems: "center"}}>
+                              {s.grounding_score != null && (
+                                <GroundingChip score={s.grounding_score} breakdown={s.grounding_breakdown} compact />
+                              )}
+                              {s.kpi_baseline?.median > 0 && (
+                                <span title={`同 hook_type 在本库 ：中位 ${s.kpi_baseline.median} · P90 ${s.kpi_baseline.p90 || "—"} · n=${s.kpi_baseline.n}`}
+                                  style={{fontSize: 10.5, color: "var(--muted)", cursor: "help"}}>
+                                  基线 ：中位 {s.kpi_baseline.median} · n={s.kpi_baseline.n}
+                                </span>
+                              )}
                             </div>
                           )}
-                          {s.flexible_window && (
-                            <div className="muted" style={{fontSize: 11, marginTop: 2, fontStyle: "italic"}}>
-                              🗓️ 推荐窗口 ：{s.flexible_window}
-                            </div>
+                          {s.body_draft && Array.isArray(s.rag_refs) && s.rag_refs.length > 0 && /\[ref:/.test(s.body_draft) && (
+                            <details style={{marginTop: 6}} open>
+                              <summary style={{cursor: "pointer", fontSize: 11.5, color: "var(--primary)", fontWeight: 600}}>
+                                🔗 正文数据锚定视图（{(s.body_draft.match(/\[ref:[A-Za-z0-9_\-]+\]/g) || []).length} 处引用 · 点 chip 跳来源）
+                              </summary>
+                              <GroundedBody text={s.body_draft} refs={s.rag_refs}
+                                style={{fontSize: 12.5, marginTop: 6, padding: "8px 10px",
+                                        background: "#fafafa", borderRadius: 4,
+                                        border: "1px dashed var(--primary)"}} />
+                            </details>
                           )}
+                          {/* v0.65 ：flexible_window 也删 ─ 见上方 TopPublishingSlotsCard 表。 */}
                         </div>
                         <button onClick={(e) => { e.stopPropagation(); onWrite(i, -1); }}
                           style={{whiteSpace: "nowrap", fontSize: 12, padding: "4px 10px"}}>
@@ -681,7 +998,7 @@ function TopPublishingSlotsCard() {
         const dna: any = await api.dnaLatest();
         if (cancel) return;
         const heatmap = (dna?.sections?.timing?.heatmap || []) as any[];
-        setTop(topPublishingSlots(heatmap, 5, 5));
+        setTop(topPublishingSlots(heatmap, 8, 5));   // 拉 Top 8 让用户看到层次
       } catch (e: any) {
         if (!cancel) setErr(e.message || String(e));
       }
@@ -690,31 +1007,56 @@ function TopPublishingSlotsCard() {
   }, []);
 
   if (err || top.length === 0) return null;
+  // v0.65 ：把 Top 8 时段按中位赞高低分成 ⭐⭐⭐ 强推荐 (前 3) / ⭐⭐ 次选 (4-6) /
+  // ⭐ 备选 (7-8)，让用户一眼看到「强推荐」和「次选」 ，而不是 5 个并列的卡片。
+  // 文字说明 ：「优先发 X / Y / Z 这 3 个时段；如果错过 ，A / B / C 也可以」。
+  const strong = top.slice(0, 3);
+  const fair = top.slice(3, 6);
+  const weak = top.slice(6, 8);
+  const renderTier = (
+    cells: typeof top, label: string, accent: string, icon: string,
+  ) => cells.length > 0 && (
+    <div style={{marginBottom: 10}}>
+      <div style={{fontSize: 12, fontWeight: 700, color: accent, marginBottom: 4}}>
+        {icon} {label}
+      </div>
+      <div style={{display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 6}}>
+        {cells.map((cell, i) => (
+          <div key={i} style={{
+            padding: 8, background: "#fff", borderRadius: 6,
+            border: `1px solid ${accent}33`, textAlign: "center",
+          }}>
+            <div style={{fontSize: 13, fontWeight: 600}}>{cell.label}</div>
+            <div className="muted" style={{fontSize: 11, marginTop: 3}}>
+              中位赞 <b style={{color: "#333"}}>{Math.round(cell.median_likes)}</b>
+              <span style={{opacity: 0.6}}> · n={cell.count}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+  // 一句话推荐 ：把 Top 3 拼成文字
+  const recommendStr = strong.map(c => c.label).join(" / ");
+  const fallbackStr = fair.map(c => c.label).join(" / ");
   return (
     <div className="card" style={{
       background: "linear-gradient(180deg, #fff8e6 0%, #fff 100%)",
       borderColor: "#fde2a3",
     }}>
-      <h2 style={{marginTop: 0}}>📊 本账号最佳发布时段 Top 5</h2>
-      <p className="muted" style={{fontSize: 12, marginTop: 2, marginBottom: 12}}>
-        从你激活的语料库的 DNA 热力图里挑出来 — 这 5 个 (周几, 小时) 格子的中位点赞最高。
-        AI 排期会优先把内容塞进这些时段，但也会按「内容类型 vs 时段」做差异化。
+      <h2 style={{marginTop: 0}}>📊 本账号最佳发布时段（来自本库 DNA 热力图）</h2>
+      <p style={{fontSize: 12.5, marginTop: 2, marginBottom: 10, lineHeight: 1.7}}>
+        <b>💡 推荐节奏</b> ：优先发 <b style={{color: "#a67700"}}>{recommendStr || "（暂无数据）"}</b>
+        {fallbackStr && <>，错过就发 <b style={{color: "#7a6a40"}}>{fallbackStr}</b></>}。
+        <br />
+        <span className="muted" style={{fontSize: 11.5}}>
+          按本库高赞笔记的 (周几, 小时) 中位互动量排序。具体每条 slot 不再单独标时段 —
+          按下方推荐时段表自己排即可。
+        </span>
       </p>
-      <div style={{display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8}}>
-        {top.map((cell, i) => (
-          <div key={i} style={{
-            padding: 10, background: "#fff", borderRadius: 8,
-            border: "1px solid #f0d8a0", textAlign: "center",
-          }}>
-            <div style={{fontSize: 11, color: "#a67700", fontWeight: 600}}>#{i + 1}</div>
-            <div style={{fontSize: 14, fontWeight: 700, marginTop: 4}}>{cell.label}</div>
-            <div className="muted" style={{fontSize: 11, marginTop: 4}}>
-              中位赞 <b style={{color: "#333"}}>{Math.round(cell.median_likes)}</b>
-            </div>
-            <div className="muted" style={{fontSize: 10}}>（n={cell.count}）</div>
-          </div>
-        ))}
-      </div>
+      {renderTier(strong, "⭐⭐⭐ 强推荐 Top 3（首选）", "#a67700", "🟢")}
+      {renderTier(fair,   "⭐⭐ 次选 (4-6)", "#7a6a40", "🟡")}
+      {renderTier(weak,   "⭐ 备选 (7-8)", "#888", "⚪")}
     </div>
   );
 }

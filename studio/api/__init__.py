@@ -507,7 +507,7 @@ async def import_library(
         "schema_warnings": validation.get("warnings", []),
     }
 
-    # Activate first so subsequent analyze() targets the new lib.
+    # Activate first so subsequent steps target the new lib.
     if activate in ("1", "true", "yes"):
         try:
             library.set_active(meta.lib_id)
@@ -515,85 +515,131 @@ async def import_library(
         except Exception as e:
             result["activate_error"] = str(e)
 
-    # Auto-adapter: if the source schema isn't canonical, ask Claude to propose
-    # column mappings → save schema_map.json → subsequent db.connect()s see
-    # canonical views automatically.
-    if auto_adapt in ("1", "true", "yes"):
-        try:
-            from .. import adapt as _adapt
-            source_info = _adapt.inspect_source(library.LIBRARIES_DIR / meta.lib_id / "xhs.db")
-            if not _adapt.is_canonical(source_info):
-                ad = await _adapt.adapt_library(meta.lib_id)
-                result["adapter"] = {
-                    "adapted": ad.get("adapted", False),
-                    "notes_rows": ad.get("notes_rows"),
-                    "source_tables": ad.get("source_tables", []),
-                    "mapping_summary": _summarise_mapping(ad.get("mapping")),
-                    "view_error": ad.get("view_error"),
-                }
-            else:
-                result["adapter"] = {"adapted": False, "reason": "canonical schema"}
-        except Exception as e:
-            result["adapter_error"] = str(e)
+    # ---- Stage 1 (并行) ：apply_migrations + auto-adapter -------------------
+    # 两者互相独立 ：migrate 只动 studio_* 表 ，adapter 跑 LLM + 写 schema_map.json。
+    # 之前是顺序跑 — adapter 在 LLM 等 3-8s 的时间里 migration 完全闲着。
+    from ..analysis import extract_dna, promote_hooks, render_report
+    from ..rag import build_index
+    from .. import adapt as _adapt
 
-    if analyze in ("1", "true", "yes"):
-        # Run analysis in granular sub-tries so a partial failure (e.g. FTS
-        # build crashes due to a weird view) STILL produces a DNA artifact.
-        # The insight pipeline reads the latest persisted artifact, so it
-        # matters more that *something* is saved than that everything works.
-        from ..analysis import extract_dna, promote_hooks, render_report
-        from ..rag import build_index
-
+    async def _do_migrate() -> dict[str, Any]:
+        if analyze not in ("1", "true", "yes"):
+            return {"skipped": True}
         try:
-            db.apply_migrations(verbose=False)
+            await asyncio.to_thread(db.apply_migrations, verbose=False)
+            return {"ok": True}
         except Exception as e:
-            result["migrate_error"] = repr(e)
+            return {"error": repr(e)}
 
+    async def _do_adapt() -> dict[str, Any]:
+        if auto_adapt not in ("1", "true", "yes"):
+            return {"skipped": True}
         try:
-            fts_stats = build_index.rebuild_all()
-            result["fts"] = fts_stats
-        except Exception as e:
-            result["fts_error"] = repr(e)
-
-        artifact: dict[str, Any] = {}
-        try:
-            artifact = extract_dna.build_dna()
-        except Exception as e:
-            # build_dna already swallows per-section errors; if it still
-            # blew up we craft a minimal envelope so persist() can attach
-            # raw_schema and we have *something* on disk.
-            import time as _time
-            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
-            artifact = {
-                "version": _dt.now(_tz(_td(hours=8))).strftime("%Y-%m-%d"),
-                "generated_at": int(_time.time()),
-                "sections": {},
-                "section_errors": {"build_dna": repr(e)},
-                "summary": {"total_notes_analysed": 0, "dominant_hooks": [],
-                            "generated_in_seconds": 0,
-                            "section_errors": ["build_dna"]},
+            source_info = await asyncio.to_thread(
+                _adapt.inspect_source, library.LIBRARIES_DIR / meta.lib_id / "xhs.db",
+            )
+            if _adapt.is_canonical(source_info):
+                return {"adapted": False, "reason": "canonical schema"}
+            ad = await _adapt.adapt_library(meta.lib_id)
+            return {
+                "adapted": ad.get("adapted", False),
+                "notes_rows": ad.get("notes_rows"),
+                "source_tables": ad.get("source_tables", []),
+                "mapping_summary": _summarise_mapping(ad.get("mapping")),
+                "view_error": ad.get("view_error"),
             }
-            result["build_dna_error"] = repr(e)
-
-        try:
-            extract_dna.persist(artifact)  # attaches raw_schema inside
-            result["dna_version"] = artifact["version"]
-            result["section_errors"] = artifact.get("section_errors", {})
-            result["analyzed"] = True
         except Exception as e:
-            result["persist_error"] = repr(e)
-            result["analyzed"] = False
+            return {"error": str(e)}
 
-        try:
-            render_report.render(artifact)
-        except Exception as e:
-            result["render_error"] = repr(e)
+    migrate_res, adapt_res = await asyncio.gather(_do_migrate(), _do_adapt())
 
+    if "error" in migrate_res:
+        result["migrate_error"] = migrate_res["error"]
+    if not adapt_res.get("skipped"):
+        if "error" in adapt_res:
+            result["adapter_error"] = adapt_res["error"]
+        else:
+            result["adapter"] = adapt_res
+
+    if analyze not in ("1", "true", "yes"):
+        return result
+
+    # ---- Stage 2 (并行) ：FTS rebuild + DNA build -------------------------
+    # FTS 写 studio_fts_* ，DNA 全程 read_only ：不会互相 lock。WAL 模式下
+    # 一写多读完全允许。串行原版本是 FTS 完才开 DNA — 两个加起来 ~3-7s ，
+    # 并行后取 max(t_fts, t_dna) ≈ 2-5s。
+    async def _do_fts() -> dict[str, Any]:
         try:
-            promo = promote_hooks.promote()
-            result["promoted_hooks"] = promo.get("promoted", [])
+            return {"ok": True, "stats": await asyncio.to_thread(build_index.rebuild_all)}
         except Exception as e:
-            result["promote_warning"] = repr(e)
+            return {"error": repr(e)}
+
+    async def _do_build_dna() -> dict[str, Any]:
+        try:
+            return {"ok": True, "artifact": await asyncio.to_thread(extract_dna.build_dna)}
+        except Exception as e:
+            return {"error": repr(e)}
+
+    fts_res, dna_res = await asyncio.gather(_do_fts(), _do_build_dna())
+
+    if fts_res.get("ok"):
+        result["fts"] = fts_res["stats"]
+    else:
+        result["fts_error"] = fts_res["error"]
+
+    if dna_res.get("ok"):
+        artifact = dna_res["artifact"]
+    else:
+        # build_dna 整体崩了 ：拼一个最小占位 artifact ，让 persist() 至少能挂上
+        # raw_schema 落盘 — insight pipeline 读最新版本时也有东西看。
+        import time as _time
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        artifact = {
+            "version": _dt.now(_tz(_td(hours=8))).strftime("%Y-%m-%d"),
+            "generated_at": int(_time.time()),
+            "sections": {},
+            "section_errors": {"build_dna": dna_res["error"]},
+            "summary": {"total_notes_analysed": 0, "dominant_hooks": [],
+                        "generated_in_seconds": 0,
+                        "section_errors": ["build_dna"]},
+        }
+        result["build_dna_error"] = dna_res["error"]
+
+    # Persist 必须串行 ：promote_hooks 读最新 DNA artifact ，render 写 html 也要
+    # artifact 完整。这一步本身 ~200ms ，不值得拆。
+    try:
+        await asyncio.to_thread(extract_dna.persist, artifact)
+        result["dna_version"] = artifact["version"]
+        result["section_errors"] = artifact.get("section_errors", {})
+        result["analyzed"] = True
+    except Exception as e:
+        result["persist_error"] = repr(e)
+        result["analyzed"] = False
+
+    # ---- Stage 3 (并行) ：render_report + promote_hooks --------------------
+    # render 写文件 ，promote 写 studio_hook_templates ；目标互不相干。
+    async def _do_render() -> dict[str, Any]:
+        try:
+            await asyncio.to_thread(render_report.render, artifact)
+            return {"ok": True}
+        except Exception as e:
+            return {"error": repr(e)}
+
+    async def _do_promote() -> dict[str, Any]:
+        try:
+            promo = await asyncio.to_thread(promote_hooks.promote)
+            return {"ok": True, "promoted": promo.get("promoted", [])}
+        except Exception as e:
+            return {"error": repr(e)}
+
+    render_res, promote_res = await asyncio.gather(_do_render(), _do_promote())
+
+    if not render_res.get("ok"):
+        result["render_error"] = render_res["error"]
+    if promote_res.get("ok"):
+        result["promoted_hooks"] = promote_res["promoted"]
+    else:
+        result["promote_warning"] = promote_res["error"]
 
     return result
 
@@ -830,6 +876,9 @@ class ComposeRequest(BaseModel):
     niche: str = ""
     extra_constraints: str = ""
     platform: str | None = None  # auto-inherit from active library if None
+    # v0.66 ：起号策略 → 出稿的结构种子。前端从 slot 带过来时透传，让正文
+    # 按起号策略为这条 slot 设计好的 hook/结构/内容形式写（见 brief.strategy_seed）。
+    strategy_seed: dict[str, Any] = Field(default_factory=dict)
     # v0.62.20 ：默认升级到 GPT-5。frontend 总是发送 spec，这些后端默认只对
     # 直接调 API 的用户生效。drafter 保持 3 家并行（claude:sonnet + gpt-5 +
     # deepseek）拉开 voice 差异 — 同一个模型 N 次输出会自然收敛。
@@ -871,6 +920,7 @@ async def compose(req: ComposeRequest) -> dict[str, Any]:
         cta_strength=req.cta_strength, niche=req.niche,
         extra_constraints=req.extra_constraints,
         platform=library.normalise_platform(platform),
+        strategy_seed=dict(req.strategy_seed or {}),
     )
     cfg = agent_pipeline.PipelineConfig(
         strategist_spec=req.strategist_spec,
@@ -905,24 +955,67 @@ class QuickGenerateRequest(BaseModel):
     target_length: int = Field(default=500, ge=80, le=4000)
     extra: str = ""
     model_spec: str = "openai"
+    # v0.66 (item7) ：一次出几个不同方向的版本供对比。1 = 单篇（旧行为）。
+    variants: int = Field(default=1, ge=1, le=4)
 
 
 @app.post("/api/quick_generate")
 async def quick_generate_endpoint(req: QuickGenerateRequest) -> dict[str, Any]:
-    from ..quick_generate import QuickGenInput, quick_generate
+    from ..quick_generate import QuickGenInput, quick_generate, quick_generate_multi
     inp = QuickGenInput(
         title=req.title, platform=req.platform,
         voice_style=req.voice_style, voice_custom=req.voice_custom,
         target_length=req.target_length, extra=req.extra,
         model_spec=req.model_spec,
     )
+    # v0.66 (item7) ：variants>1 时一次产出多个方向版本，返回 {results:[...]}。
+    if req.variants and req.variants > 1:
+        results = await quick_generate_multi(inp, variants=req.variants)
+        ok = [r for r in results if not (r.error and not r.body)]
+        if not ok:
+            detail = next((r.error for r in results if r.error), "全部版本生成失败")
+            raise HTTPException(status_code=400, detail=detail)
+        return {"results": [r.to_dict() for r in results]}
+
     result = await quick_generate(inp)
     if result.error and not result.body:
         # Hard failure: nothing to show the user. Surface as 400 so the
         # frontend can render the actual error message instead of staring
         # at an empty success response.
         raise HTTPException(status_code=400, detail=result.error)
+    # 单篇也包成 results 数组，前端统一处理（向后兼容 ：同时保留顶层字段）。
     return result.to_dict()
+
+
+# ---------------- favorites (星标收藏库, item4) ----------
+# 用户把满意的方向 / slot 收藏起来，之后复用 — 解决「方向一次性、返回上层
+# 调整就拿不到相同结果」。存当前 library db，按 project 作用域。
+
+class FavoriteAddRequest(BaseModel):
+    kind: str                      # 'direction' | 'slot'
+    payload: dict[str, Any]
+    label: str = ""
+
+
+@app.post("/api/favorites")
+async def favorites_add(req: FavoriteAddRequest) -> dict[str, Any]:
+    from .. import favorites as _fav
+    try:
+        return _fav.add_favorite(req.kind, req.payload, label=req.label)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/favorites")
+async def favorites_list(kind: str | None = None) -> dict[str, Any]:
+    from .. import favorites as _fav
+    return {"favorites": _fav.list_favorites(kind)}
+
+
+@app.delete("/api/favorites/{fav_id}")
+async def favorites_delete(fav_id: str) -> dict[str, Any]:
+    from .. import favorites as _fav
+    return {"deleted": _fav.delete_favorite(fav_id)}
 
 
 # ---------------- insight report (Claude × OpenAI) ----------
@@ -931,7 +1024,11 @@ class InsightRequest(BaseModel):
     library_id: str
     mode: str = "fast"  # "fast" (Sonnet × 2, no critique) | "deep" (Opus pipeline)
     claude_spec: str | None = None
-    openai_spec: str = "openai"
+    # v0.65 ：硬 pin 到 gpt-4o ，不再走 bare "openai"。原因 ：用户的 .env
+    # 多半把 OPENAI_MODEL 设成 gpt-5（reasoning 模型 ，5000 tokens 全被推理吃掉
+    # → JSON 截断 → _coerce_json 返回 {} → UI 显示空白 OpenAI 报告）。gpt-4o
+    # 对 tool/json schema 输出最稳，专门给 insight 这种结构化任务用。
+    openai_spec: str = "openai:gpt-4o"
     moderator_spec: str | None = None
 
 
@@ -1118,7 +1215,16 @@ def list_drafts(limit: int = 50, library_id: str | None = None,
         "   '(尚无候选)'"
         " ) AS final_title,"
         " (SELECT COUNT(*) FROM studio_draft_candidates"
-        "  WHERE draft_id = d.draft_id) AS candidate_count"
+        "  WHERE draft_id = d.draft_id) AS candidate_count,"
+        # v0.65 (P4) ：拉 final candidate（或默认 chosen）的 grounding_score
+        # 让 Drafts 列表能渲染「锚定度」chip ─ 用户一眼挑出黑盒嫌疑稿。
+        " (SELECT meta_json FROM studio_draft_candidates"
+        "  WHERE candidate_id = COALESCE("
+        "    d.final_candidate_id,"
+        "    (SELECT candidate_id FROM studio_draft_candidates"
+        "     WHERE draft_id = d.draft_id ORDER BY chosen DESC, self_score DESC LIMIT 1)"
+        "  )"
+        " ) AS final_meta_json"
         " FROM studio_drafts d WHERE 1=1"
     )
     args: list[Any] = []
@@ -1137,6 +1243,16 @@ def list_drafts(limit: int = 50, library_id: str | None = None,
             r["brief"] = json.loads(r.pop("brief_json"))
         except (json.JSONDecodeError, TypeError):
             r["brief"] = {}
+        # v0.65 (P4) ：把 final candidate 的 grounding 信息 hoist 到 list item
+        # 顶层 ，前端不用解 meta_json。
+        meta_raw = r.pop("final_meta_json", None)
+        try:
+            final_meta = json.loads(meta_raw or "{}")
+        except (json.JSONDecodeError, TypeError):
+            final_meta = {}
+        r["grounding_score"] = final_meta.get("grounding_score")
+        r["grounding_breakdown"] = final_meta.get("grounding_breakdown")
+        r["kpi_baseline"] = final_meta.get("kpi_baseline")
     return rows
 
 
@@ -1338,6 +1454,7 @@ def backfill_draft_rag(draft_id: str) -> dict[str, Any]:
                 "content": (c.get("content") or "")[:300],
                 "like_count": c.get("like_count"),
                 "note_id": c.get("note_id"),
+                "source_note": c.get("source_note"),
             }
             for c in (res.get("comments") or [])[:30]
         ],
@@ -1543,6 +1660,8 @@ async def strategy_propose_stream(req: StrategyInput):
 class StrategySlotRegenerateRequest(BaseModel):
     slot_idx: int = Field(ge=0)
     scheduler_spec: str = "openai:gpt-4o"
+    # v0.66 (item3) ：用户的调整指令（可空）。让单条时间线「按我的话改」。
+    instruction: str = ""
 
 
 @app.post("/api/composer/strategy/{pack_id}/regenerate_slot")
@@ -1557,6 +1676,7 @@ async def strategy_regenerate_slot(
     try:
         return await strategy_pipeline.regenerate_slot(
             pack_id, req.slot_idx, scheduler_spec=req.scheduler_spec,
+            instruction=req.instruction,
         )
     except IndexError as e:
         raise HTTPException(400, str(e))

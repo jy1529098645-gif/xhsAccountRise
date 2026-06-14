@@ -31,6 +31,14 @@ const fmtNum = (n: number | undefined) =>
     : n >= 1000 ? (n / 1000).toFixed(1) + "k"
     : String(n);
 
+// v0.65 ：兼容 v0.64 之前持久化的 http:// 图床 URL ─ 在 https 页面会被浏览器
+// 当 mixed content 拦掉 → 空白。前端透明升级 https。
+function upgradeImageUrl(u: string | undefined | null): string {
+  if (!u) return "";
+  if (u.startsWith("http://")) return "https://" + u.slice(7);
+  return u;
+}
+
 export interface RagReferenceGridProps {
   refs: RagRef[];
   comments?: RagComment[];
@@ -74,9 +82,15 @@ export default function RagReferenceGrid({
             gap: 12,
           }}>
             {refs.map((r, idx) => {
-              const imgs = (r.image_urls && r.image_urls.length > 0)
+              const rawImgs = (r.image_urls && r.image_urls.length > 0)
                 ? r.image_urls : (r.cover_image ? [r.cover_image] : []);
+              const imgs = rawImgs.map(upgradeImageUrl).filter(Boolean);
               const cover = imgs[0];
+              // v0.65 ：image_count > 0 但 image_urls 拉不出来 ─ 通常是
+              // raw_json 不存（xlsx 导入库 / 旧爬虫快照） ，告诉用户原因。
+              const hasImagesButNoUrls = !cover
+                && (r.image_count ?? 0) > 0
+                && (r.duration_sec ?? 0) === 0;
               return (
                 <div key={r.note_id || idx} style={{
                   padding: 0, borderRadius: 8, overflow: "hidden",
@@ -106,18 +120,30 @@ export default function RagReferenceGrid({
                       />
                     </a>
                   ) : (
-                    <div style={{
-                      aspectRatio: "4 / 5",
-                      background: "linear-gradient(135deg, var(--primary-soft) 0%, #fafafa 100%)",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 32, color: "var(--primary)", opacity: 0.4,
-                    }}>
-                      {(r.duration_sec ?? 0) > 0 ? "▶︎" : "📝"}
-                    </div>
+                    <a href={r.url} target="_blank" rel="noreferrer"
+                       style={{
+                         aspectRatio: "4 / 5",
+                         background: "linear-gradient(135deg, var(--primary-soft) 0%, #fafafa 100%)",
+                         display: "flex", flexDirection: "column", alignItems: "center",
+                         justifyContent: "center", gap: 6, textDecoration: "none",
+                         color: "var(--primary)",
+                       }}
+                       title={hasImagesButNoUrls
+                         ? `这条原帖有 ${r.image_count} 张图，但当前库快照里没存图床 URL（xlsx 导入 / 旧爬虫格式）。点开看原帖。`
+                         : (r.duration_sec ?? 0) > 0 ? "视频帖 ─ 点跳原帖看完整视频" : "无封面快照 ─ 点跳原帖"}>
+                      <span style={{fontSize: 32, opacity: 0.5}}>
+                        {(r.duration_sec ?? 0) > 0 ? "▶︎" : "📝"}
+                      </span>
+                      {hasImagesButNoUrls && (
+                        <span style={{fontSize: 10.5, opacity: 0.7, textAlign: "center", padding: "0 8px"}}>
+                          原帖 {r.image_count} 张图<br/>（库快照无 URL）
+                        </span>
+                      )}
+                    </a>
                   )}
                   {imgs.length > 1 && (
                     <div style={{display: "grid", gridTemplateColumns: `repeat(${Math.min(imgs.length - 1, 3)}, 1fr)`, gap: 1, background: "#eee"}}>
-                      {imgs.slice(1, 4).map((u, i) => (
+                      {imgs.slice(1, 4).map((u: string, i: number) => (
                         <a key={i} href={r.url} target="_blank" rel="noreferrer"
                           style={{display: "block", aspectRatio: "1 / 1", overflow: "hidden", background: "#f5f5f5"}}>
                           <img src={u} loading="lazy" referrerPolicy="no-referrer"

@@ -23,8 +23,9 @@ has zero side effects on Composer / Strategy / Drafts state.
 """
 from __future__ import annotations
 
+import asyncio
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from .generators import registry
@@ -187,6 +188,28 @@ def _build_user_message(inp: QuickGenInput, report_ctx: str) -> str:
     return "\n\n".join(parts)
 
 
+# v0.66 (item7) ：快速生成多方向对比时，每个版本注入一个不同的方向倾向。
+# 每个方向都**规定了标题句式**，从构造上强制 N 篇拉开差异 —— 否则各版本是
+# 独立 LLM 调用、互相不知道，很容易收敛到同一个吸睛标题（实测翻车点）。
+# 形状 ：(简短标签, 给 LLM 的强约束指令)。
+QUICK_VARIANT_SPECS: tuple[tuple[str, str], ...] = (
+    ("教程干货向",
+     "写成「N 步 / N 个方法」清单式干货。标题必须是「X个步骤/方法/技巧」这种清单句式，"
+     "正文按编号步骤展开，每步可直接执行。"),
+    ("真实故事向",
+     "写成第一人称真实经历叙事。标题必须是经历式（如「我…那天」「亲测…后」），"
+     "**禁止**用数字清单式标题；正文有情绪起伏和画面感，结尾才落到方法。"),
+    ("数据盘点向",
+     "写成数据/盘点式。标题**必须以一个具体数字或百分比开头或包含**（如「92%→8%」「3个月」），"
+     "正文用对比数字、前后差异、量化结果支撑。"),
+    ("避坑警示向",
+     "写成反面警示。标题必须是警示句式（如「别再…」「千万别…」「这样做会…」），"
+     "正文先列踩过的坑/错误做法，再给正确姿势。"),
+)
+# 兼容旧引用 ：只取标签列表。
+QUICK_VARIANT_ANGLES: tuple[str, ...] = tuple(label for label, _ in QUICK_VARIANT_SPECS)
+
+
 @dataclass
 class QuickGenResult:
     title: str
@@ -198,6 +221,12 @@ class QuickGenResult:
     cost_estimate_usd: float
     error: str | None = None
     used_report_context: bool = False
+    # v0.66 (item7) ：多方向对比时标注这是哪个方向（单篇生成时为空）。
+    variant_label: str = ""
+    # v0.65 (P2) ：让 quick_generate 也回 RAG provenance + grounding ，UI 一致显示。
+    rag: dict[str, Any] | None = None
+    grounding_score: float = 0.0
+    grounding_breakdown: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -210,6 +239,10 @@ class QuickGenResult:
             "cost_estimate_usd": round(self.cost_estimate_usd, 6),
             "error": self.error,
             "used_report_context": self.used_report_context,
+            "rag": self.rag,
+            "grounding_score": self.grounding_score,
+            "grounding_breakdown": self.grounding_breakdown,
+            "variant_label": self.variant_label,
         }
 
 
@@ -237,7 +270,24 @@ async def quick_generate(inp: QuickGenInput) -> QuickGenResult:
     except Exception:
         report_ctx = ""
 
+    # v0.65 (P2) ：quick-generate 也跑 RAG —— 之前完全没用 ，纯靠 system prompt
+    # 里的 voice 指引 + report_ctx 自由发挥。现在按 title 拉 refs / comments /
+    # hooks 喂进 prompt + 持久化到 studio_drafts.rag_json ，UI 可显示 provenance。
+    from .composer.pipeline import (
+        _retrieve_for_slot as _qg_retrieve,
+        _format_refs_for_prompt as _qg_format_refs,
+        _compute_grounding as _qg_grounding,
+    )
+    rag_payload = _qg_retrieve(inp.title, k_refs=6, n_comments=6)
+    refs_block = _qg_format_refs(
+        rag_payload.get("refs") or [],
+        rag_payload.get("comments") or [],
+        rag_payload.get("hooks") or [],
+    )
+
     user_msg = _build_user_message(inp, report_ctx)
+    if refs_block:
+        user_msg += "\n\n" + refs_block
 
     # Resolve model spec → Generator. registry.build always returns a list;
     # for quick-generate we want exactly one model.
@@ -294,9 +344,41 @@ async def quick_generate(inp: QuickGenInput) -> QuickGenResult:
     # want here. Pull what's available; tolerate missing fields (some models
     # under-populate cover_prompt / tags when not strictly required).
     payload = cand.payload
+    body_text = str(getattr(payload, "body", "") or "").strip()
+
+    # v0.65 (P4) ：算 grounding score = [ref:xxx] marker 数 + 蓝海词命中 ÷ 段落数。
+    bo_keywords: list[str] = []
+    try:
+        from .composer.pipeline import _latest_dna_payload
+        _dna = _latest_dna_payload()
+        bo_keywords = [
+            b.get("keyword") or ""
+            for b in ((_dna.get("sections", {}).get("keyword_blueocean", {}) or {})
+                      .get("rankings") or [])[:20]
+            if (b.get("keyword") or "")
+        ]
+    except Exception:
+        pass
+    g_score, g_breakdown = _qg_grounding(body_text, rag_payload.get("refs") or [], bo_keywords)
+
+    # v0.65 (P2) ：持久化进 studio_drafts ，UI 走 DraftDetail ProvenancePanel 路径。
+    try:
+        _persist_quick_generate_draft(
+            inp=inp, body=body_text,
+            title=str(getattr(payload, "title", "") or inp.title).strip(),
+            tags=[str(t) for t in (getattr(payload, "tags", None) or [])],
+            cover_prompt=str(getattr(payload, "cover_prompt", "") or "").strip(),
+            model_used=cand.llm, elapsed_s=elapsed,
+            cost_estimate_usd=cand.cost_estimate_usd or 0.0,
+            rag_payload=rag_payload,
+            grounding_score=g_score, grounding_breakdown=g_breakdown,
+        )
+    except Exception:
+        pass  # persistence 失败不阻塞返回结果
+
     return QuickGenResult(
         title=str(getattr(payload, "title", "") or inp.title).strip(),
-        body=str(getattr(payload, "body", "") or "").strip(),
+        body=body_text,
         tags=[str(t) for t in (getattr(payload, "tags", None) or [])],
         cover_prompt=str(getattr(payload, "cover_prompt", "") or "").strip(),
         model_used=cand.llm,
@@ -304,4 +386,121 @@ async def quick_generate(inp: QuickGenInput) -> QuickGenResult:
         cost_estimate_usd=cand.cost_estimate_usd or 0.0,
         error=None,
         used_report_context=bool(report_ctx),
+        rag=rag_payload,
+        grounding_score=g_score,
+        grounding_breakdown=g_breakdown,
     )
+
+
+async def quick_generate_multi(
+    inp: QuickGenInput, variants: int = 2,
+) -> list[QuickGenResult]:
+    """v0.66 (item7) ：一次产出 N 个不同方向/主题倾向的版本，供横向对比。
+
+    复用 quick_generate ：为每个版本在 extra 里注入一个不同的方向倾向
+    （教程 / 故事 / 数据 / 避坑），让 N 篇在角度和结构上明显拉开差异。
+    并发跑，返回带 variant_label 的结果列表。variants=1 时退化为单篇。
+    """
+    variants = max(1, min(len(QUICK_VARIANT_SPECS), int(variants or 1)))
+    if variants == 1:
+        return [await quick_generate(inp)]
+
+    specs = list(QUICK_VARIANT_SPECS[:variants])
+
+    async def _one(label: str, directive: str) -> QuickGenResult:
+        extra = (inp.extra or "").strip()
+        sub_extra = (
+            f"{extra}\n" if extra else ""
+        ) + (
+            f"【本版方向 ：{label}】{directive}\n"
+            f"这是同一主题的 {variants} 个对比版本之一，你这一版必须严格守住上面的标题句式和结构，"
+            f"和其它方向明显区分 —— 标题尤其不能和其它版本撞。"
+        )
+        sub = replace(inp, extra=sub_extra.strip())
+        res = await quick_generate(sub)
+        res.variant_label = label
+        return res
+
+    return await asyncio.gather(*[_one(lbl, d) for lbl, d in specs])
+
+
+def _persist_quick_generate_draft(
+    *, inp: QuickGenInput, body: str, title: str, tags: list[str], cover_prompt: str,
+    model_used: str, elapsed_s: float, cost_estimate_usd: float,
+    rag_payload: dict[str, Any],
+    grounding_score: float, grounding_breakdown: dict[str, Any],
+) -> str:
+    """v0.65 (P2) ：把 quick_generate 结果写进 studio_drafts + studio_draft_candidates ，
+    让它跟 compose 路径共享 DraftDetail ProvenancePanel + 历史列表。返回 draft_id。"""
+    import json
+    import uuid as _uuid
+    from . import db, library, project
+
+    db.apply_migrations(verbose=False)
+    project.ensure_bootstrap()
+    pid = project.active_project_id()
+    lib_id = library.active_lib_id()
+    draft_id = _uuid.uuid4().hex[:16]
+    cand_id = _uuid.uuid4().hex[:16]
+    now = int(time.time())
+
+    brief_json = json.dumps({
+        "topic": inp.title,
+        "platform": inp.platform,
+        "target_length": inp.target_length,
+        "voice_style": inp.voice_style,
+        "voice_custom": inp.voice_custom,
+        "extra_constraints": inp.extra,
+        "angle": "教程",
+        "angles": [],
+        "cta_strength": "soft",
+        "niche": "",
+        "reference_note_ids": [],
+        "_source": "quick_generate",
+    }, ensure_ascii=False)
+
+    notes_payload = {
+        "source": "quick_generate",
+        "model_used": model_used,
+        "grounding_score": grounding_score,
+        "grounding_breakdown": grounding_breakdown,
+    }
+
+    meta_payload = {
+        "latency_ms": int(elapsed_s * 1000),
+        "cost_estimate_usd": float(cost_estimate_usd),
+        "source": "quick_generate",
+        # v0.65 (P4) ：grounding 也要进 candidate.meta_json ，否则 Drafts list
+        # 的 grounding 列读不到（list 走 candidate.meta_json，不读 draft.notes）。
+        "grounding_score": grounding_score,
+        "grounding_breakdown": grounding_breakdown,
+    }
+    with db.connect() as con:
+        con.execute(
+            "INSERT INTO studio_drafts"
+            " (draft_id, generated_at, prompt_version, brief_json, status,"
+            "  mode, library_id, final_candidate_id, notes, project_id,"
+            "  rag_json)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                draft_id, now, "quick_generate.v1", brief_json,
+                "generated", "quick-generate", lib_id, cand_id,
+                json.dumps(notes_payload, ensure_ascii=False), pid,
+                json.dumps(rag_payload, ensure_ascii=False),
+            ),
+        )
+        con.execute(
+            "INSERT INTO studio_draft_candidates"
+            " (candidate_id, draft_id, llm, title, body, tags_json,"
+            "  cover_prompt, hook_type, predicted_likes, self_score,"
+            "  self_critique, meta_json, human_score, chosen, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                cand_id, draft_id, model_used, title, body,
+                json.dumps(tags, ensure_ascii=False), cover_prompt,
+                "", 0, 0.0, "",
+                json.dumps(meta_payload, ensure_ascii=False),
+                None, 1, now,
+            ),
+        )
+    return draft_id

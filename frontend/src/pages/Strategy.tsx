@@ -26,6 +26,7 @@ import PlatformPill from "../components/PlatformPill";
 import { humaniseError } from "../errors";
 import StrategyWizard from "../components/strategy/StrategyWizard";
 import StrategyPackView from "../components/strategy/StrategyPackView";
+import OneClickStrategy from "../components/strategy/OneClickStrategy";
 import type { StrategyPackDTO, StrategyListItem } from "../types";
 
 export default function Strategy() {
@@ -44,6 +45,9 @@ function StrategyPage({ explicitPackId }: { explicitPackId?: string }) {
   // 触发条件 ：URL = /strategy/new ；或用户点「+ 新建另一份 pack」按钮 ；
   // 或完全没有 pack 历史（首次用户）。
   const [createMode, setCreateMode] = useState(explicitPackId === "new");
+  // v0.66 (一键起号) ：创建模式默认只露「一键全自动」入口，向导收起为
+  // 「逐步定制」二级选项。点 /strategy/new 或「逐步定制」才展开向导。
+  const [showWizard, setShowWizard] = useState(explicitPackId === "new");
 
   // 1) 拉 history（决定默认 pack + 切换器选项 + 是否首次用户）
   useEffect(() => {
@@ -176,7 +180,17 @@ function StrategyPage({ explicitPackId }: { explicitPackId?: string }) {
             </button>
           )}
         </div>
-        <StrategyWizard onPackReady={handleWizardPackReady} />
+        {/* v0.66 ：一键全自动是主入口；想精细控制再展开向导。 */}
+        <OneClickStrategy onManual={!showWizard ? () => setShowWizard(true) : undefined} />
+        {showWizard ? (
+          <div style={{marginTop: 12}}>
+            <StrategyWizard onPackReady={handleWizardPackReady} />
+          </div>
+        ) : (
+          <div className="muted" style={{fontSize: 12, textAlign: "center", marginTop: 10}}>
+            想自己定目标 / 受众 / 周期 / 方向？点上面「逐步定制（向导）↓」
+          </div>
+        )}
       </div>
     );
   }

@@ -67,6 +67,12 @@ class Brief:
     reference_note_ids: tuple[str, ...] = ()
     extra_constraints: str = ""
     platform: str = "xiaohongshu"
+    # v0.66 ：起号策略 → 出稿的「结构种子」。非空时，这篇正文必须按起号策略
+    # 为该 slot 设计好的 hook / 结构骨架 / 内容形式来写 — 而不是让出稿阶段的
+    # Strategist 再即兴生成一套（那会导致「换个标题结构就全变了」）。
+    # 形状 ：{recommended_hook, opening_hook, structure[], cta_phrase, tone,
+    #        avoid[], content_format}。空 dict = 自由发挥（老行为）。
+    strategy_seed: dict = field(default_factory=dict)
 
     def voice_hint(self) -> str:
         return _PLATFORM_VOICE.get(self.platform, _PLATFORM_VOICE["other"])
@@ -84,4 +90,5 @@ class Brief:
         d["reference_note_ids"] = tuple(d.get("reference_note_ids") or ())
         d["angles"] = tuple(d.get("angles") or ())
         d.setdefault("platform", "xiaohongshu")
+        d["strategy_seed"] = dict(d.get("strategy_seed") or {})
         return cls(**d)

@@ -1,12 +1,13 @@
 import type {
   Brief, ComposeBundle, DnaArtifact, DraftDetail, DraftListItem,
-  Library, Platform, Status,
+  Library, Platform, Status, StrategySeed,
   AccountInputDTO, StrategicDirectionDTO, StrategyDetail, StrategyListItem, StrategyPackDTO,
   ProjectDTO, InsightReportDTO,
   ComplianceCheck, ComplianceHit, PromptProposal,
   ProductContextDTO, GoalTypeDTO,
   RagSearchResult,
   BenchmarkAccountDTO, BenchmarkAuthorSearchResult,
+  QuickGenResult, FavoriteDTO,
 } from "./types";
 
 const STATIC_PLATFORMS: Platform[] = [
@@ -646,7 +647,8 @@ export const api = {
     }>(`/api/drafts/${draftId}/backfill_rag`, {}),
   // v0.63: 用户在时间线上点占位 slot 的「✍️ 写这个」时调这个 endpoint —
   // 后端用 scheduler LLM 重生成 1 个 slot 替换占位，自动跨家 fallback。
-  regenerateSlot: (packId: string, slotIdx: number, opts?: { scheduler_spec?: string }) =>
+  regenerateSlot: (packId: string, slotIdx: number,
+                   opts?: { scheduler_spec?: string; instruction?: string }) =>
     postJson<{ slot_idx: number; slot: any }>(
       `/api/strategy/${packId}/regenerate_slot`,
       { slot_idx: slotIdx, ...opts },
@@ -689,6 +691,8 @@ export const api = {
       cta_strength: "none" | "soft" | "strong";
       niche: string; extra_constraints: string;
       rationale?: string; _fallback?: boolean;
+      // v0.66 ：起号策略结构种子 ─ 出稿时透传让正文按 slot 设计的结构写。
+      strategy_seed?: StrategySeed;
     }>(`/api/composer/strategy/${packId}/prefill_brief`, body),
 
   // v0.53 — compliance (hard redline gate) ------------------------------
@@ -828,19 +832,30 @@ export const api = {
       target_length: number;
       extra?: string;
       model_spec: string;
+      /** v0.66 (item7) ：一次出几个不同方向版本对比。1 = 单篇。 */
+      variants?: number;
     },
     signal?: AbortSignal,
-  ) => postJson<{
-    title: string;
-    body: string;
-    tags: string[];
-    cover_prompt: string;
-    model_used: string;
-    elapsed_s: number;
-    cost_estimate_usd: number;
-    error: string | null;
-    used_report_context: boolean;
+  ) => postJson<QuickGenResult & {
+    /** v0.66 (item7) ：variants>1 时返回多版本数组（单篇时缺省，用顶层字段）。 */
+    results?: QuickGenResult[];
   }>("/api/quick_generate", req, signal),
+
+  // v0.66 (item4) — 星标收藏库 ：收藏方向 / slot 供之后复用 -----------------
+  listFavorites: (kind?: "direction" | "slot") =>
+    getJson<{ favorites: FavoriteDTO[] }>(
+      `/api/favorites${kind ? `?kind=${kind}` : ""}`,
+    ).then(r => r.favorites).catch(() => [] as FavoriteDTO[]),
+  addFavorite: (kind: "direction" | "slot", payload: any, label?: string) =>
+    postJson<FavoriteDTO>("/api/favorites", { kind, payload, label: label || "" }),
+  deleteFavorite: async (favId: string) => {
+    const backend = backendUrl();
+    if (!backend) throw new HttpError(0, "需要本地后端");
+    const path = `/api/favorites/${encodeURIComponent(favId)}`;
+    const res = await fetch(`${backend}${path}`, { method: "DELETE" });
+    if (!res.ok) await throwHttpError("DELETE", path, res);
+    return res.json() as Promise<{ deleted: boolean }>;
+  },
 };
 
 export { HttpError, STATIC_PLATFORMS };

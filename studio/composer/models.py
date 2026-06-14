@@ -107,6 +107,34 @@ class TopicSlot:
     # 用户在 PackView 上选哪个 alt → goCompose 带那个 alt 的 metadata 进 Composer。
     # 空 list = 老 pack 没生成 alternatives（向后兼容）。
     alternative_versions: list[dict] = field(default_factory=list)
+    # v0.65 (P0) ：本 slot 真正喂给 body drafter 的 RAG refs / comments / hooks。
+    # 持久化 = UI 可显示「AI 写这条稿当时看的就是这几篇」 而不是渲染时重查。
+    # 形状跟 studio_drafts.rag_json 一致 ：refs[{note_id,title,liked_count,...}]、
+    # comments[{comment_id,content,like_count}]、hooks[{category,count,median_likes}]。
+    rag_refs: list[dict] = field(default_factory=list)
+    rag_comments: list[dict] = field(default_factory=list)
+    rag_hooks: list[dict] = field(default_factory=list)
+    # v0.65 (P0) ：drafter 输出时声明本条 body 引用了哪几条 ref（note_id 列表）。
+    # 跟 body 里的 [ref:<note_id>] inline marker 对齐 ：用户点 chip 可跳原帖。
+    references_used: list[str] = field(default_factory=list)
+    # v0.65 (P1) ：结构化的决策锚点 ─ 让「为什么这一周这个角度这个时段」可追溯。
+    # 每个 anchor 形状 ：
+    #   {"type": "blue_ocean"|"heatmap"|"hook"|"tag"|"comment"|"keyword",
+    #    "label": "<人类可读的引用文字>",
+    #    "value": "<对应 DNA 数据点 ：keyword / hook 类别名 / (dow,hour) / tag>",
+    #    "n": <样本数>, "median": <中位互动>, "p90": <可空>}
+    # decision_anchors → decision_rationale 解释「为什么这一篇排在这一周这角度」
+    # publish_anchors  → publish_rationale 解释「为什么这个时段」
+    decision_anchors: list[dict] = field(default_factory=list)
+    publish_anchors: list[dict] = field(default_factory=list)
+    # v0.65 (P3) ：基于库内同 hook_type / content_format 真实样本算出的中位/P90
+    # 互动量基线 ─ 让 body_draft 出来时 UI 能拿这条 slot 的 predicted_likes
+    # 跟同 hook 真实分布对比（弱 / 良 / 强 三色块）。
+    kpi_baseline: dict = field(default_factory=dict)
+    # v0.65 (P4) ：grounding score ─ body 里 [ref:xxx] marker 数 + verbatim 蓝海词
+    # 命中数 ÷ 段落数。> 1.0 = 锚定强 ，< 0.3 = 黑盒嫌疑。
+    grounding_score: float = 0.0
+    grounding_breakdown: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -131,6 +159,13 @@ class StrategyPack:
     materials_checklist: list[str] = field(default_factory=list)
     risks_and_mitigations: list[str] = field(default_factory=list)
     success_metrics: list[str] = field(default_factory=list)
+    # v0.66 (item5) ：成功指标的两套可对比方案（稳健 / 进取），一次 expand 同时
+    # 产出，前端并排展示让用户对比/选择。形状 ：
+    #   [{"label": "稳健", "metrics": ["..."], "rationale": "..."}, {...进取...}]
+    # 空 = 旧 pack ，前端回退渲染 success_metrics 单列。
+    metrics_plans: list[dict] = field(default_factory=list)
+    # v0.66 (item1) ：材料清单旁的 1-5 篇图文对标帖（封面 + 互动数 + link）。
+    benchmark_examples: list[dict] = field(default_factory=list)
     # v0.59: multi-direction support. When user picked N directions, all of
     # them go here. Empty list = legacy single-direction pack (use chosen_direction).
     chosen_directions: list[StrategicDirection] = field(default_factory=list)

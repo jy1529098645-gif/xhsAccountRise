@@ -48,6 +48,45 @@ def _strategy_block(strategy: dict[str, Any], *, as_reference: bool = False) -> 
     return "\n".join(parts)
 
 
+def _seed_block(brief: Brief) -> str:
+    """v0.66 ：把起号策略为这条 slot 设计好的结构渲染成 drafter 的**硬约束**。
+
+    这是「策略 ↔ 出稿对不上」的核心修复 ：之前 slot 的 outline / hook / 内容形式
+    只作为 extra_constraints 自由文本低优先级带入，drafter（默认 fast_mode 还跳过
+    Strategist）几乎完全自由发挥，结果稿子结构和起号策略设计的对不上。现在把它
+    提升为一个高优先级结构块，明确要求正文按此骨架展开。角度仍决定语气/风格。
+    """
+    seed = getattr(brief, "strategy_seed", None) or {}
+    if not seed:
+        return ""
+    lines: list[str] = []
+    if seed.get("recommended_hook"):
+        lines.append(f"- hook 类型 ：{seed['recommended_hook']}")
+    if seed.get("opening_hook"):
+        lines.append(f"- 开头钩子方向 ：{seed['opening_hook']}")
+    structure = seed.get("structure") or []
+    if structure:
+        lines.append("- 结构骨架（按此顺序展开）：" + " → ".join(str(s) for s in structure))
+    if seed.get("content_format"):
+        lines.append(f"- 内容形式 ：{seed['content_format']}（必须按此形式写）")
+    if seed.get("cta_phrase"):
+        lines.append(f"- 结尾 CTA ：{seed['cta_phrase']}")
+    if seed.get("tone"):
+        lines.append(f"- 语气基调 ：{seed['tone']}")
+    avoid = seed.get("avoid") or []
+    if avoid:
+        lines.append("- 避坑 ：" + "；".join(str(a) for a in avoid))
+    if not lines:
+        return ""
+    return (
+        "【🎯 起号策略为这篇设计好的结构 — 硬约束，正文必须遵循】\n"
+        + "\n".join(lines)
+        + "\n（这是起号策略阶段为这条 slot 定好的骨架。角度决定语气/风格，但"
+        "段落顺序、要点覆盖、hook 类型、内容形式 必须与上面对齐 —— 不要另起一套"
+        "结构。换标题也要守住这个骨架。）\n\n"
+    )
+
+
 def _augmented_user(
     brief: Brief,
     ctx: AgentContext,
@@ -68,6 +107,8 @@ def _augmented_user(
         brief, ctx.refs, ctx.comments, ctx.hooks,
         angle_override=angle_override,
     )
+    # v0.66 ：起号策略种子（slot 设计好的结构）作为最高优先级硬约束置顶。
+    seed_block = _seed_block(brief)
     # Pull in the latest insight report's consensus so each drafter aligns
     # with what both AIs already agreed about the corpus.
     from ..insight.pipeline import full_reference_block_for_prompt
@@ -101,9 +142,15 @@ def _augmented_user(
             "- 不要为了「服从策略」而把所有候选都写成 listicle 或都用同一个数字 hook。"
             "如果 Strategist 推荐的 hook 和你的角度不符，按你的角度走。\n"
         )
-        return (
+        # seed 存在时它就是权威结构源 ：跳过同内容的「软参考」块，避免
+        # 「硬约束」后面紧跟「参考即可」自相矛盾削弱约束力。
+        strategy_ref = "" if seed_block else (
             "【上层 Strategist 通用策略 — 参考即可，不是硬约束】\n"
             f"{_strategy_block(ctx.strategy, as_reference=True)}\n\n"
+        )
+        return (
+            f"{seed_block}"
+            f"{strategy_ref}"
             f"{playbook}\n"
             f"{sibling_block}"
             f"{diversification}"
@@ -119,9 +166,13 @@ def _augmented_user(
         f"不要写成其它角度。）\n"
         if angle_override else ""
     )
-    return (
+    strategy_mandate = "" if seed_block else (
         "【上层 Strategist 已经定的策略 — 必须遵从】\n"
         f"{_strategy_block(ctx.strategy)}"
+    )
+    return (
+        f"{seed_block}"
+        f"{strategy_mandate}"
         f"{report_block}"
         f"{angle_directive}\n\n"
         f"{base}"

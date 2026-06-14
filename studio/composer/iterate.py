@@ -317,8 +317,19 @@ async def iterate_strategy(
         for w in [_theme_dict(_raw, i + 1)]
     ]
     schedule_raw = parsed.get("schedule") or []
-    new_pack.schedule = [
-        TopicSlot(
+    # v0.65 ：iterate 出新一轮 pack 时 ，跟 expand 一样 ：对每个新 slot 拉一次 RAG
+    # + 算 KPI 基线 ，并透传 LLM 输出的 anchors。让用户在下一轮仍能看到锚定数据。
+    try:
+        from .pipeline import _retrieve_for_slot as _it_retrieve, _compute_kpi_baseline as _it_kpi
+        from .pipeline import _latest_dna_payload as _it_dna
+        _dna_for_iter = _it_dna()
+    except Exception:
+        _it_retrieve = None
+        _it_kpi = None
+        _dna_for_iter = {}
+
+    def _build_iter_slot(s: dict[str, Any]) -> TopicSlot:
+        slot = TopicSlot(
             week=int(s.get("week", 1)),
             day_of_week=int(s.get("day_of_week", 0)),
             publish_slot=str(s.get("publish_slot", "")),
@@ -336,7 +347,31 @@ async def iterate_strategy(
             # render 主推荐 + 2 备选 just like the first-round pack.
             alternative_versions=[a for a in (s.get("alternative_versions") or [])
                                   if isinstance(a, dict)],
+            decision_anchors=[a for a in (s.get("decision_anchors") or [])
+                              if isinstance(a, dict)],
+            publish_anchors=[a for a in (s.get("publish_anchors") or [])
+                             if isinstance(a, dict)],
         )
+        if _it_retrieve:
+            try:
+                _r = _it_retrieve(
+                    " ".join(x for x in [slot.title, slot.angle, slot.hook_type] if x),
+                    k_refs=4, n_comments=5,
+                )
+                slot.rag_refs = _r.get("refs") or []
+                slot.rag_comments = _r.get("comments") or []
+                slot.rag_hooks = _r.get("hooks") or []
+            except Exception:
+                pass
+        if _it_kpi:
+            try:
+                slot.kpi_baseline = _it_kpi(slot, _dna_for_iter)
+            except Exception:
+                pass
+        return slot
+
+    new_pack.schedule = [
+        _build_iter_slot(s)
         for _raw in schedule_raw
         for s in [_slot_dict(_raw)]
     ]

@@ -46,6 +46,18 @@ export interface DnaArtifact {
   };
 }
 
+/** v0.66 ：起号策略 → 出稿的结构种子。让正文按 slot 设计好的 hook/结构/形式写。 */
+export interface StrategySeed {
+  recommended_hook?: string;
+  opening_hook?: string;
+  structure?: string[];
+  cta_phrase?: string;
+  tone?: string;
+  avoid?: string[];
+  content_format?: string;
+  source?: string;
+}
+
 export interface Brief {
   topic: string;
   angle: string;
@@ -57,6 +69,34 @@ export interface Brief {
   reference_note_ids?: string[];
   extra_constraints?: string;
   platform?: string;
+  /** v0.66 ：从起号策略 slot 带过来的结构种子。 */
+  strategy_seed?: StrategySeed;
+}
+
+/** v0.66 (item4) ：星标收藏 — 收藏的方向 / slot，供之后复用。 */
+export interface FavoriteDTO {
+  fav_id: string;
+  project_id: string;
+  kind: "direction" | "slot";
+  label: string;
+  payload: any;
+  created_at: number;
+}
+
+/** v0.66 ：快速生成单篇结果（item7 多方向时为数组元素之一）。 */
+export interface QuickGenResult {
+  title: string;
+  body: string;
+  tags: string[];
+  cover_prompt: string;
+  model_used: string;
+  elapsed_s: number;
+  cost_estimate_usd: number;
+  error: string | null;
+  used_report_context: boolean;
+  variant_label?: string;
+  rag?: { refs?: RagRef[]; comments?: RagComment[]; hooks?: RagHook[] };
+  grounding_score?: number;
 }
 
 export interface CandidatePayload {
@@ -88,6 +128,21 @@ export interface Critique {
   overall: number;
 }
 
+export interface KpiBaseline {
+  median: number;
+  p75?: number;
+  p90?: number;
+  n: number;
+  source?: string;
+}
+
+export interface GroundingBreakdown {
+  ref_markers: number;
+  keyword_hits: number;
+  segments: number;
+  keywords_matched?: string[];
+}
+
 export interface DraftCandidate {
   candidate_id: string;
   llm: string;
@@ -98,6 +153,14 @@ export interface DraftCandidate {
   payload: CandidatePayload;
   critiques: Critique[];
   critique_avg?: number | null;
+  // v0.65 ：候选 meta 里附带的同 hook_type 真实分布 + grounding 计分。
+  meta?: {
+    kpi_baseline?: KpiBaseline;
+    grounding_score?: number;
+    grounding_breakdown?: GroundingBreakdown;
+    douyin_meta?: any;
+    [k: string]: any;
+  };
 }
 
 export interface TraceStep {
@@ -160,6 +223,10 @@ export interface DraftListItem {
   final_title: string | null;
   candidate_count: number;
   brief: Brief;
+  // v0.65 (P4) ：列表也可直接拿到 final candidate 的 grounding 信息。
+  grounding_score?: number | null;
+  grounding_breakdown?: GroundingBreakdown | null;
+  kpi_baseline?: KpiBaseline | null;
 }
 
 export interface DraftDetail {
@@ -210,6 +277,21 @@ export interface RagComment {
   content: string;
   like_count: number;
   note_id?: string;
+  // v0.65.3 ：来源原贴的链接 + 互动数据 ，让出稿页 / 历史出稿都能直接展示
+  // 「这条评论来自哪个原贴 / 原贴的赞 / 评论 / 收藏 / 分享数」。
+  source_note?: {
+    note_id: string;
+    title: string;
+    url: string;
+    liked_count: number;
+    collected_count: number;
+    comment_count: number;
+    share_count?: number;
+    author_nickname?: string;
+    duration_sec?: number;
+    image_count?: number;
+    cover_image?: string;
+  };
 }
 
 export interface RagHook {
@@ -416,6 +498,13 @@ export interface WeekThemeDTO {
   notes: string;
 }
 
+/** v0.66 (item5) ：一套可对比的成功指标方案。 */
+export interface MetricsPlanDTO {
+  label: string;            // "稳健" | "进取" | ...
+  metrics: string[];
+  rationale?: string;
+}
+
 export interface StrategyPackDTO {
   pack_id: string;
   library_id: string;
@@ -429,6 +518,10 @@ export interface StrategyPackDTO {
   materials_checklist: string[];
   risks_and_mitigations: string[];
   success_metrics: string[];
+  /** v0.66 (item5) ：两套可对比成功指标方案（稳健/进取）。空 = 旧包，回退 success_metrics。 */
+  metrics_plans?: MetricsPlanDTO[];
+  /** v0.66 (item1) ：材料清单旁的 1-5 篇图文对标帖。 */
+  benchmark_examples?: RagRef[];
   /** v0.59: 多选 — 用户选了 N 个 directions 全部存这里。Empty 数组 = 单方向旧包。 */
   chosen_directions?: StrategicDirectionDTO[];
 }

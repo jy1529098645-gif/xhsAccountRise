@@ -233,7 +233,14 @@ def _build_dna_context(dna: dict[str, Any]) -> str:
 INDEPENDENT_SYSTEM = """\
 你是「起号策略分析师」。用户给你扔了一个数据库（不限格式：可能是小红书笔记 / 抖音视频 / B站动态 / 任何社交平台爬下来的，也可能完全是别的东西）。
 
-你的任务**不是**做数据健康度评估，**而是**：站在「这个用户要拿这堆数据做起号」的角度，**写一份起号分析报告**。
+🇨🇳 **语言硬规则（最高优先级）**：
+- 整个 JSON 输出，所有字段的 value 都用**简体中文**。
+- 不要写英文段落 / 英文句子 / 英文标题 / Markdown 英文标签。
+- 专有名词 / 产品名 / 平台名（小红书 / 抖音 / Reddit / X / ChatGPT 等）可以原样保留 ─ 但解释、说明、动作描述全用中文。
+- 例外字段 ：`launch_mode.recommendation` 用 cold_start / hot_start / hybrid 三个英文枚举值（这是 schema 要的枚举 ，不是自由文本）。其余每个字段都是中文。
+- 违反这条 = 不合格 ，会被打回重写。
+
+你的任务**不是**做数据健康度评估，**而是**：站在「这个用户要拿这堆数据做起号」的角度，**写一份中文起号分析报告**。
 
 **怎么读数据**：
 - 你拿到的资料里有「原始数据快照」——真实的表 / 列 / 样本行 / top 行。**直接读这些内容**，就像 ChatGPT 接到文件直接读一样。
@@ -288,6 +295,8 @@ INDEPENDENT_SYSTEM = """\
 
 
 CRITIQUE_SYSTEM = """\
+🇨🇳 **全部字段用简体中文**，不要写英文段落 / Markdown 英文标签。
+
 你看到了另一位 AI 分析师对同一份 DNA 数据出的报告（在 user 消息里）。请你独立判断：
 
 1. 哪些观点你**赞成**（写明你赞成的原因，最好独立举证）
@@ -312,6 +321,10 @@ CRITIQUE_SYSTEM = """\
 
 
 MODERATOR_SYSTEM = """\
+🇨🇳 **全部字段用简体中文**。所有 JSON value（title / executive_summary / 各种 list 项 / rationale 等）都必须是中文。
+唯一允许的英文 ：`launch_mode.recommendation` 枚举值 (cold_start / hot_start / hybrid) + `charts_to_show` 枚举值 + `single_side_views[].side` 枚举值 (claude / openai)。
+其它每个字段都是中文。如果对方报告里出现英文 ，你的共识版本必须翻译成中文。
+
 你是「起号报告主编」。你拿到的材料：
 
 1. Claude 对数据库的独立起号分析
@@ -499,34 +512,88 @@ async def run(library_id: str, *,
 
     try:
         # ---- Phase 1: analyses ----
-        # In FAST mode we now use a SINGLE Sonnet call (was dual Claude+OpenAI
-        # parallel + Sonnet moderator). Saves ~25-35s. The moderator step
-        # below will see only one analysis but still produces a properly-
-        # shaped consensus. Quality risk: lose the "double AI cross-check"
-        # — explicit user opt-in for deep mode preserves it.
+        # Both fast 和 deep 都跑 Claude × OpenAI 并行 ：
+        # 之前 fast 模式只调 Sonnet（openai_a = {}），UI 上「OpenAI 独立报告」
+        # 永远空 —— 跟标题宣称的「双 AI 协作」直接冲突。并行执行的延迟是
+        # max(t_claude, t_openai)，比单 Sonnet 多 5-10s，但拿回了 UI 承诺的
+        # 双家分析 + 真共识 ；critique 步骤继续只在 deep 模式跑。
         claude_gen = registry.build(claude_spec)[0]
         openai_gen = registry.build(openai_spec)[0]
-        analysis_user = f"【该平台爆款数据 (DNA)】\n{context}\n\n请按 system 给的 schema 独立分析。"
+        analysis_user = (
+            f"【该平台爆款数据 (DNA)】\n{context}\n\n"
+            f"请按 system 给的 schema 独立分析。**整份 JSON 用简体中文**，"
+            f"不要写英文段落 / 英文 markdown 标签。"
+        )
 
-        async def analyze(gen: Generator) -> dict[str, Any]:
+        import sys as _sys
+
+        async def analyze(gen: Generator, attempt: int = 1) -> dict[str, Any]:
+            # v0.65 ：OpenAI 的 reasoning 模型（gpt-5 系列）在 max_tokens=5000 时
+            # 推理 token 把预算吃光 → JSON 截断 → _coerce_json 返回 {} → UI 上
+            # 「OpenAI 独立报告」空白没有产出。提到 12000 给 reasoning 留余地；
+            # gpt-4o 不会用这么多，没成本损失（只算实际输出 token）。
+            mx = 12000 if gen.name in ("openai", "gpt") else 5000
+            user_msg = analysis_user
+            if attempt > 1:
+                # v0.65.1 ：第一次返回空 → 强制换 gpt-4o ，并加更强的 「必须产出 + 中文」 提醒。
+                user_msg = (
+                    "⚠️ 上一次输出为空 / 字段全空 ─ 这次必须产出**至少 3 条 key_findings**、"
+                    "至少 1 条 content_opportunities、1 个 launch_mode.recommendation。"
+                    "**整份 JSON 简体中文**。\n\n" + user_msg
+                )
             try:
-                return await _call_json(
-                    gen, INDEPENDENT_SYSTEM, analysis_user,
-                    max_tokens=5000,
+                out = await _call_json(
+                    gen, INDEPENDENT_SYSTEM, user_msg,
+                    max_tokens=mx,
                     tool_name="submit_launch_analysis",
                     schema=_ANALYSIS_SCHEMA,
                 )
             except Exception as e:
-                return {"_error": f"{gen.model}: {e!r}"}
-
-        if deep:
-            claude_a, openai_a = await asyncio.gather(
-                analyze(claude_gen), analyze(openai_gen),
+                print(f"[insight] analyze({gen.model}) attempt {attempt} raised: {e!r}",
+                      file=_sys.stderr)
+                return {"_error": f"{gen.model}: {e!r}", "_attempt": attempt}
+            # v0.65 ：即使没抛错 ，LLM 也可能返回 {} 或几乎全空（JSON 截断 /
+            # 没解析出来 / 拒绝输出）。
+            is_truly_empty = not isinstance(out, dict) or not out
+            empty_signals = (
+                isinstance(out, dict) and (
+                    not out.get("executive_summary")
+                    and not (out.get("key_findings") or [])
+                    and not (out.get("content_opportunities") or [])
+                    and not out.get("audience_insight")
+                )
             )
-        else:
-            # Fast: single Sonnet call
-            claude_a = await analyze(claude_gen)
-            openai_a = {}  # empty — moderator handles single-input case
+            if is_truly_empty or empty_signals:
+                # v0.65.1 ：1 次自动 retry ─ 第二次硬切到 openai:gpt-4o（已知最稳）+ 更强提醒。
+                # 第二次还空才报 _error 给前端 ，避免让用户看到 「下面空白」。
+                print(
+                    f"[insight] analyze({gen.model}) attempt {attempt} returned "
+                    f"{'empty dict' if is_truly_empty else 'all key fields empty'} "
+                    f"keys={list(out.keys()) if isinstance(out, dict) else 'n/a'}",
+                    file=_sys.stderr,
+                )
+                if attempt == 1:
+                    retry_spec = "openai:gpt-4o" if gen.name in ("openai", "gpt") else "claude:sonnet"
+                    try:
+                        retry_gen = registry.build(retry_spec)[0]
+                    except Exception:
+                        retry_gen = gen
+                    return await analyze(retry_gen, attempt=2)
+                # 第二次也空 → 包成 _error 让前端显示红 banner。
+                return {
+                    "_error": (
+                        f"{gen.model}（已 retry 1 次）: 模型连续两次返回空 JSON。"
+                        f" 常见原因 ：API key 余额不足 / 配额耗尽 / 模型暂时不可用。"
+                        f" 解决 ：检查 .env 的 OPENAI_API_KEY 余额 ，或切到 claude:sonnet。"
+                    ),
+                    "_raw_keys": list(out.keys()) if isinstance(out, dict) else [],
+                    "_attempt": attempt,
+                }
+            return out
+
+        claude_a, openai_a = await asyncio.gather(
+            analyze(claude_gen), analyze(openai_gen),
+        )
 
         # ---- Phase 2: cross-critique in parallel (DEEP MODE ONLY) ----
         # The critique step was ~60 s and contributed mostly to "single_side_views"

@@ -124,6 +124,35 @@ def _build_user_prompt(pack: dict[str, Any], slot: dict[str, Any], alt: dict[str
     return "\n".join(parts)
 
 
+def _build_strategy_seed(
+    slot: dict[str, Any], alt: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """v0.66 ：从 slot（或用户选的备选）确定性地组装「结构种子」。
+
+    这份种子会随 brief 一路传到 drafter，作为硬约束让正文按起号策略设计好的
+    hook / 结构骨架 / 内容形式来写 —— 不再让出稿阶段重新即兴一套结构。
+    不调用 LLM ：纯字段映射，零成本、可复现。
+    """
+    eff_hook = (alt.get("hook_type") if alt else None) or slot.get("hook_type") or ""
+    eff_title = (alt.get("title") if alt else None) or slot.get("title") or ""
+    eff_format = (alt.get("content_format") if alt else None) or slot.get("content_format") or ""
+    outline = (alt.get("mini_outline") if alt else None) or slot.get("outline") or []
+    seed = {
+        "recommended_hook": str(eff_hook),
+        "opening_hook": str(eff_title),
+        "structure": [str(x) for x in outline],
+        "cta_phrase": "",
+        "tone": "",
+        "avoid": [],
+        "content_format": str(eff_format),
+        "source": "strategy_slot",
+    }
+    # 全空（slot 没有任何结构信息）则返回 {} ，drafter 退回自由发挥。
+    if not (seed["recommended_hook"] or seed["structure"] or seed["content_format"]):
+        return {}
+    return seed
+
+
 def _load_dna_excerpt() -> str:
     """Pull dominant hooks + top performers from latest DNA artifact, if any."""
     try:
@@ -202,6 +231,9 @@ async def prefill_brief(pack_id: str, slot_idx: int, alt_idx: int = -1,
     alts = slot.get("alternative_versions") or []
     alt = alts[alt_idx] if (alt_idx >= 0 and alt_idx < len(alts)) else None
 
+    # v0.66 ：结构种子确定性组装（不依赖 LLM 是否成功），随响应回前端。
+    strategy_seed = _build_strategy_seed(slot, alt)
+
     dna_excerpt = _load_dna_excerpt()
     user_prompt = _build_user_prompt(pack, slot, alt, dna_excerpt)
     gen = registry.build(spec)[0]
@@ -227,6 +259,7 @@ async def prefill_brief(pack_id: str, slot_idx: int, alt_idx: int = -1,
                 f"意图 ：{slot.get('intent', '')}"
             ),
             "rationale": f"AI 生成失败兜底机械填 ：{type(e).__name__}",
+            "strategy_seed": strategy_seed,
             "_fallback": True,
         }
 
@@ -234,4 +267,5 @@ async def prefill_brief(pack_id: str, slot_idx: int, alt_idx: int = -1,
     parsed["target_length"] = max(100, min(2000, int(parsed.get("target_length") or 500)))
     if parsed.get("cta_strength") not in ("none", "soft", "strong"):
         parsed["cta_strength"] = "soft"
+    parsed["strategy_seed"] = strategy_seed
     return parsed

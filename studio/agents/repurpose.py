@@ -201,6 +201,35 @@ async def repurpose_draft(
         except Exception:
             ref_block = ""  # best-effort; if it fails, AI generates from prompt only
 
+    # v0.65 (P2) ：repurpose 也跑 RAG ─ 用 target_lib_id 上下文按 topic + angle
+    # 拉同平台 refs / comments / hooks 喂进 prompt + 持久化为 rag_json。
+    # 之前的 _build_target_ref_block 只用 LIKE，覆盖不到深层语义；这里走 FTS 路径。
+    rag_payload: dict[str, Any] = {"refs": [], "comments": [], "hooks": []}
+    rag_refs_block = ""
+    try:
+        from ..composer.pipeline import (
+            _retrieve_for_slot as _rp_retrieve,
+            _format_refs_for_prompt as _rp_format_refs,
+        )
+        from .. import library as _libmod
+        original_lib = _libmod.active_lib_id() if target_lib_id else None
+        if target_lib_id and target_lib_id != original_lib:
+            _libmod.set_active(target_lib_id)
+        try:
+            query = " ".join(x for x in [src.get("topic", ""), src.get("angle", "")] if x)
+            rag_payload = _rp_retrieve(query, k_refs=6, n_comments=6)
+            rag_refs_block = _rp_format_refs(
+                rag_payload.get("refs") or [],
+                rag_payload.get("comments") or [],
+                rag_payload.get("hooks") or [],
+            )
+        finally:
+            if target_lib_id and original_lib and target_lib_id != original_lib:
+                try: _libmod.set_active(original_lib)
+                except Exception: pass
+    except Exception:
+        pass
+
     user_msg = (
         f"【源稿信息】\n"
         f"  · 源平台 ：{source_label}（{src['source_platform']}）\n"
@@ -215,7 +244,8 @@ async def repurpose_draft(
         f"【目标平台】{target_label}（{target_platform}）\n"
         f"【目标平台风格指引】{target_voice}\n"
         f"{ref_block}\n"
-        f"请把源稿改写成 {target_label} 平台版本。**不是翻译，是 voice + format 迁移**。"
+        + (rag_refs_block + "\n" if rag_refs_block else "")
+        + f"请把源稿改写成 {target_label} 平台版本。**不是翻译，是 voice + format 迁移**。"
         f" 保留源的核心信息 + hook 类型，重写句式 / 长度 / emoji 节奏。\n"
         f" 严格输出 JSON 见 system schema。"
     )
@@ -247,20 +277,37 @@ async def repurpose_draft(
         "platform": target_platform,
     }
 
+    # v0.65 (P4) ：grounding score 同 quick_generate / composer 一致。
+    try:
+        from ..composer.pipeline import _latest_dna_payload, _compute_grounding
+        _dna = _latest_dna_payload()
+        _bo_keywords = [
+            b.get("keyword") or ""
+            for b in ((_dna.get("sections", {}).get("keyword_blueocean", {}) or {})
+                      .get("rankings") or [])[:20]
+            if (b.get("keyword") or "")
+        ]
+        _g_score, _g_breakdown = _compute_grounding(
+            parsed.get("body", "") or "", rag_payload.get("refs") or [], _bo_keywords,
+        )
+    except Exception:
+        _g_score, _g_breakdown = 0.0, {}
+
     with db.connect() as con:
         con.execute(
             "INSERT INTO studio_drafts"
             " (draft_id, brief_json, generated_at, mode,"
             "  library_id, project_id,"
             "  parent_draft_id, variant_label,"
-            "  final_candidate_id)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "  final_candidate_id, rag_json)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 child_id, json.dumps(new_brief, ensure_ascii=False),
                 now, "repurpose",
                 src["library_id"], src["project_id"],
                 src["draft_id"], f"repurpose·{target_platform}",
                 new_cand_id,
+                json.dumps(rag_payload, ensure_ascii=False),
             ),
         )
         # 用 studio_draft_candidates 真实列名（v0.61.27 修 ：之前用 payload_json）
@@ -270,6 +317,8 @@ async def repurpose_draft(
             "source_platform": src["source_platform"],
             "target_platform": target_platform,
             "rationale": parsed.get("rationale", ""),
+            "grounding_score": _g_score,
+            "grounding_breakdown": _g_breakdown,
         }
         con.execute(
             "INSERT INTO studio_draft_candidates"
